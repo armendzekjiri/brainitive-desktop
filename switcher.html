@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quick Switcher</title>
+    <link rel="stylesheet" href="/src/native.css" />
+    <link rel="stylesheet" href="/src/popup.css" />
+    <script type="module" src="/src/switcher.ts"></script>
+  </head>
+  <body class="popup">
+    <div class="switcher">
+      <div class="switcher-head">
+        <img src="/logo.png" alt="" width="20" height="20" />
+        <input id="q" type="search" spellcheck="false" autocomplete="off" placeholder="Search issues, docs, plans, snippets…"
+               aria-label="Search" aria-controls="results" autofocus />
+        <div class="filters" role="group" aria-label="Only">
+          <button type="button" data-filter="" aria-pressed="true">All</button>
+          <button type="button" data-filter="issues" aria-pressed="false">Issues</button>
+          <button type="button" data-filter="docs" aria-pressed="false">Docs</button>
+          <button type="button" data-filter="plans" aria-pressed="false">Plans</button>
+          <button type="button" data-filter="snippets" aria-pressed="false">Snippets</button>
+        </div>
+      </div>
+      <ul id="results" class="results" role="listbox" aria-label="Results"></ul>
+      <div class="switcher-foot">
+        <span><kbd>↩</kbd> open</span>
+        <span><kbd id="copy-keys">⌘C</kbd> copy snippet</span>
+        <span><kbd id="timer-keys">⌘T</kbd> start timer</span>
+        <span id="status" class="status" role="status" aria-live="polite"></span>
+      </div>
+    </div>
+  </body>
+</html>

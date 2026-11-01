@@ -23,6 +23,7 @@ pub mod settings;
 pub mod shell;
 pub mod shortcuts;
 pub mod state;
+pub mod switcher;
 pub mod tray;
 pub mod version;
 
@@ -41,6 +42,7 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         // launch at login (BRAI-364): off until the user turns it on in Settings; the login
         // item starts the app with AUTOSTART_ARG so it can stay in the tray
         .plugin(tauri_plugin_autostart::init(
@@ -85,6 +87,12 @@ pub fn run() {
             capture::capture_context,
             capture::capture_submit,
             capture::capture_close,
+            switcher::switcher_context,
+            switcher::switcher_search,
+            switcher::switcher_open,
+            switcher::switcher_copy_snippet,
+            switcher::switcher_start_timer,
+            switcher::switcher_close,
         ])
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");

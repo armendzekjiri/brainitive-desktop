@@ -192,7 +192,11 @@ pub fn model(
         text: "Quick Capture…".into(),
         accelerator: capture_shortcut,
     });
-    let _ = switcher_shortcut;
+    out.push(Entry::Item {
+        action: Some(TrayAction::Switcher),
+        text: "Quick Switcher…".into(),
+        accelerator: switcher_shortcut,
+    });
 
     if signed_in {
         out.push(Entry::Separator);

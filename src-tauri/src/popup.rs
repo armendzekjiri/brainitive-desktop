@@ -144,6 +144,14 @@ pub fn dismiss(app: &AppHandle, popup: Popup) {
     }
 }
 
+/// Hides without handing the focus anywhere (the caller is about to show an app window).
+pub fn hide(app: &AppHandle, popup: Popup) {
+    if let Some(w) = app.get_webview_window(popup.label()) {
+        let _ = w.hide();
+    }
+    state(app).lock().popup_return.remove(popup.label());
+}
+
 /// `WindowEvent::Focused(false)`: a floating window closes when the user clicks elsewhere
 /// (its text stays for next time).
 pub fn on_focus_lost(app: &AppHandle, label: &str) {

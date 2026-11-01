@@ -31,6 +31,13 @@ fn main() {
             "capture_context",
             "capture_submit",
             "capture_close",
+            // the quick-switcher window (capabilities/switcher.json)
+            "switcher_context",
+            "switcher_search",
+            "switcher_open",
+            "switcher_copy_snippet",
+            "switcher_start_timer",
+            "switcher_close",
         ])),
     )
     .expect("failed to run tauri-build");

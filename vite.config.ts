@@ -23,6 +23,7 @@ export default defineConfig({
                 index: 'index.html',
                 settings: 'settings.html',
                 capture: 'capture.html',
+                switcher: 'switcher.html',
             },
         },
     },

@@ -39,7 +39,10 @@ impl HotkeyAction {
 
 /// The shortcuts the preferences ask for, in registration order (`None` = off).
 pub fn wanted(prefs: &Preferences) -> Vec<(HotkeyAction, Option<String>)> {
-    vec![(HotkeyAction::Capture, prefs.capture_shortcut.clone())]
+    vec![
+        (HotkeyAction::Capture, prefs.capture_shortcut.clone()),
+        (HotkeyAction::Switcher, prefs.switcher_shortcut.clone()),
+    ]
 }
 
 /// The plugin's handler: a pressed shortcut runs its action.

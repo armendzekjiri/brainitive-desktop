@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "switcher",
+  "description": "The bundled quick-switcher window only (switcher.html). Search, snippets and the timer are called from Rust with the stored app token; the page only gets results.",
+  "local": true,
+  "windows": ["switcher"],
+  "permissions": [
+    "allow-switcher-context",
+    "allow-switcher-search",
+    "allow-switcher-open",
+    "allow-switcher-copy-snippet",
+    "allow-switcher-start-timer",
+    "allow-switcher-close"
+  ]
+}
