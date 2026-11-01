@@ -22,6 +22,18 @@ own sign-in (keychain entry) and its own webview data, so switching does not sig
 **Forget** next to a recent server signs this computer out there and deletes its data in the
 app. The window title shows where you are: "Brainitive — Cloud", "Brainitive — brainitive.example.com".
 
+## Native features
+
+- **Quick capture** — ⇧⌘Space (macOS) / Ctrl+Shift+Space from any app: type, ⌘↩ / Ctrl+↩ to save
+  to your inbox. Works offline (sent when you're back).
+- **Quick switcher** — ⌥⌘K / Ctrl+Alt+K: search everything, ↩ opens, ⌘C copies a snippet, ⌘T starts
+  the timer on an issue.
+- **Menu bar / tray** — My Day (tick work done), the running timer, unread notifications.
+- **Menus** — ⌘N new issue, ⌥⌘N new doc, ⇧⌘N new window, ⌘K search, ⌘[ / ⌘] back / forward,
+  ⌘= / ⌘- / ⌘0 zoom, ⌘, settings (Ctrl on Windows / Linux).
+- **Settings** (⌘,) — change or turn off the global shortcuts, keep running in the tray, open at
+  login, ask where to save downloads.
+
 ## Development
 
 Requirements: Rust (stable, ≥ 1.85), Node 20+, and the

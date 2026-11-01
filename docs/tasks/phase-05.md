@@ -1,5 +1,7 @@
 # Phase 05: native desktop experience
 
+Status: **done** (all seven cards built and committed; see "Result" at the end).
+
 Cards (board `desktop-app`): BRAI-362, BRAI-359, BRAI-360, BRAI-361, BRAI-363, BRAI-364, BRAI-401.
 Built in this order, one commit (or more) per card on `main`.
 
@@ -91,3 +93,11 @@ Built in this order, one commit (or more) per card on `main`.
 
 ARCHITECTURE.md, SECURITY.md (threat model: bundled windows, global shortcuts, autostart, queue on
 disk, clipboard), AGENTS.md, CHANGELOG (Unreleased), SPIKE matrix rows.
+
+## Result
+
+- Defaults differ from two card texts on purpose: quick capture is ⇧⌘Space / Ctrl+Shift+Space
+  (the card's ⌥⌘Space is macOS's Finder search), the switcher ⌥⌘K / Ctrl+Alt+K.
+- No web URL exists to create an issue / doc: the menu sends a `brainitive-desktop:command` event
+  and falls back to the web's own command palette (⌘.) / search (⌘K).
+- Untested on Windows / Linux (no toolchains here): see docs/SPIKE.md.

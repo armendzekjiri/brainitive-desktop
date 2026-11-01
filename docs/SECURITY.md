@@ -2,7 +2,9 @@
 
 Brainitive Desktop shows a **remote** web app (the user's Brainitive server) inside a native
 shell that can touch the OS. The main risk is remote content getting native powers it should
-not have. Cards: BRAI-351 (remote IPC, CSP, navigation guard), BRAI-428 (app API security).
+not have. Cards: BRAI-351 (remote IPC, CSP, navigation guard), BRAI-428 (app API security),
+phase 05: BRAI-359 / 360 / 361 / 362 / 363 / 364 / 401 (native windows, global shortcuts, tray,
+downloads, autostart).
 
 ## Assets
 
@@ -12,7 +14,10 @@ not have. Cards: BRAI-351 (remote IPC, CSP, navigation guard), BRAI-428 (app API
 | Access token `bra_…` (15 min) | Rust process memory only (`session.rs`). Never on disk, never in the webview. |
 | PKCE verifier + `state` of a sign-in in progress | Rust memory only, 15 min, consumed by the first matching callback. |
 | Web session cookie of the server | The webview's data store **for that server** (macOS 14+: `WKWebsiteDataStore(forIdentifier:)`; Windows / Linux: a data directory per server). |
-| Settings (current server, ≤ 5 recent servers) | `settings.json` in the app config dir. No secrets. |
+| Settings (current server, ≤ 5 recent servers, preferences: shortcuts, tray, downloads, zoom) | `settings.json` in the app config dir. No secrets. |
+| Quick captures waiting to be sent (text, link, type, server origin, request id) | `capture-queue.json` in the app's local data dir, **plain text** (like the webview's own cache), only while offline; deleted per server on sign-out / forget. |
+| Downloads waiting for the Save dialog | `<app cache>/downloads/<uuid>/`, deleted on cancel and at start. |
+| Login item (launch at login) | macOS LaunchAgent plist / Windows Run registry key / Linux autostart `.desktop` file, written only when the user turns it on. |
 
 ## Who can do what
 
@@ -21,10 +26,12 @@ not have. Cards: BRAI-351 (remote IPC, CSP, navigation guard), BRAI-428 (app API
   (exact scheme + host + port);
 - call exactly four commands — `brainitive_notify`, `brainitive_set_badge`,
   `brainitive_open_external`, `brainitive_sign_out` — through a runtime capability for that origin
-  (`shell::allow_bridge_for`, `remote.urls = ["<origin>/*"]`). Each command checks again that the
-  caller is the main webview on the current origin, because Tauri can add but not remove a
-  capability at runtime (after "Switch server" the old origin's capability still exists, the
-  check rejects it);
+  (`shell::allow_bridge_for`, `remote.urls = ["<origin>/*"]`, windows `main` + `app-*`,
+  `local: false`). Each command checks again that the caller is an **app window** (`main` or
+  `app-<n>`) on the current origin, because Tauri can add but not remove a capability at runtime
+  (after "Switch server" the old origin's capability still exists, the check rejects it).
+  Notify / badge from an `app-<n>` window are accepted but ignored (the main window already
+  reports them);
 - open `http`, `https` and `mailto` links in the system browser / mail client (validated in Rust).
 
 Remote content **cannot**: call any other app command (an app ACL manifest in `build.rs` makes
@@ -36,11 +43,76 @@ or navigate the main frame to another site.
 **Other origins** (iframes like YouTube / Figma embeds, a site the user clicked) get no IPC at all:
 no capability matches them.
 
+**Extra app windows** (`app-<n>`, BRAI-362) are the main window's twins: same server data store,
+same navigation and page-load guard, same downloads handler, same bridge capability. They only
+open on a page of the current server while signed in and with the main window on that server's
+store, and close when the server is switched, the user signs out or the server is forgotten.
+
 **The bundled screens** (`index.html`, served from `tauri://localhost` / `http://tauri.localhost`)
 may call the local commands in `capabilities/local.json`. They never render server-provided text
 as HTML (`textContent` only) and run under a strict CSP:
 `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'`.
 The CSP applies to bundled assets only; the server's pages keep the server's own headers.
+
+## The bundled native windows (quick capture, quick switcher, settings)
+
+Threat: a native window with powerful commands (post captures, search, copy to the clipboard,
+start timers, change shortcuts, register a login item) reachable from the wrong content.
+
+- They load **bundled pages only** (`capture.html`, `switcher.html`, `settings.html`) under the same
+  CSP as the connect screens. Their navigation guard (`links::decide_local_navigation`) allows the
+  bundled origin only; http(s) / mailto links open in the system browser; `file:`, `javascript:`,
+  `brainitive:` and everything else is blocked; `window.open` is denied.
+- **One capability file per window** (`capabilities/<label>.json`): `local: true`, no `remote`,
+  `windows: [<label>]`, and only that window's `allow-<command>` permissions. The server's pages,
+  the main window's bundled screens and the other popups cannot call them. Every command also
+  checks in Rust that the caller is that window's label on a bundled origin
+  (`popup::ensure_caller` → `links::is_local_caller`). `tests/capabilities.rs` guards the files.
+- They never see a token: every server call is a Rust command that uses `Session::request` (the
+  stored app token, refresh + one retry on 401). `ApiRequest::url` only builds `/api/v1/…` paths on
+  the current origin (no `..`, query or fragment smuggled in a path; ids that go into paths are
+  checked: `issue:<digits>` / `task:<digits>`, numeric snippet / issue ids) and never follows
+  redirects.
+- Server text is rendered with `textContent` only. The switcher drops result links that are not on
+  the current origin; opening one re-validates it in Rust (`links::resolve_on_instance`).
+- No plugin's JavaScript API is granted to any webview (global-shortcut, autostart, dialog,
+  clipboard, fs, opener, notification): the plugins are used from Rust only.
+
+## Global shortcuts
+
+Threat: a global shortcut steals keys from other apps, or something else changes / triggers it.
+
+- Registered from Rust only; changed only through the Settings window's command (its capability),
+  validated by `shortcuts.rs`: at least two modifiers incl. Ctrl / Alt / Cmd (F-keys: one), no
+  system combination (Spotlight, screenshots, input sources, lock, force quit, Ctrl+Alt+Del, Alt+F4
+  …), no duplicates. If the OS refuses one (taken by another app) the previous ones stay.
+- A shortcut only **opens a bundled window**; it never sends anything by itself. Nothing is read
+  from other apps (no key logging: the OS delivers only the registered combination).
+- While Settings records new keys the current shortcuts are unregistered and restored when the
+  recording ends or the window closes.
+
+## Tray, polling, clipboard
+
+- The tray menu is native (no webview). Its actions call fixed endpoints with validated ids.
+- Polling uses the app token from Rust, about once a minute while signed in, backing off on errors;
+  nothing is polled while signed out.
+- The switcher writes a snippet's content to the clipboard only on an explicit ⌘C / Ctrl+C.
+
+## Downloads (BRAI-363)
+
+- A download's destination is chosen by the app: a private staging folder (then the user's choice
+  in the native Save dialog) or the Downloads folder. The server's suggested name is reduced to its
+  last path component without reserved characters (`downloads::clean_name`), so it can't escape the
+  folder or overwrite a file (`unique_path`).
+- The dialog is opened from Rust (`tauri-plugin-dialog`); no webview can open file dialogs or read
+  the chosen path.
+
+## Launch at login (BRAI-364)
+
+- Off by default; only the Settings window's command (its capability) can turn it on or off. The
+  login item starts the app's own executable with `--autostart`, which only decides whether the
+  main window starts hidden. It does not change the security model: the stored sign-in is
+  restored the same way as on a manual start.
 
 ## Navigation guard (`links.rs`, `shell.rs`)
 
@@ -100,3 +172,9 @@ store is deleted and it leaves the recent list.
   (`bundle.macOS.minimumSystemVersion`).
 - Remote content can still show notifications (≤ 20/min, text clipped) and a badge; those are the
   intended powers.
+- **Queued captures are plain text on disk** while offline (`capture-queue.json`), readable by
+  other processes of the same OS user — the same exposure as the webview's cache of the server's
+  pages. Accepted; deleted on sign-out / forget and as soon as they are sent.
+- A captured text queued under a server is sent to whoever is signed in to that server when the
+  connection is back (sign-out deletes the queue, so this is only the same user after a session
+  expiry).

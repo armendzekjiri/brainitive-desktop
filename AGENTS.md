@@ -24,9 +24,24 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
 - Remote content gets only `brainitive_notify`, `brainitive_set_badge`, `brainitive_open_external`, `brainitive_sign_out`.
   A new bridge command needs: the command (with the current-origin check), `build.rs` manifest,
   `shell::BRIDGE_PERMISSIONS`, SECURITY.md, and the web side in the app repo.
-- New local commands: `build.rs` manifest + `capabilities/local.json`.
-- Pure logic goes in the pure modules (`server`, `links`, `pkce`, `version`, `settings`) with unit tests.
+- New local commands: `build.rs` manifest + the capability file of **the one bundled window** that
+  uses it (`capabilities/local.json` = main window screens, `settings.json`, `capture.json`,
+  `switcher.json`), a `popup::ensure_caller` check in the command, and SECURITY.md.
+  `tests/capabilities.rs` fails when a file grants a remote origin, another window, a plugin or a
+  bridge permission, or a command missing from `build.rs`.
+- Native windows (`popup.rs`) are bundled pages: they reach the server only through Rust commands
+  that use `Session::request` (`api::ApiRequest`: `/api/v1/…` paths only). Never give them a token.
+- Plugins (global-shortcut, autostart, dialog, clipboard-manager, …) are used from Rust only; never
+  grant their JS permissions to a webview.
+- Don't build webviews inside main-thread handlers (menu, tray, global shortcut, sync commands):
+  spawn on the async runtime (Windows deadlock).
+- A new global shortcut = a `hotkeys::HotkeyAction` variant + its preference + `hotkeys::wanted`.
+- Pure logic goes in the pure modules (`server`, `links`, `pkce`, `version`, `settings`,
+  `shortcuts`, `queue`, `poll`, `badge`, and the pure parts of `tray` / `switcher` / `downloads`)
+  with unit tests.
 - Pin exact dependency versions.
+- When smoke-running the app, quit only the process you started: the app repo's `composer run dev`
+  (vite, server) and a bundled Brainitive.app may be running — never `pkill` by a broad pattern.
 
 ## Gate (all green before a change is done)
 

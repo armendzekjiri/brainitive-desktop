@@ -36,6 +36,14 @@ Date: 2026-11-01 · Tauri 2.12.5 / wry 0.57.1 · tested on macOS 26 (Darwin 25.2
 | User agent ` BrainitiveDesktop/<v>` | 🟡 WKWebView default + marker | ⚠️ a fixed Chrome version is spelled out (wry can only replace the UA) — check UA sniffing | 🟡 |
 | Iframe embeds (YouTube, Figma) under the navigation guard | 🟡 allowed (the handler also sees iframes on macOS; top-level loads are cancelled on page load) | ⏳ handler is top-level only | ⏳ |
 | Window state, single instance | 🟡 | ⏳ | ⏳ |
+| App menu + accelerators (BRAI-362) | ✅ menu builds at start; 🟡 actions | ⏳ ⚠️ accelerators while WebView2 has focus | ⏳ |
+| Extra app windows sharing the data store | 🟡 | ⏳ same `data_directory` in one process | ⏳ |
+| Global shortcuts (BRAI-359 / 401) | 🟡 registered from Rust | ⏳ | ⏳ ⚠️ X11 only (no global shortcuts on Wayland) |
+| Bundled popups (capture / switcher): focus, hide on blur, focus back | 🟡 `app.hide()` returns focus | ⏳ | ⏳ ⚠️ always-on-top / focus vary per WM |
+| Tray / menu bar (BRAI-360) | ✅ installs at start; 🟡 menu actions | ⏳ | ⏳ ⚠️ needs libayatana-appindicator; left click shows the menu |
+| Badge (BRAI-361) | 🟡 dock badge + count next to the menu-bar icon | 🟡 overlay icon (written, not run) | 🟡 Unity launcher only |
+| Save dialog for downloads (BRAI-363) | 🟡 staging + dialog | ⏳ | ⏳ (xdg portal / GTK dialog) |
+| Launch at login (BRAI-364) | 🟡 LaunchAgent | ⏳ Run registry key | ⏳ autostart `.desktop` file |
 
 ## Preliminary go / no-go
 

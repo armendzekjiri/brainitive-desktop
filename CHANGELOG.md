@@ -3,6 +3,32 @@
 Brainitive Desktop has its own version numbers (0.x until Desktop 1.0). It needs a Brainitive
 server with the App API v1 (Brainitive v1.49.0 or later).
 
+## Unreleased
+
+Phase 05, native desktop experience:
+
+- **Menus and shortcuts** (BRAI-362): full app menu with ⌘ on macOS / Ctrl on Windows and Linux:
+  Settings (⌘,), New Issue (⌘N), New Doc (⌥⌘N), New Window (⇧⌘N), Back / Forward (⌘[ / ⌘]), Reload,
+  zoom (⌘0 / ⌘= / ⌘-, remembered), Search (⌘K), Dashboard, My Work, Captures, Notifications,
+  Account Settings. **Open in a new window**: pages of the server in extra windows with the same
+  sign-in and the same security rules (also for links that open a new tab, e.g. attachments).
+- **Quick capture** (BRAI-359): ⇧⌘Space / Ctrl+Shift+Space from any app opens a small capture
+  window; captures go to your private inbox, or wait on this computer while you're offline and are
+  sent later (never twice).
+- **Menu bar / tray** (BRAI-360): quick capture, quick switcher, today's My Day (tick work done),
+  the running timer (stop and log, or discard), unread notifications, Open, Settings, Quit. The app
+  can keep running there when the window is closed (on by default).
+- **Notifications and badge** (BRAI-361): the unread badge also on the Windows taskbar (overlay
+  icon) and kept up to date while the window is closed; clicking a notification opens its page.
+- **Files** (BRAI-363): downloads ask where to save them (native Save dialog, can be turned off);
+  drag & drop of files from Finder / Explorer into the app keeps working; attachments open in an
+  app window.
+- **Launch at login** (BRAI-364): optional, off by default; can start in the menu bar / tray.
+- **Quick switcher** (BRAI-401): ⌥⌘K / Ctrl+Alt+K opens a Spotlight-like search over the server:
+  jump to an issue, doc or plan, copy a snippet, start the timer on an issue.
+- **Settings window**: global shortcuts (record, default, off), tray, launch at login, downloads,
+  zoom, account link.
+
 ## 0.1.0 (unreleased)
 
 - Tauri 2 shell: the bundled connect / sign-in screens, then the server's web app in the main window.
