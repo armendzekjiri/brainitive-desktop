@@ -88,7 +88,8 @@ pub struct Inner {
     pub server_menu_item: Option<MenuItem<Wry>>,
     pub capture_menu_item: Option<MenuItem<Wry>>,
     pub switcher_menu_item: Option<MenuItem<Wry>>,
-    /// Launched at login with "start hidden": the first main window is built invisible.
+    /// Launched at login with "start hidden": the main window stays hidden until the user
+    /// opens it (tray, dock, menu, a second launch).
     pub start_hidden: bool,
     /// The app window (main / `app-<n>`) that had the focus last: where menu actions go.
     pub focused_app_window: Option<String>,

@@ -41,6 +41,12 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // launch at login (BRAI-364): off until the user turns it on in Settings; the login
+        // item starts the app with AUTOSTART_ARG so it can stay in the tray
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![prefs::AUTOSTART_ARG]),
+        ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(hotkeys::on_shortcut)
@@ -84,6 +90,12 @@ pub fn run() {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let queue_path = app.path().app_local_data_dir()?.join("capture-queue.json");
             app.manage(AppState::new(settings_path, queue_path));
+            {
+                let s = state(app.handle());
+                let mut inner = s.lock();
+                inner.start_hidden =
+                    prefs::launched_at_login(std::env::args()) && inner.settings.preferences.start_hidden;
+            }
             let handle = app.handle().clone();
 
             menu::install(&handle)?;

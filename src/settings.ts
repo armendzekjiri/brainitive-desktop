@@ -14,9 +14,11 @@ interface Prefs {
     switcher_shortcut: string;
     keep_in_tray: boolean;
     ask_where_to_save: boolean;
+    launch_at_login: boolean;
+    start_hidden: boolean;
 }
 
-type Toggle = 'keep_in_tray' | 'ask_where_to_save';
+type Toggle = 'keep_in_tray' | 'ask_where_to_save' | 'launch_at_login' | 'start_hidden';
 
 type Which = 'capture' | 'switcher';
 type Choice = { mode: 'off' } | { mode: 'default' } | { mode: 'keys'; keys: string };
@@ -30,6 +32,7 @@ function render(p: Prefs): void {
         const key = input.dataset.toggle as Toggle;
         input.checked = Boolean(p[key]);
     });
+    ($('start_hidden') as HTMLInputElement).disabled = !p.launch_at_login;
     document.querySelectorAll('.mod').forEach((el) => (el.textContent = p.platform === 'macos' ? '⌘' : 'Ctrl+'));
     $('zoom').textContent = `${p.zoom_percent} %`;
     $('server').textContent = p.server ?? 'Not connected';
@@ -104,9 +107,15 @@ window.addEventListener('blur', stopRecording);
 document.querySelectorAll<HTMLInputElement>('[data-toggle]').forEach((input) => {
     input.addEventListener('change', () => {
         const key = input.dataset.toggle as Toggle;
+        const error = $('general-error');
+        error.hidden = true;
         invoke<Prefs>('settings_set_toggle', { key, value: input.checked })
             .then(render)
-            .catch(() => void refresh());
+            .catch((e) => {
+                error.textContent = errorMessage(e);
+                error.hidden = false;
+                void refresh();
+            });
     });
 });
 

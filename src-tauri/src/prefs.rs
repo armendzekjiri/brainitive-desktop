@@ -3,10 +3,19 @@
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Webview};
+use tauri_plugin_autostart::ManagerExt;
 
 use crate::popup::{self, Popup};
 use crate::state::{state, Phase};
 use crate::version::APP_VERSION;
+
+/// The argument the login item starts the app with (BRAI-364).
+pub const AUTOSTART_ARG: &str = "--autostart";
+
+/// Started by the login item (not by the user): may stay in the tray.
+pub fn launched_at_login(mut args: impl Iterator<Item = String>) -> bool {
+    args.any(|a| a == AUTOSTART_ARG)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PrefsView {
@@ -21,6 +30,9 @@ pub struct PrefsView {
     switcher_shortcut: String,
     keep_in_tray: bool,
     ask_where_to_save: bool,
+    /// The OS login item is the truth (LaunchAgent / registry / autostart .desktop file).
+    launch_at_login: bool,
+    start_hidden: bool,
 }
 
 pub fn view(app: &AppHandle) -> PrefsView {
@@ -37,6 +49,8 @@ pub fn view(app: &AppHandle) -> PrefsView {
         switcher_shortcut: crate::shortcuts::label_of(prefs.switcher_shortcut.as_deref()),
         keep_in_tray: prefs.keep_in_tray,
         ask_where_to_save: prefs.ask_where_to_save,
+        launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
+        start_hidden: prefs.start_hidden,
     }
 }
 
@@ -136,11 +150,18 @@ pub fn settings_record_shortcut(app: AppHandle, webview: Webview, active: bool) 
 #[tauri::command]
 pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value: bool) -> Result<PrefsView, String> {
     popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    if key == "launch_at_login" {
+        let autolaunch = app.autolaunch();
+        let result = if value { autolaunch.enable() } else { autolaunch.disable() };
+        result.map_err(|e| format!("The login item could not be changed: {e}"))?;
+        return Ok(view(&app));
+    }
     {
         let s = state(&app);
         let mut inner = s.lock();
         let prefs = &mut inner.settings.preferences;
         match key.as_str() {
+            "start_hidden" => prefs.start_hidden = value,
             "keep_in_tray" => prefs.keep_in_tray = value,
             "ask_where_to_save" => prefs.ask_where_to_save = value,
             _ => return Err("unknown setting".into()),
@@ -148,4 +169,17 @@ pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value:
         inner.save_settings();
     }
     Ok(view(&app))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognises_a_start_by_the_login_item() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();
+        assert!(launched_at_login(args(&["/Applications/Brainitive.app/Contents/MacOS/brainitive-desktop", "--autostart"])));
+        assert!(!launched_at_login(args(&["brainitive-desktop"])));
+        assert!(!launched_at_login(args(&["brainitive-desktop", "--autostart=1"])));
+    }
 }

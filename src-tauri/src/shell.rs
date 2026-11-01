@@ -86,11 +86,22 @@ pub fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(MAIN)
 }
 
+/// Shows the main window in front. A user action (tray, dock, menu, deep link, a second
+/// launch): it also ends a hidden start at login.
 pub fn focus_main(app: &AppHandle) {
+    state(app).lock().start_hidden = false;
     if let Some(w) = main_window(app) {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+    }
+}
+
+/// After the app itself changed what the main window shows: in front, unless the app was
+/// started hidden at login and the user has not opened it yet.
+fn reveal_main(app: &AppHandle) {
+    if !state(app).lock().start_hidden {
+        focus_main(app);
     }
 }
 
@@ -189,7 +200,7 @@ pub fn enter_app(app: &AppHandle, origin: &ServerOrigin, url: Url) {
     }
     open_main(app, origin.store_id(), WebviewUrl::External(url));
     refresh_title(app);
-    focus_main(app);
+    reveal_main(app);
     // signed in: the tray polls now; the quick captures that waited are sent
     crate::tray::reset(app);
     let handle = app.clone();
@@ -236,7 +247,7 @@ pub fn on_main_destroyed(app: &AppHandle) {
         }
         state(app).lock().rebuilding = false;
         refresh_title(app);
-        focus_main(app);
+        reveal_main(app);
         let handle = app.clone();
         tauri::async_runtime::spawn(async move { run_pending_wipes(&handle).await });
     } else {
@@ -248,7 +259,7 @@ pub fn on_main_destroyed(app: &AppHandle) {
 
 fn build_main(app: &AppHandle, store: [u8; 16], url: WebviewUrl) -> tauri::Result<WebviewWindow> {
     // launched at login with "start hidden": the window exists but stays in the tray
-    let visible = !std::mem::take(&mut state(app).lock().start_hidden);
+    let visible = !state(app).lock().start_hidden;
     let window = build_app_window(app, MAIN, store, url, visible)?;
     state(app).lock().window_store = Some(store);
     Ok(window)
