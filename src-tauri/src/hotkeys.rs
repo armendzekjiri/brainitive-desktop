@@ -62,7 +62,9 @@ pub fn apply(app: &AppHandle) -> Result<(), String> {
     let prefs = state(app).lock().settings.preferences.clone();
     let wanted = wanted(&prefs);
     let list: Vec<(HotkeyAction, Option<&str>)> = wanted.iter().map(|(a, s)| (*a, s.as_deref())).collect();
-    register(app, &list)
+    let result = register(app, &list);
+    state(app).lock().hotkey_error = result.as_ref().err().cloned();
+    result
 }
 
 pub fn register(app: &AppHandle, list: &[(HotkeyAction, Option<&str>)]) -> Result<(), String> {

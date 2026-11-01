@@ -103,6 +103,10 @@ pub struct Inner {
     pub capture_prefill: Option<String>,
     pub tray: Option<tauri::tray::TrayIcon<Wry>>,
     pub tray_data: crate::tray::TrayData,
+    /// The tray menu last built (rebuilt only when it changes).
+    pub tray_model: Option<Vec<crate::tray::Entry>>,
+    /// Why a global shortcut could not be registered at start (shown in Settings).
+    pub hotkey_error: Option<String>,
     pub etags: crate::tray::EtagCache,
     /// Quick captures waiting to be sent, and where they are stored.
     pub queue: CaptureQueue,
@@ -160,6 +164,8 @@ impl AppState {
                 capture_prefill: None,
                 tray: None,
                 tray_data: Default::default(),
+                tray_model: None,
+                hotkey_error: None,
                 etags: HashMap::new(),
                 queue: CaptureQueue::load(&queue_path),
                 queue_path,

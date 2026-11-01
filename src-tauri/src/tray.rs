@@ -349,6 +349,15 @@ pub fn refresh(app: &AppHandle) {
         )
     };
     let entries = model(server.as_deref(), signed_in, &data, capture, switcher);
+    {
+        // unchanged: keep the native menu (it may be open right now)
+        let s = state(app);
+        let mut inner = s.lock();
+        if inner.tray_model.as_ref() == Some(&entries) {
+            return;
+        }
+        inner.tray_model = Some(entries.clone());
+    }
     match build_menu(app, &entries) {
         Ok(menu) => {
             let _ = tray.set_menu(Some(menu));

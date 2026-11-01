@@ -16,6 +16,7 @@ interface Prefs {
     ask_where_to_save: boolean;
     launch_at_login: boolean;
     start_hidden: boolean;
+    shortcut_problem: string | null;
 }
 
 type Toggle = 'keep_in_tray' | 'ask_where_to_save' | 'launch_at_login' | 'start_hidden';
@@ -33,6 +34,9 @@ function render(p: Prefs): void {
         input.checked = Boolean(p[key]);
     });
     ($('start_hidden') as HTMLInputElement).disabled = !p.launch_at_login;
+    const problem = $('shortcut-problem');
+    problem.textContent = recording ? '' : (p.shortcut_problem ?? '');
+    problem.hidden = recording !== null || !p.shortcut_problem;
     document.querySelectorAll('.mod').forEach((el) => (el.textContent = p.platform === 'macos' ? '⌘' : 'Ctrl+'));
     $('zoom').textContent = `${p.zoom_percent} %`;
     $('server').textContent = p.server ?? 'Not connected';

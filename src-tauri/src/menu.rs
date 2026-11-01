@@ -336,9 +336,13 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
                 let url = current
                     .filter(|u| origin.contains(u))
                     .unwrap_or_else(|| origin.join("/dashboard"));
-                if let Err(e) = shell::open_app_window(app, url) {
-                    log::info!("no new window: {e}");
-                }
+                // not on the main thread (a webview built there can deadlock on Windows)
+                let h = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = shell::open_app_window(&h, url) {
+                        log::info!("no new window: {e}");
+                    }
+                });
             }
         }
         MenuAction::Back | MenuAction::Forward => {

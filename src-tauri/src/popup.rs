@@ -83,16 +83,23 @@ pub fn ensure_caller(app: &AppHandle, webview: &Webview, popup: Popup) -> Result
 /// Shows (building it on first use) and focuses the window.
 pub fn show(app: &AppHandle, popup: Popup) {
     let app_was_active = shell::app_window_focused(app);
-    let window = match app.get_webview_window(popup.label()) {
-        Some(w) => w,
-        None => match build(app, popup) {
-            Ok(w) => w,
-            Err(e) => {
-                log::error!("could not open {}: {e}", popup.label());
-                return;
-            }
-        },
-    };
+    match app.get_webview_window(popup.label()) {
+        Some(w) => present(app, popup, w, app_was_active),
+        None => {
+            // menu, tray and shortcut handlers run on the main thread; building a webview
+            // there can deadlock on Windows, so it is built from the async runtime
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                match build(&app, popup) {
+                    Ok(w) => present(&app, popup, w, app_was_active),
+                    Err(e) => log::error!("could not open {}: {e}", popup.label()),
+                }
+            });
+        }
+    }
+}
+
+fn present(app: &AppHandle, popup: Popup, window: WebviewWindow, app_was_active: bool) {
     state(app)
         .lock()
         .popup_return

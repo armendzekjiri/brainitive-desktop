@@ -33,6 +33,8 @@ pub struct PrefsView {
     /// The OS login item is the truth (LaunchAgent / registry / autostart .desktop file).
     launch_at_login: bool,
     start_hidden: bool,
+    /// A global shortcut the OS refused (taken by another app).
+    shortcut_problem: Option<String>,
 }
 
 pub fn view(app: &AppHandle) -> PrefsView {
@@ -51,6 +53,7 @@ pub fn view(app: &AppHandle) -> PrefsView {
         ask_where_to_save: prefs.ask_where_to_save,
         launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
         start_hidden: prefs.start_hidden,
+        shortcut_problem: inner.hotkey_error.clone(),
     }
 }
 
