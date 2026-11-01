@@ -1,0 +1,188 @@
+/* The native windows (quick capture, quick switcher, settings): bundled pages, no server content. */
+:root {
+    --bg: #ffffff;
+    --panel: #f4f6f8;
+    --text: #1d2733;
+    --muted: #64707d;
+    --border: #dfe4ea;
+    --accent: #0e83dc;
+    --accent-text: #ffffff;
+    --accent-soft: #e8f3fc;
+    --danger: #c43a3a;
+    --ok: #1f8a4c;
+    color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #19212a;
+        --panel: #11161c;
+        --text: #e6ebf0;
+        --muted: #93a0ad;
+        --border: #2b3742;
+        --accent: #3a9de6;
+        --accent-soft: #15283a;
+        --danger: #f07a7a;
+        --ok: #5fcf8f;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+input,
+textarea {
+    -webkit-user-select: text;
+    user-select: text;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    width: 100%;
+    min-width: 0;
+}
+
+textarea {
+    resize: none;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+button:focus-visible,
+select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+button,
+select {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.primary {
+    background: var(--accent);
+    color: var(--accent-text);
+    border-color: var(--accent);
+}
+
+.link {
+    border: none;
+    padding: 0 2px;
+    color: var(--accent);
+}
+
+.muted {
+    color: var(--muted);
+}
+
+.error {
+    color: var(--danger);
+}
+
+.ok {
+    color: var(--ok);
+}
+
+kbd {
+    font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    padding: 2px 5px;
+    color: var(--muted);
+}
+
+/* Settings */
+.settings {
+    padding: 20px 24px 16px;
+}
+
+.settings h1 {
+    font-size: 18px;
+    margin: 0 0 14px;
+}
+
+.settings section {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px 14px;
+    margin-bottom: 14px;
+}
+
+.settings h2 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 6px;
+}
+
+.setting {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.setting:last-child {
+    border-bottom: none;
+}
+
+.setting label,
+.setting .text {
+    flex: 1;
+}
+
+.setting small {
+    display: block;
+    color: var(--muted);
+}
+
+.setting .controls {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.setting input[type='checkbox'] {
+    width: auto;
+    transform: scale(1.2);
+}
+
+.recording {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.footer {
+    font-size: 12px;
+    text-align: center;
+}

@@ -141,6 +141,24 @@ pub fn decide_navigation(url: &Url, instance: Option<&ServerOrigin>, local_origi
     Navigation::Foreign(url.clone())
 }
 
+/// The bundled windows (quick capture, quick switcher, settings) only ever show the bundled
+/// pages: http(s) / mailto links open outside (`External`), everything else is blocked.
+pub fn decide_local_navigation(url: &Url, local_origins: &[String]) -> Navigation {
+    if url.as_str() == "about:blank" || is_local(url, local_origins) {
+        return Navigation::Allow;
+    }
+    match url.scheme() {
+        "http" | "https" | "mailto" if external_url(url.as_str()).is_some() => Navigation::External(url.clone()),
+        _ => Navigation::Block,
+    }
+}
+
+/// Whether a command comes from the bundled page of the window it belongs to: the window label
+/// and a bundled origin (defence in depth next to the capability files).
+pub fn is_local_caller(label: &str, url: &Url, expected_label: &str, local_origins: &[String]) -> bool {
+    label == expected_label && is_local(url, local_origins)
+}
+
 /// Whether the main frame may show this page: the bundled screens or the current server.
 pub fn is_app_page(url: &Url, instance: Option<&ServerOrigin>, local_origins: &[String]) -> bool {
     url.as_str() == "about:blank" || is_local(url, local_origins) || instance.is_some_and(|i| i.contains(url))
@@ -175,6 +193,46 @@ mod tests {
 
     fn locals() -> Vec<String> {
         vec!["tauri://localhost".into(), "http://tauri.localhost".into()]
+    }
+
+    #[test]
+    fn bundled_windows_stay_on_the_bundled_pages() {
+        let l = locals();
+        assert_eq!(
+            decide_local_navigation(&u("tauri://localhost/capture.html"), &l),
+            Navigation::Allow
+        );
+        assert_eq!(
+            decide_local_navigation(&u("https://brainitive.example.com/x"), &l),
+            Navigation::External(u("https://brainitive.example.com/x"))
+        );
+        assert_eq!(decide_local_navigation(&u("file:///etc/passwd"), &l), Navigation::Block);
+        assert_eq!(decide_local_navigation(&u("javascript:alert(1)"), &l), Navigation::Block);
+        assert_eq!(decide_local_navigation(&u("brainitive://open?url=/x"), &l), Navigation::Block);
+    }
+
+    #[test]
+    fn local_callers_need_their_own_window_and_a_bundled_origin() {
+        let l = locals();
+        let page = u("tauri://localhost/capture.html");
+        assert!(is_local_caller("capture", &page, "capture", &l));
+        assert!(!is_local_caller("main", &page, "capture", &l));
+        assert!(!is_local_caller("switcher", &page, "capture", &l));
+        assert!(!is_local_caller(
+            "capture",
+            &u("https://brainitive.example.com/capture.html"),
+            "capture",
+            &l
+        ));
+    }
+
+    #[test]
+    fn a_file_dropped_on_the_page_never_replaces_it() {
+        // dropping a file outside a drop zone makes the webview navigate to file://…
+        assert_eq!(
+            decide_navigation(&u("file:///Users/me/report.pdf"), Some(&instance()), &locals()),
+            Navigation::Block
+        );
     }
 
     #[test]

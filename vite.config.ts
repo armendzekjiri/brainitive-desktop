@@ -1,7 +1,8 @@
 import { defineConfig } from 'vite';
 
-// The bundled screens only (connect a server, sign in). The web app itself is loaded from the
-// server. Port 1420 is `build.devUrl` in src-tauri/tauri.conf.json.
+// The bundled pages only: the connect / sign-in screens (index.html) and the native windows
+// (quick capture, quick switcher, settings). The web app itself is loaded from the server.
+// Port 1420 is `build.devUrl` in src-tauri/tauri.conf.json.
 export default defineConfig({
     clearScreen: false,
     server: {
@@ -17,5 +18,11 @@ export default defineConfig({
         // no inline scripts / styles: the CSP is script-src 'self'
         assetsInlineLimit: 0,
         modulePreload: { polyfill: false },
+        rollupOptions: {
+            input: {
+                index: 'index.html',
+                settings: 'settings.html',
+            },
+        },
     },
 });

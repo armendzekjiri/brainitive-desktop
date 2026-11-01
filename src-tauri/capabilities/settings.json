@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "The bundled Settings window only (settings.html). No `remote` entry and no other window: neither the server's pages nor the other bundled windows get these commands.",
+  "local": true,
+  "windows": ["settings"],
+  "permissions": [
+    "allow-settings-get",
+    "allow-settings-open-account",
+    "allow-settings-reset-zoom",
+    "allow-settings-close"
+  ]
+}

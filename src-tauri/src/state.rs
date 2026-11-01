@@ -85,6 +85,16 @@ pub struct Inner {
     pub notify_times: VecDeque<Instant>,
     pub last_external: Option<(Url, Instant)>,
     pub server_menu_item: Option<MenuItem<Wry>>,
+    pub capture_menu_item: Option<MenuItem<Wry>>,
+    pub switcher_menu_item: Option<MenuItem<Wry>>,
+    /// Launched at login with "start hidden": the first main window is built invisible.
+    pub start_hidden: bool,
+    /// The app window (main / `app-<n>`) that had the focus last: where menu actions go.
+    pub focused_app_window: Option<String>,
+    /// Counter for `app-<n>` labels.
+    pub app_window_seq: u32,
+    /// Popup label → whether an app window had the focus before it opened.
+    pub popup_return: HashMap<String, bool>,
 }
 
 pub struct AppState {
@@ -113,6 +123,12 @@ impl AppState {
                 notify_times: VecDeque::new(),
                 last_external: None,
                 server_menu_item: None,
+                capture_menu_item: None,
+                switcher_menu_item: None,
+                start_hidden: false,
+                focused_app_window: None,
+                app_window_seq: 0,
+                popup_return: HashMap::new(),
             }),
             session: Session::default(),
         }

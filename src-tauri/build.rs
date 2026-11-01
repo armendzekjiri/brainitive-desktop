@@ -19,6 +19,11 @@ fn main() {
             "brainitive_set_badge",
             "brainitive_open_external",
             "brainitive_sign_out",
+            // the Settings window (capabilities/settings.json)
+            "settings_get",
+            "settings_open_account",
+            "settings_reset_zoom",
+            "settings_close",
         ])),
     )
     .expect("failed to run tauri-build");

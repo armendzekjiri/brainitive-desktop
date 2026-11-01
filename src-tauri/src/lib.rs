@@ -6,17 +6,20 @@ pub mod bridge;
 pub mod commands;
 pub mod flows;
 pub mod links;
+pub mod menu;
 pub mod pkce;
+pub mod popup;
+pub mod prefs;
 pub mod secrets;
 pub mod server;
 pub mod session;
 pub mod settings;
 pub mod shell;
+pub mod shortcuts;
 pub mod state;
 pub mod version;
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_notification::NotificationExt;
 
@@ -31,7 +34,12 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                // the bundled popups open centred; only app windows keep their size / position
+                .with_denylist(&popup::labels())
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             commands::get_state,
             commands::check_server,
@@ -48,13 +56,18 @@ pub fn run() {
             bridge::brainitive_set_badge,
             bridge::brainitive_open_external,
             bridge::brainitive_sign_out,
+            prefs::settings_get,
+            prefs::settings_open_account,
+            prefs::settings_reset_zoom,
+            prefs::settings_close,
         ])
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             app.manage(AppState::new(settings_path));
             let handle = app.handle().clone();
 
-            install_menu(&handle)?;
+            menu::install(&handle)?;
+            app.on_menu_event(|app, event| menu::on_menu_event(app, event.id().as_ref()));
 
             // a click on one of our notifications
             let on_click = handle.clone();
@@ -99,51 +112,32 @@ pub fn run() {
         } if label == shell::MAIN => {
             shell::on_main_destroyed(app);
         }
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::Focused(focused),
+            ..
+        } => {
+            if focused && shell::is_app_window(&label) {
+                state(app).lock().focused_app_window = Some(label);
+            } else if !focused {
+                popup::on_focus_lost(app, &label);
+            }
+        }
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::CloseRequested { api, .. },
+            ..
+        } if popup::Popup::from_label(&label).is_some() => {
+            // bundled windows are hidden, not destroyed: they open instantly next time
+            api.prevent_close();
+            if let Some(p) = popup::Popup::from_label(&label) {
+                popup::dismiss(app, p);
+            }
+        }
         // the main window is being rebuilt with another server's data store
         RunEvent::ExitRequested { api, code: None, .. } if state(app).lock().rebuilding => {
             api.prevent_exit();
         }
         _ => {}
     });
-}
-
-/// The platform's default menu (Edit is required for copy / paste shortcuts on macOS) plus a
-/// "Server" menu: the current server, Switch Server…, Sign Out, Reload.
-fn install_menu(app: &AppHandle) -> tauri::Result<()> {
-    let menu = Menu::default(app)?;
-    let current = MenuItem::with_id(app, "server-current", "Not connected", false, None::<&str>)?;
-    let switch = MenuItem::with_id(app, "server-switch", "Switch Server…", true, None::<&str>)?;
-    let sign_out = MenuItem::with_id(app, "server-sign-out", "Sign Out", true, None::<&str>)?;
-    let reload = MenuItem::with_id(app, "reload", "Reload", true, Some("CmdOrCtrl+R"))?;
-    let server = Submenu::with_items(
-        app,
-        "Server",
-        true,
-        &[
-            &current,
-            &PredefinedMenuItem::separator(app)?,
-            &switch,
-            &sign_out,
-            &PredefinedMenuItem::separator(app)?,
-            &reload,
-        ],
-    )?;
-    menu.append(&server)?;
-    app.set_menu(menu)?;
-    state(app).lock().server_menu_item = Some(current);
-
-    app.on_menu_event(|app, event| match event.id().as_ref() {
-        "server-switch" => flows::switch_server(app),
-        "server-sign-out" => {
-            let h = app.clone();
-            tauri::async_runtime::spawn(async move { flows::sign_out(&h).await });
-        }
-        "reload" => {
-            if let Some(w) = shell::main_window(app) {
-                let _ = w.reload();
-            }
-        }
-        _ => {}
-    });
-    Ok(())
 }

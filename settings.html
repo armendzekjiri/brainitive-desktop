@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Settings</title>
+    <link rel="stylesheet" href="/src/native.css" />
+    <script type="module" src="/src/settings.ts"></script>
+  </head>
+  <body>
+    <main class="settings">
+      <h1>Brainitive Desktop</h1>
+
+      <section>
+        <h2>View</h2>
+        <div class="setting">
+          <span class="text">Zoom <small>View → Zoom In / Zoom Out (<span class="mod"></span>= / <span class="mod"></span>-)</small></span>
+          <span class="controls"><strong id="zoom"></strong> <button id="zoom-reset" type="button">Reset</button></span>
+        </div>
+      </section>
+
+      <section>
+        <h2>Account</h2>
+        <div class="setting">
+          <span class="text"><span id="server">Not connected</span> <small id="server-state"></small></span>
+          <span class="controls"><button id="open-account" type="button">Account &amp; notifications…</button></span>
+        </div>
+      </section>
+
+      <p class="muted footer">Brainitive Desktop <span id="version"></span></p>
+    </main>
+  </body>
+</html>

@@ -1,6 +1,7 @@
-//! The main window: one webview that shows the bundled screens or the current server, with
-//! its own webview data store per server, the navigation guard, the remote IPC capability,
-//! downloads and the user agent (BRAI-350 / BRAI-351).
+//! The app windows: the main window (the bundled screens or the current server) and extra
+//! `app-<n>` windows with pages of the current server (BRAI-362). All of them use the server's
+//! own webview data store, the same navigation guard, remote IPC capability, downloads and user
+//! agent (BRAI-350 / BRAI-351).
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -17,6 +18,16 @@ use crate::state::{state, Phase, Rebuild};
 use crate::version::APP_VERSION;
 
 pub const MAIN: &str = "main";
+/// Extra windows with pages of the current server: `app-1`, `app-2`, …
+pub const APP_WINDOW_PREFIX: &str = "app-";
+
+/// The main window or an `app-<n>` window (the windows that may show the server).
+pub fn is_app_window(label: &str) -> bool {
+    label == MAIN
+        || label
+            .strip_prefix(APP_WINDOW_PREFIX)
+            .is_some_and(|n| !n.is_empty() && n.len() <= 6 && n.bytes().all(|b| b.is_ascii_digit()))
+}
 
 /// The commands remote content (the current server's origin only) may call.
 pub const BRIDGE_PERMISSIONS: [&str; 4] = [
@@ -95,7 +106,7 @@ pub fn refresh_title(app: &AppHandle) {
             None => ("Brainitive".to_string(), "Not connected".to_string()),
         }
     };
-    if let Some(w) = main_window(app) {
+    for w in app_windows(app) {
         let _ = w.set_title(&title);
     }
     let item = state(app).lock().server_menu_item.clone();
@@ -116,18 +127,22 @@ pub fn allow_bridge_for(app: &AppHandle, origin: &ServerOrigin) -> tauri::Result
             return Ok(());
         }
     }
+    // never for bundled content (`local(false)`); the main window and the `app-<n>` windows
     let mut capability = CapabilityBuilder::new(id)
         .remote(origin.capability_pattern())
-        .window(MAIN)
-        .webview(MAIN);
+        .local(false)
+        .windows([MAIN.to_string(), format!("{APP_WINDOW_PREFIX}*")])
+        .webviews([MAIN.to_string(), format!("{APP_WINDOW_PREFIX}*")]);
     for permission in BRIDGE_PERMISSIONS {
         capability = capability.permission(permission);
     }
     app.add_capability(capability)
 }
 
-/// Shows a bundled screen (the main window keeps whatever data store it has).
+/// Shows a bundled screen (the main window keeps whatever data store it has). Extra app
+/// windows close: they belong to a session that just ended or is being switched.
 pub fn show_local(app: &AppHandle, phase: Phase, notice: Option<crate::state::Notice>) {
+    close_app_windows(app);
     {
         let s = state(app);
         let mut inner = s.lock();
@@ -188,6 +203,7 @@ pub fn open_main(app: &AppHandle, store: [u8; 16], url: WebviewUrl) {
             let _ = w.navigate(target);
         }
         Some(w) => {
+            close_app_windows(app);
             {
                 let s = state(app);
                 let mut inner = s.lock();
@@ -219,24 +235,45 @@ pub fn on_main_destroyed(app: &AppHandle) {
         tauri::async_runtime::spawn(async move { run_pending_wipes(&handle).await });
     } else {
         state(app).lock().window_store = None;
+        // closed for good (not "keep running in the tray"): quit, the popups are only hidden
+        app.exit(0);
     }
 }
 
 fn build_main(app: &AppHandle, store: [u8; 16], url: WebviewUrl) -> tauri::Result<WebviewWindow> {
+    // launched at login with "start hidden": the window exists but stays in the tray
+    let visible = !std::mem::take(&mut state(app).lock().start_hidden);
+    let window = build_app_window(app, MAIN, store, url, visible)?;
+    state(app).lock().window_store = Some(store);
+    Ok(window)
+}
+
+/// An app window (main or `app-<n>`) with the server's data store and every guard.
+fn build_app_window(
+    app: &AppHandle,
+    label: &str,
+    store: [u8; 16],
+    url: WebviewUrl,
+    visible: bool,
+) -> tauri::Result<WebviewWindow> {
     let nav = app.clone();
+    let nav_label = label.to_string();
     let load = app.clone();
     let popup = app.clone();
     let download = app.clone();
+    let (width, height) = if label == MAIN { (1280.0, 840.0) } else { (1100.0, 780.0) };
 
-    let builder = WebviewWindowBuilder::new(app, MAIN, url)
-        .title("Brainitive")
-        .inner_size(1280.0, 840.0)
-        .min_inner_size(900.0, 600.0)
+    let builder = WebviewWindowBuilder::new(app, label, url)
+        .title(window_title(app))
+        .inner_size(width, height)
+        .min_inner_size(720.0, 500.0)
+        .visible(visible)
         .user_agent(&user_agent())
-        // HTML5 drag & drop (boards, Gantt, file drops) must reach the page, not Tauri
+        // HTML5 drag & drop (boards, Gantt, file drops from Finder / Explorer) must reach the
+        // page, not Tauri (BRAI-363); a file dropped elsewhere can't navigate (`file:` blocked)
         .disable_drag_drop_handler()
         .enable_clipboard_access()
-        .on_navigation(move |url| on_navigation(&nav, url))
+        .on_navigation(move |url| on_navigation(&nav, &nav_label, url))
         .on_page_load(move |window, payload| on_page_load(&load, &window, payload.url(), payload.event()))
         .on_new_window(move |url, _features| {
             on_new_window(&popup, url);
@@ -250,8 +287,133 @@ fn build_main(app: &AppHandle, store: [u8; 16], url: WebviewUrl) -> tauri::Resul
     let builder = builder.data_directory(webview_data_dir(app, &store)?);
 
     let window = builder.build()?;
-    state(app).lock().window_store = Some(store);
+    let zoom = state(app).lock().settings.preferences.zoom;
+    if (zoom - 1.0).abs() > f64::EPSILON {
+        let _ = window.set_zoom(zoom);
+    }
     Ok(window)
+}
+
+fn window_title(app: &AppHandle) -> String {
+    match state(app).lock().current_origin() {
+        Some(o) => format!("Brainitive — {}", o.display_name()),
+        None => "Brainitive".to_string(),
+    }
+}
+
+/// Whether the app windows show the server (not a bundled screen).
+pub fn in_app(app: &AppHandle) -> bool {
+    state(app).lock().phase == Phase::InApp
+}
+
+/// Every app window (main + `app-<n>`).
+pub fn app_windows(app: &AppHandle) -> Vec<WebviewWindow> {
+    app.webview_windows()
+        .into_iter()
+        .filter(|(label, _)| is_app_window(label))
+        .map(|(_, w)| w)
+        .collect()
+}
+
+/// Whether one of the app windows has the keyboard focus (the app is in front).
+pub fn app_window_focused(app: &AppHandle) -> bool {
+    app_windows(app).iter().any(|w| w.is_focused().unwrap_or(false))
+}
+
+/// Where menu actions go: the app window focused last, else the main window.
+pub fn target_window(app: &AppHandle) -> Option<WebviewWindow> {
+    let last = state(app).lock().focused_app_window.clone();
+    last.and_then(|label| app.get_webview_window(&label))
+        .or_else(|| main_window(app))
+}
+
+/// "New Window" / a same-origin `window.open`: a page of the current server in an extra window
+/// with the main window's data store (same cookies) and the same rules.
+pub fn open_app_window(app: &AppHandle, url: Url) -> Result<WebviewWindow, String> {
+    let (store, label) = {
+        let s = state(app);
+        let mut inner = s.lock();
+        let origin = inner.current_origin().ok_or("not connected")?;
+        if inner.phase != Phase::InApp {
+            return Err("not signed in".into());
+        }
+        if !origin.contains(&url) {
+            return Err("not a page of this server".into());
+        }
+        // the main window must already use this server's store (it holds the session cookie)
+        if inner.window_store != Some(origin.store_id()) {
+            return Err("the main window is not on this server".into());
+        }
+        inner.app_window_seq = (inner.app_window_seq % 999_999) + 1;
+        let label = format!("{APP_WINDOW_PREFIX}{}", inner.app_window_seq);
+        (origin.store_id(), label)
+    };
+    let window = build_app_window(app, &label, store, WebviewUrl::External(url), true).map_err(|e| e.to_string())?;
+    let _ = window.set_focus();
+    Ok(window)
+}
+
+/// Closes the extra app windows (server switched, signed out, forgotten).
+pub fn close_app_windows(app: &AppHandle) {
+    for w in app_windows(app) {
+        if w.label() != MAIN {
+            let _ = w.destroy();
+        }
+    }
+}
+
+/// Opens a page of the current server in the focused app window (menus, tray).
+pub fn open_page(app: &AppHandle, path: &str) {
+    let Some(origin) = state(app).lock().current_origin() else {
+        focus_main(app);
+        return;
+    };
+    let Some(url) = links::resolve_on_instance(&origin, path) else {
+        return;
+    };
+    navigate_to(app, &origin, url);
+}
+
+/// Shows `url` (a page of `origin`): in the focused app window when signed in, else after the
+/// stored sign-in is restored.
+pub fn navigate_to(app: &AppHandle, origin: &ServerOrigin, url: Url) {
+    if in_app(app) {
+        if let Some(w) = target_window(app) {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+            let _ = w.navigate(url);
+            return;
+        }
+    }
+    focus_main(app);
+    let handle = app.clone();
+    let origin = origin.clone();
+    let mut path = url.path().to_string();
+    if let Some(q) = url.query() {
+        path.push('?');
+        path.push_str(q);
+    }
+    tauri::async_runtime::spawn(async move {
+        if state(&handle).session.has_stored_sign_in(&origin).await {
+            crate::flows::restore(&handle, origin, Some(path)).await;
+        }
+    });
+}
+
+/// View → Actual Size / Zoom In / Zoom Out: one level for every app window, remembered.
+pub fn zoom(app: &AppHandle, direction: i8) {
+    let zoom = {
+        let s = state(app);
+        let mut inner = s.lock();
+        let next = crate::settings::next_zoom(inner.settings.preferences.zoom, direction);
+        inner.settings.preferences.zoom = next;
+        inner.save_settings();
+        next
+    };
+    for w in app_windows(app) {
+        let _ = w.set_zoom(zoom);
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -263,7 +425,7 @@ fn webview_data_dir(app: &AppHandle, store: &[u8; 16]) -> tauri::Result<PathBuf>
         .join(server::hex(store)))
 }
 
-fn on_navigation(app: &AppHandle, url: &Url) -> bool {
+fn on_navigation(app: &AppHandle, label: &str, url: &Url) -> bool {
     let instance = state(app).lock().current_origin();
     match links::decide_navigation(url, instance.as_ref(), &local_origins(app)) {
         Navigation::Allow => true,
@@ -271,7 +433,7 @@ fn on_navigation(app: &AppHandle, url: &Url) -> bool {
             // the logo link (→ `/`): stay in the app; "Sign out" calls brainitive_sign_out
             if let Some(origin) = instance {
                 let target = origin.join("/dashboard");
-                defer_navigate(app, target);
+                defer_navigate(app, label, target);
             }
             false
         }
@@ -320,11 +482,18 @@ fn on_page_load(app: &AppHandle, window: &WebviewWindow, url: &Url, event: PageL
         }
         (PageLoadEvent::Finished, false) => {
             // window.stop() came too late (e.g. a server redirect): go back
-            let back = state(app).lock().last_good.clone().unwrap_or_else(|| local_url(app));
+            let back = if window.label() == MAIN {
+                state(app).lock().last_good.clone().unwrap_or_else(|| local_url(app))
+            } else {
+                instance
+                    .as_ref()
+                    .map(|o| o.join("/dashboard"))
+                    .unwrap_or_else(|| local_url(app))
+            };
             let _ = window.navigate(back);
         }
         (PageLoadEvent::Finished, true) => {
-            if instance.is_some_and(|o| o.contains(url)) {
+            if window.label() == MAIN && instance.is_some_and(|o| o.contains(url)) {
                 state(app).lock().last_good = Some(url.clone());
             }
         }
@@ -335,8 +504,19 @@ fn on_page_load(app: &AppHandle, window: &WebviewWindow, url: &Url, event: PageL
 fn on_new_window(app: &AppHandle, url: Url) {
     let instance = state(app).lock().current_origin();
     match instance {
-        // "open in new tab" of a page of the server: one window for now → navigate it
-        Some(origin) if origin.contains(&url) => defer_navigate(app, url),
+        // "open in new tab" of a page of the server (an attachment, a link with target=_blank):
+        // an extra app window; the main window when that isn't possible
+        Some(origin) if origin.contains(&url) => {
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = open_app_window(&handle, url.clone()) {
+                    log::info!("new window refused ({e}), navigating instead");
+                    if let Some(w) = target_window(&handle) {
+                        let _ = w.navigate(url);
+                    }
+                }
+            });
+        }
         _ => {
             if links::external_url(url.as_str()).is_some() {
                 open_external(app, &url);
@@ -412,10 +592,11 @@ pub fn open_external(app: &AppHandle, url: &Url) {
 }
 
 /// Navigation from inside a webview handler must not re-enter the webview synchronously.
-fn defer_navigate(app: &AppHandle, url: Url) {
+fn defer_navigate(app: &AppHandle, label: &str, url: Url) {
     let handle = app.clone();
+    let label = label.to_string();
     tauri::async_runtime::spawn(async move {
-        if let Some(w) = main_window(&handle) {
+        if let Some(w) = handle.get_webview_window(&label) {
             let _ = w.navigate(url);
         }
     });
@@ -497,6 +678,16 @@ mod tests {
     fn user_agent_carries_the_app_marker() {
         assert!(user_agent().ends_with(&format!(" BrainitiveDesktop/{APP_VERSION}")));
         assert!(user_agent().starts_with("Mozilla/5.0 ("));
+    }
+
+    #[test]
+    fn app_window_labels() {
+        assert!(is_app_window("main"));
+        assert!(is_app_window("app-1"));
+        assert!(is_app_window("app-123456"));
+        for bad in ["app-", "app-x", "app-1-2", "app-1234567", "capture", "switcher", "settings", "mainx", ""] {
+            assert!(!is_app_window(bad), "{bad}");
+        }
     }
 
     #[test]

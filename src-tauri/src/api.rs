@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use reqwest::{redirect, StatusCode};
+use reqwest::{redirect, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use url::Url;
@@ -285,6 +285,140 @@ impl ApiClient {
     }
 }
 
+impl ApiClient {
+    /// An authenticated App API call (`Bearer bra_…`) of the native windows: tray, quick
+    /// capture, quick switcher. Redirects are never followed (a redirect would carry the token
+    /// elsewhere). `304 Not Modified` (after `If-None-Match`) comes back as `status: 304`.
+    pub async fn request(
+        &self,
+        origin: &ServerOrigin,
+        request: &ApiRequest,
+        access_token: &str,
+    ) -> Result<ApiResponse, ApiError> {
+        let url = request.url(origin).ok_or(ApiError::InvalidResponse)?;
+        let mut builder = self
+            .http
+            .request(request.method.clone(), url)
+            .header("Accept", "application/json")
+            .bearer_auth(access_token);
+        if let Some(etag) = &request.etag {
+            builder = builder.header("If-None-Match", etag);
+        }
+        if let Some(body) = &request.body {
+            builder = builder.json(body);
+        }
+        let response = builder.send().await.map_err(map_transport)?;
+        let status = response.status();
+        let etag = response
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| v.len() <= 200)
+            .map(str::to_string);
+        if status == StatusCode::NOT_MODIFIED {
+            return Ok(ApiResponse {
+                status: 304,
+                etag: etag.or_else(|| request.etag.clone()),
+                body: Value::Null,
+            });
+        }
+        if status == StatusCode::NO_CONTENT {
+            return Ok(ApiResponse {
+                status: 204,
+                etag,
+                body: Value::Null,
+            });
+        }
+        if status.is_redirection() {
+            return Err(ApiError::BadRedirect(status.to_string()));
+        }
+        if !status.is_success() {
+            return Err(read_error(response).await);
+        }
+        let body = response.json::<Value>().await.map_err(|_| ApiError::InvalidResponse)?;
+        Ok(ApiResponse {
+            status: status.as_u16(),
+            etag,
+            body: unwrap_data(body),
+        })
+    }
+}
+
+/// One App API call: method, a path under `/api/v1/`, query, JSON body, a known ETag.
+#[derive(Debug, Clone)]
+pub struct ApiRequest {
+    pub method: Method,
+    pub path: String,
+    pub query: Vec<(String, String)>,
+    pub body: Option<Value>,
+    pub etag: Option<String>,
+}
+
+impl ApiRequest {
+    pub fn new(method: Method, path: impl Into<String>) -> Self {
+        Self {
+            method,
+            path: path.into(),
+            query: Vec::new(),
+            body: None,
+            etag: None,
+        }
+    }
+    pub fn get(path: impl Into<String>) -> Self {
+        Self::new(Method::GET, path)
+    }
+    pub fn post(path: impl Into<String>, body: Value) -> Self {
+        Self::new(Method::POST, path).body(body)
+    }
+    pub fn patch(path: impl Into<String>, body: Value) -> Self {
+        Self::new(Method::PATCH, path).body(body)
+    }
+    pub fn body(mut self, body: Value) -> Self {
+        self.body = Some(body);
+        self
+    }
+    pub fn query(mut self, key: &str, value: impl Into<String>) -> Self {
+        self.query.push((key.to_string(), value.into()));
+        self
+    }
+    pub fn etag(mut self, etag: Option<String>) -> Self {
+        self.etag = etag;
+        self
+    }
+
+    /// The absolute URL, or `None` when the path is not a plain `/api/v1/…` path (so a value
+    /// from a server answer can never point the token somewhere else).
+    pub fn url(&self, origin: &ServerOrigin) -> Option<Url> {
+        let path = &self.path;
+        if !path.starts_with("/api/v1/")
+            || path.contains(['?', '#', '\\'])
+            || path.split('/').any(|segment| segment == ".." || segment == ".")
+            || path.chars().any(|c| c.is_control() || c.is_whitespace())
+        {
+            return None;
+        }
+        let mut url = origin.join(path);
+        if !self.query.is_empty() {
+            url.query_pairs_mut().extend_pairs(self.query.iter());
+        }
+        origin.contains(&url).then_some(url)
+    }
+}
+
+/// What came back: the status, the ETag (if any) and the body without its `data` wrapper.
+#[derive(Debug, Clone)]
+pub struct ApiResponse {
+    pub status: u16,
+    pub etag: Option<String>,
+    pub body: Value,
+}
+
+impl ApiResponse {
+    pub fn not_modified(&self) -> bool {
+        self.status == 304
+    }
+}
+
 impl Default for ApiClient {
     fn default() -> Self {
         Self::new()
@@ -477,6 +611,33 @@ mod tests {
         assert!(matches!(e, ApiError::Api { status: 422, ref code, .. } if code == "validation_failed"));
         let e = error_from_body(500, &Value::Null);
         assert!(matches!(e, ApiError::Api { status: 500, .. }));
+    }
+
+    #[test]
+    fn requests_stay_on_the_api_of_the_origin() {
+        let origin = ServerOrigin::parse("brainitive.example.com").unwrap();
+        let url = ApiRequest::get("/api/v1/search")
+            .query("q", "a b&c")
+            .query("limit", "12")
+            .url(&origin)
+            .unwrap();
+        assert_eq!(url.as_str(), "https://brainitive.example.com/api/v1/search?q=a+b%26c&limit=12");
+        assert_eq!(
+            ApiRequest::get("/api/v1/me/my-day/items/issue:12").url(&origin).unwrap().path(),
+            "/api/v1/me/my-day/items/issue:12"
+        );
+        for bad in [
+            "/api/v2/x",
+            "/web/x",
+            "//evil.com/api/v1/x",
+            "https://evil.com/api/v1/x",
+            "/api/v1/../../x",
+            "/api/v1/a?b=c",
+            "/api/v1/a b",
+            "/api/v1/a\\b",
+        ] {
+            assert!(ApiRequest::get(bad).url(&origin).is_none(), "{bad}");
+        }
     }
 
     #[test]

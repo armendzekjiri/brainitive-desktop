@@ -1,6 +1,7 @@
 //! What the app remembers between launches (`settings.json` in the app config dir): the
-//! current server, up to five recent servers, and webview data stores still to be deleted.
-//! No secrets here — tokens live in the keychain (`secrets.rs`).
+//! current server, up to five recent servers, webview data stores still to be deleted, and the
+//! desktop preferences (shortcuts, tray, downloads, zoom). No secrets here — tokens live in the
+//! keychain (`secrets.rs`).
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,6 +32,72 @@ pub struct Settings {
     /// Hex ids of webview data stores of forgotten servers, deleted once nothing uses them.
     #[serde(default)]
     pub pending_wipes: Vec<String>,
+    /// Desktop preferences (Settings window). Launch at login is not stored here: the OS
+    /// (LaunchAgent / registry / autostart file) is the truth for it.
+    #[serde(default)]
+    pub preferences: Preferences,
+}
+
+/// What the Settings window changes. Every field has a default, so older files still load.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Preferences {
+    /// Global quick-capture shortcut (accelerator string); `None` = off.
+    pub capture_shortcut: Option<String>,
+    /// Global quick-switcher shortcut; `None` = off.
+    pub switcher_shortcut: Option<String>,
+    /// Launched at login: stay in the tray / menu bar instead of opening the window.
+    pub start_hidden: bool,
+    /// Closing the main window hides it; the app keeps running in the tray / menu bar.
+    pub keep_in_tray: bool,
+    /// Downloads open a Save dialog (off: straight to the Downloads folder).
+    pub ask_where_to_save: bool,
+    /// Zoom level of the app windows (1.0 = 100 %).
+    pub zoom: f64,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            capture_shortcut: Some(crate::shortcuts::DEFAULT_CAPTURE.to_string()),
+            switcher_shortcut: Some(crate::shortcuts::DEFAULT_SWITCHER.to_string()),
+            start_hidden: true,
+            keep_in_tray: true,
+            ask_where_to_save: true,
+            zoom: 1.0,
+        }
+    }
+}
+
+/// Browser-like zoom steps (View → Zoom In / Zoom Out / Actual Size).
+pub const ZOOM_STEPS: [f64; 11] = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+
+/// The next zoom step up (`direction > 0`) or down (`< 0`); `0` resets to 100 %.
+pub fn next_zoom(current: f64, direction: i8) -> f64 {
+    let current = if current.is_finite() { current } else { 1.0 };
+    match direction.signum() {
+        0 => 1.0,
+        1 => ZOOM_STEPS
+            .iter()
+            .copied()
+            .find(|z| *z > current + 0.001)
+            .unwrap_or(ZOOM_STEPS[ZOOM_STEPS.len() - 1]),
+        _ => ZOOM_STEPS
+            .iter()
+            .rev()
+            .copied()
+            .find(|z| *z < current - 0.001)
+            .unwrap_or(ZOOM_STEPS[0]),
+    }
+}
+
+/// A zoom level read from the file: finite and within the steps' range.
+pub fn clamp_zoom(zoom: f64) -> f64 {
+    if zoom.is_finite() {
+        zoom.clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1])
+    } else {
+        1.0
+    }
 }
 
 impl Settings {
@@ -38,7 +105,11 @@ impl Settings {
     pub fn load(path: &Path) -> Self {
         std::fs::read(path)
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
+            .map(|mut s| {
+                s.preferences.zoom = clamp_zoom(s.preferences.zoom);
+                s
+            })
             .unwrap_or_default()
     }
 
@@ -135,6 +206,32 @@ mod tests {
         assert_eq!(s.pending_wipes.len(), 1);
         s.remember(&a, "A", None);
         assert!(s.pending_wipes.is_empty());
+    }
+
+    #[test]
+    fn preferences_default_when_missing_and_keep_an_explicit_off() {
+        let s: Settings = serde_json::from_str(r#"{"current":null}"#).unwrap();
+        assert_eq!(s.preferences, Preferences::default());
+        assert!(s.preferences.keep_in_tray && s.preferences.ask_where_to_save);
+        let s: Settings =
+            serde_json::from_str(r#"{"preferences":{"capture_shortcut":null,"zoom":1.25}}"#).unwrap();
+        assert_eq!(s.preferences.capture_shortcut, None);
+        assert_eq!(s.preferences.switcher_shortcut, Preferences::default().switcher_shortcut);
+        assert_eq!(s.preferences.zoom, 1.25);
+    }
+
+    #[test]
+    fn zoom_steps() {
+        assert_eq!(next_zoom(1.0, 1), 1.1);
+        assert_eq!(next_zoom(1.0, -1), 0.9);
+        assert_eq!(next_zoom(1.3, 1), 1.5);
+        assert_eq!(next_zoom(1.3, -1), 1.25);
+        assert_eq!(next_zoom(2.0, 1), 2.0);
+        assert_eq!(next_zoom(0.5, -1), 0.5);
+        assert_eq!(next_zoom(1.75, 0), 1.0);
+        assert_eq!(next_zoom(f64::NAN, 1), 1.1);
+        assert_eq!(clamp_zoom(9.0), 2.0);
+        assert_eq!(clamp_zoom(f64::INFINITY), 1.0);
     }
 
     #[test]

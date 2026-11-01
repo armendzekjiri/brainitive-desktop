@@ -4,8 +4,10 @@
 //! `brainitive_open_external {url}`, `brainitive_sign_out {}` (after the web "Sign out").
 //!
 //! Two locks: the runtime capability lets only the current server's origin reach them, and
-//! every command checks again that the calling webview is the main window on that origin
-//! (an earlier server's capability cannot be removed at runtime).
+//! every command checks again that the calling webview is an app window (main / `app-<n>`) on
+//! that origin (an earlier server's capability cannot be removed at runtime). Notifications and
+//! the badge are taken from the main window only: extra windows run the same web app and would
+//! show every notification twice.
 
 use std::time::{Duration, Instant};
 
@@ -25,7 +27,7 @@ const NOTIFY_PER_MINUTE: usize = 20;
 fn ensure_current_server(app: &AppHandle, webview: &Webview) -> Result<crate::server::ServerOrigin, String> {
     let origin = state(app).lock().current_origin().ok_or("not connected")?;
     let url = webview.url().map_err(|_| "unknown caller")?;
-    if webview.label() != MAIN || !origin.contains(&url) {
+    if !shell::is_app_window(webview.label()) || !origin.contains(&url) {
         return Err("not allowed".into());
     }
     Ok(origin)
@@ -49,6 +51,9 @@ pub fn brainitive_notify(
     url: Option<String>,
 ) -> Result<(), String> {
     let origin = ensure_current_server(&app, &webview)?;
+    if webview.label() != MAIN {
+        return Ok(());
+    }
     {
         let s = state(&app);
         let mut inner = s.lock();
@@ -74,6 +79,9 @@ pub fn brainitive_notify(
 #[tauri::command]
 pub fn brainitive_set_badge(app: AppHandle, webview: Webview, count: i64) -> Result<(), String> {
     ensure_current_server(&app, &webview)?;
+    if webview.label() != MAIN {
+        return Ok(());
+    }
     set_badge(&app, count.clamp(0, 99_999));
     Ok(())
 }

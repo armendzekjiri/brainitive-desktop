@@ -16,7 +16,7 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 use url::Url;
 
-use crate::api::{ApiClient, ApiError, DeviceDescription, InstanceInfo, TokenPair};
+use crate::api::{ApiClient, ApiError, ApiRequest, ApiResponse, DeviceDescription, InstanceInfo, TokenPair};
 use crate::pkce::{state_matches, PkcePair};
 use crate::secrets;
 use crate::server::ServerOrigin;
@@ -65,6 +65,63 @@ impl From<ApiError> for SessionError {
 impl From<secrets::KeychainError> for SessionError {
     fn from(e: secrets::KeychainError) -> Self {
         Self::Keychain(e.to_string())
+    }
+}
+
+/// The outcome of an App API call of the native windows, kept detailed enough to decide
+/// whether a queued capture is retried later or dropped.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CallError {
+    /// No valid stored sign-in (or it was revoked): the user has to sign in again.
+    #[error("{0}")]
+    SignedOut(String),
+    /// Network down, DNS, timeout: try again later.
+    #[error("{0}")]
+    Offline(String),
+    /// The server answered with an error status.
+    #[error("{message}")]
+    Server { status: u16, code: String, message: String },
+    /// Keychain, TLS, an unexpected answer.
+    #[error("{0}")]
+    Failed(String),
+}
+
+impl CallError {
+    /// Worth retrying later with the same `request_id` (offline, 5xx, 408, 429, odd answers).
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::Offline(_) | Self::Failed(_) => true,
+            Self::Server { status, .. } => *status >= 500 || *status == 408 || *status == 429,
+            Self::SignedOut(_) => false,
+        }
+    }
+
+    pub fn status(&self) -> Option<u16> {
+        match self {
+            Self::Server { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+}
+
+impl From<ApiError> for CallError {
+    fn from(e: ApiError) -> Self {
+        match e {
+            ApiError::Unauthorized { message, .. } => Self::SignedOut(message),
+            ApiError::Api { status, code, message } => Self::Server { status, code, message },
+            e if e.is_connectivity() => Self::Offline(e.to_string()),
+            e => Self::Failed(e.to_string()),
+        }
+    }
+}
+
+impl From<SessionError> for CallError {
+    fn from(e: SessionError) -> Self {
+        match e {
+            SessionError::SignedOut(m) => Self::SignedOut(m),
+            SessionError::Offline(m) => Self::Offline(m),
+            e => Self::Failed(e.to_string()),
+        }
     }
 }
 
@@ -246,6 +303,24 @@ impl Session {
             },
         );
         Ok(pair.access_token)
+    }
+
+    /// An App API call with this server's access token: refreshed (serialized) when it is about
+    /// to expire, and once more plus one retry when the server answers 401 anyway.
+    pub async fn request(&self, origin: &ServerOrigin, request: &ApiRequest) -> Result<ApiResponse, CallError> {
+        let token = self.access_token(origin).await?;
+        match self.api.request(origin, request, &token).await {
+            Err(ApiError::Unauthorized { .. }) => {
+                let token = self.refresh(origin).await?;
+                Ok(self.api.request(origin, request, &token).await?)
+            }
+            other => Ok(other?),
+        }
+    }
+
+    /// Whether an access token for `origin` is in memory (no keychain read, no network).
+    pub async fn has_access_token(&self, origin: &ServerOrigin) -> bool {
+        self.tokens.lock().await.contains_key(origin)
     }
 
     /// The one-time URL that signs the webview in, optionally landing on `to` (a path).
@@ -442,6 +517,43 @@ mod tests {
         }
         .into();
         assert!(matches!(e, SessionError::Api(_)));
+    }
+
+    #[test]
+    fn call_errors_tell_retry_from_rejected() {
+        let e: CallError = ApiError::Timeout.into();
+        assert!(e.is_transient());
+        let e: CallError = ApiError::Api {
+            status: 503,
+            code: "server_error".into(),
+            message: "x".into(),
+        }
+        .into();
+        assert!(e.is_transient());
+        let e: CallError = ApiError::Api {
+            status: 429,
+            code: "rate_limited".into(),
+            message: "x".into(),
+        }
+        .into();
+        assert!(e.is_transient());
+        let e: CallError = ApiError::Api {
+            status: 422,
+            code: "validation_failed".into(),
+            message: "Too long".into(),
+        }
+        .into();
+        assert!(!e.is_transient());
+        assert_eq!(e.status(), Some(422));
+        assert_eq!(e.to_string(), "Too long");
+        let e: CallError = ApiError::Unauthorized {
+            code: "unauthenticated".into(),
+            message: "x".into(),
+        }
+        .into();
+        assert!(matches!(e, CallError::SignedOut(_)) && !e.is_transient());
+        let e: CallError = SessionError::Offline("down".into()).into();
+        assert_eq!(e, CallError::Offline("down".into()));
     }
 
     #[test]
