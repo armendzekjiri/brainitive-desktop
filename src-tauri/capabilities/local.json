@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "local",
+  "description": "The bundled screens (connect, sign-in) only: no `remote` entry, so a server's pages never get these. The server's origin gets the three bridge commands at runtime (shell::allow_bridge_for).",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-get-state",
+    "allow-check-server",
+    "allow-use-server",
+    "allow-start-sign-in",
+    "allow-cancel-sign-in",
+    "allow-retry-connect",
+    "allow-open-offline",
+    "allow-switch-server",
+    "allow-sign-out",
+    "allow-forget-server",
+    "allow-dismiss-notice"
+  ]
+}
