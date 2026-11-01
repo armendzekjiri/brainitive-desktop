@@ -28,7 +28,9 @@ desktop/
     │   ├── server.rs           ServerOrigin: typed address → origin, TLS rule, store ids   (pure)
     │   ├── links.rs            navigation decisions, deep-link parsing, URL validation      (pure)
     │   ├── pkce.rs             PKCE S256 + state                                             (pure)
-    │   ├── version.rs          min_versions.desktop check                                    (pure)
+    │   ├── version.rs          min_versions.desktop check, download link                     (pure)
+    │   ├── problem.rs          why a server can't be used: kind, message, fix, retryable      (pure)
+    │   ├── reconnect.rs        backoff 5 s → 60 s, lookup target for the "network is back" probe (pure)
     │   ├── settings.rs         settings.json: servers, pending wipes, Preferences, zoom steps (pure)
     │   ├── shortcuts.rs        global shortcut defaults, parsing, rules, labels              (pure)
     │   ├── queue.rs            offline quick-capture queue (capture-queue.json)              (pure)
@@ -95,9 +97,21 @@ window uses them (`settings.pending_wipes`, retried at start-up).
 
 ## Flows (`flows.rs`)
 
-- **Start**: current server + keychain token → `Connecting` → refresh → web-session → main window
-  on `/app/session/<code>` → `/dashboard`. No token → sign-in screen. Network error → "can't be
-  reached" with Retry / Open offline (the webview cache and service worker) / Switch server.
+- **Start**: current server + keychain token → `Connecting` → `GET /api/v1/instance` **and** the
+  refresh → web-session in parallel → main window on `/app/session/<code>` → `/dashboard`. No token
+  → sign-in screen.
+  - **Unreachable** (BRAI-367): the failure is classified by `problem.rs`: no network, DNS, refused,
+    timeout, TLS (self-signed / expired / wrong host / other), HTTP 5xx / 408 / 429, not a Brainitive
+    server, redirect not followed. The screen shows a title, what it means and a suggested fix, with
+    Retry now / Open offline (the webview cache and service worker) / Switch server. Transient
+    problems retry by themselves (`flows::auto_reconnect`): 5 s, 10 s, 20 s, 40 s, then every 60 s,
+    with a visible countdown; for DNS / no-network problems a local name lookup every 3 s retries the
+    moment it starts to resolve, and a wake from sleep retries after a 10 s grace. Certificate and
+    wrong-address problems are not retried by themselves. One loop at a time (`reconnect_gen`).
+  - **Update required**: `min_versions.desktop` above this app (`version::meets_minimum`, semver with
+    pre-release tags, `v` prefix and build metadata tolerated) → phase `update_required`: server name,
+    both versions, the download link (opened from Rust), "Check again". The web app is not loaded, and
+    "Open offline" refuses. The same screen replaces the old error in `use_server` and `start_sign_in`.
 - **Sign in**: PKCE + state → system browser at `{origin}{authorize_path}` → `brainitive://auth/callback`
   → state check → exchange → refresh token to the keychain → web-session → app.
 - **Session lost in the webview** (`/login` reached): a fresh web session from the stored sign-in,

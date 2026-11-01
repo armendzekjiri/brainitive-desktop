@@ -8,8 +8,9 @@ use tauri::AppHandle;
 use crate::flows::{self, ServerCheck, UiError};
 use crate::server::{ServerOrigin, CLOUD_ORIGIN, DEV_ORIGIN, LOCAL_ORIGIN};
 use crate::settings::RecentServer;
-use crate::state::{state, Notice, Phase};
-use crate::version::APP_VERSION;
+use crate::problem::Problem;
+use crate::state::{state, Notice, Phase, UpdateRequired};
+use crate::version::{meets_minimum, APP_VERSION, DOWNLOAD_URL};
 
 #[derive(Serialize)]
 pub struct CurrentServer {
@@ -38,6 +39,10 @@ pub struct Preset {
 pub struct UiState {
     phase: Phase,
     notice: Option<Notice>,
+    /// Phase `unreachable`: what is wrong and what to do about it.
+    problem: Option<Problem>,
+    /// Phase `update_required`: the server and both versions.
+    update: Option<UpdateRequired>,
     current: Option<CurrentServer>,
     recent: Vec<RecentEntry>,
     app_version: &'static str,
@@ -89,6 +94,8 @@ pub fn get_state(app: AppHandle) -> UiState {
     UiState {
         phase: inner.phase,
         notice: inner.notice.clone(),
+        problem: inner.problem.clone(),
+        update: inner.update.clone(),
         current,
         recent,
         app_version: APP_VERSION,
@@ -123,20 +130,47 @@ pub fn cancel_sign_in(app: AppHandle) {
 }
 
 #[tauri::command]
-pub async fn retry_connect(app: AppHandle) {
-    let current = state(&app).lock().current_origin();
-    if let Some(origin) = current {
-        flows::restore(&app, origin, None).await;
-    }
+pub async fn retry_connect(app: AppHandle) -> Result<(), UiError> {
+    flows::retry_now(&app).await
+}
+
+/// "Download the update": opens the fixed download page in the browser. The address is a
+/// constant of this app, never an argument.
+#[tauri::command]
+pub fn open_download_page(app: AppHandle) -> Result<(), UiError> {
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_url(DOWNLOAD_URL, None::<&str>)
+        .map_err(|e| UiError {
+            kind: "browser",
+            message: format!("The browser could not be opened: {e}"),
+        })
 }
 
 /// "Open anyway": the server's pages from the webview cache / service worker, no new session.
 #[tauri::command]
 pub fn open_offline(app: AppHandle) -> Result<(), UiError> {
-    let origin = state(&app).lock().current_origin().ok_or(UiError {
-        kind: "no_server",
-        message: "Choose a server first.".into(),
-    })?;
+    let (origin, too_old) = {
+        let s = state(&app);
+        let inner = s.lock();
+        let origin = inner.current_origin().ok_or(UiError {
+            kind: "no_server",
+            message: "Choose a server first.".into(),
+        })?;
+        // the last answer of this server (or the update screen itself): never load an old app
+        let min = inner
+            .instance
+            .as_ref()
+            .filter(|(o, _)| *o == origin)
+            .and_then(|(_, info)| info.min_versions.as_ref()?.desktop.clone());
+        let too_old = inner.phase == Phase::UpdateRequired || min.is_some_and(|m| !meets_minimum(APP_VERSION, &m));
+        (origin, too_old)
+    };
+    if too_old {
+        return Err(UiError {
+            kind: "app_too_old",
+            message: "This server needs a newer Brainitive Desktop. Please update the app.".into(),
+        });
+    }
     crate::shell::enter_app(&app, &origin, origin.join("/dashboard"));
     Ok(())
 }

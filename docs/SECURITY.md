@@ -151,6 +151,21 @@ Sign out (menu, or the web app's own "Log out"): `POST /api/v1/auth/logout`, del
 entry, clear that server's webview data. "Forget this server": the same, plus its webview data
 store is deleted and it leaves the recent list.
 
+## Unreachable and "update required" screens (BRAI-367)
+
+- Bundled screens only (`capabilities/local.json`, main window). `open_download_page` opens a
+  **constant** (`version::DOWNLOAD_URL`) in the system browser: the page can't choose the address.
+- A server whose `min_versions.desktop` is above this app's version is **never loaded**: `restore`
+  asks `/api/v1/instance` before it enters the app, `open_offline` refuses while the last answer
+  of the server (or the screen) says the app is too old. A broken minimum ("soon") locks nobody out.
+- The problem text is built in Rust from fixed sentences (`problem.rs`); only the host name of the
+  user's own server is inserted, and the screen renders it with `textContent`. The raw OS / TLS
+  error chain is logged, never shown.
+- Certificate problems are shown as what they are and **never retried by themselves** or bypassed.
+  The automatic retry only runs for transient problems and sends the same `/api/v1/instance` and
+  web-session requests as a manual retry (≥ 5 s apart, ≤ 1 per minute at the cap); the "is the
+  network back?" probe is a local name lookup of the user's own server host, nothing else.
+
 ## TLS policy
 
 - `https` only; `http` only for `localhost`, `127.0.0.1`, `[::1]` (local development). Enforced

@@ -14,8 +14,10 @@ pub mod menu;
 pub mod pkce;
 pub mod poll;
 pub mod popup;
+pub mod problem;
 pub mod prefs;
 pub mod queue;
+pub mod reconnect;
 pub mod secrets;
 pub mod server;
 pub mod session;
@@ -68,6 +70,7 @@ pub fn run() {
             commands::start_sign_in,
             commands::cancel_sign_in,
             commands::retry_connect,
+            commands::open_download_page,
             commands::open_offline,
             commands::switch_server,
             commands::sign_out,

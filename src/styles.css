@@ -79,6 +79,26 @@ h1 {
     margin: 10px 0 0;
 }
 
+.fix {
+    margin: 0 0 10px;
+}
+
+.versions {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 16px;
+    margin: 12px 0;
+}
+
+.versions dt {
+    color: var(--muted);
+}
+
+.versions dd {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+}
+
 button {
     font: inherit;
     color: inherit;

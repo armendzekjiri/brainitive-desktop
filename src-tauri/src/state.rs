@@ -30,6 +30,8 @@ pub enum Phase {
     Connecting,
     /// The server can't be reached (or answered with an error): Retry / open offline.
     Unreachable,
+    /// The server needs a newer desktop app (`min_versions.desktop`): the web app is not loaded.
+    UpdateRequired,
     /// The main window shows the server.
     InApp,
 }
@@ -56,6 +58,32 @@ impl Notice {
     }
 }
 
+/// What the "Please update Brainitive Desktop" screen shows.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateRequired {
+    pub server_name: String,
+    pub origin: String,
+    pub display_name: String,
+    pub server_version: Option<String>,
+    pub min_version: String,
+    pub app_version: &'static str,
+    pub download_url: &'static str,
+}
+
+impl UpdateRequired {
+    pub fn new(server_name: &str, origin: &ServerOrigin, server_version: Option<String>, min_version: &str) -> Self {
+        Self {
+            server_name: server_name.chars().take(120).collect(),
+            origin: origin.as_str().to_string(),
+            display_name: origin.display_name(),
+            server_version,
+            min_version: min_version.chars().take(40).collect(),
+            app_version: crate::version::APP_VERSION,
+            download_url: crate::version::DOWNLOAD_URL,
+        }
+    }
+}
+
 /// A main window waiting to be rebuilt with another webview data store.
 pub struct Rebuild {
     pub store: [u8; 16],
@@ -69,6 +97,14 @@ pub struct Inner {
     pub instance: Option<(ServerOrigin, InstanceInfo)>,
     pub phase: Phase,
     pub notice: Option<Notice>,
+    /// Why the server can't be used (phase `Unreachable`).
+    pub problem: Option<crate::problem::Problem>,
+    /// The server that needs a newer app (phase `UpdateRequired`).
+    pub update: Option<UpdateRequired>,
+    /// Identifies the running auto-reconnect loop; a new value ends the old loop.
+    pub reconnect_gen: u64,
+    /// Automatic attempts since the server last answered.
+    pub reconnect_attempts: u32,
     /// The data store of the existing main window.
     pub window_store: Option<[u8; 16]>,
     pub rebuild: Option<Rebuild>,
@@ -143,6 +179,10 @@ impl AppState {
                 instance: None,
                 phase: Phase::Choose,
                 notice: None,
+                problem: None,
+                update: None,
+                reconnect_gen: 0,
+                reconnect_attempts: 0,
                 window_store: None,
                 rebuild: None,
                 rebuilding: false,
@@ -202,4 +242,23 @@ impl Inner {
 
 pub fn state(app: &AppHandle) -> tauri::State<'_, AppState> {
     app.state::<AppState>()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_screen_carries_both_versions_and_the_download_link() {
+        let origin = ServerOrigin::parse("brain.example.com").unwrap();
+        let u = UpdateRequired::new("Acme Brain", &origin, Some("1.52.0".into()), "9.0.0");
+        assert_eq!(u.server_name, "Acme Brain");
+        assert_eq!(u.display_name, "brain.example.com");
+        assert_eq!(u.min_version, "9.0.0");
+        assert_eq!(u.app_version, crate::version::APP_VERSION);
+        assert!(u.download_url.starts_with("https://"));
+        // a server can't make the screen huge
+        let long = "x".repeat(500);
+        assert_eq!(UpdateRequired::new(&long, &origin, None, &long).server_name.len(), 120);
+    }
 }

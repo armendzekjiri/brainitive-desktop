@@ -13,6 +13,7 @@
     "allow-start-sign-in",
     "allow-cancel-sign-in",
     "allow-retry-connect",
+    "allow-open-download-page",
     "allow-open-offline",
     "allow-switch-server",
     "allow-sign-out",

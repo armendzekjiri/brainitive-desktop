@@ -160,6 +160,15 @@ pub fn show_local(app: &AppHandle, phase: Phase, notice: Option<crate::state::No
         let mut inner = s.lock();
         inner.phase = phase;
         inner.notice = notice;
+        if phase != Phase::Unreachable {
+            inner.problem = None;
+        }
+        if phase != Phase::UpdateRequired {
+            inner.update = None;
+        }
+        if !matches!(phase, Phase::Unreachable | Phase::Connecting) {
+            inner.reconnect_attempts = 0;
+        }
     }
     crate::tray::reset(app);
     let local = local_url(app);
@@ -197,6 +206,9 @@ pub fn enter_app(app: &AppHandle, origin: &ServerOrigin, url: Url) {
         let mut inner = s.lock();
         inner.phase = Phase::InApp;
         inner.notice = None;
+        inner.problem = None;
+        inner.update = None;
+        inner.reconnect_attempts = 0;
     }
     open_main(app, origin.store_id(), WebviewUrl::External(url));
     refresh_title(app);

@@ -87,13 +87,36 @@
       </section>
 
       <section id="view-unreachable" hidden>
-        <h1><span class="current-name"></span> can't be reached</h1>
+        <h1 id="problem-title"><span class="current-name"></span> can't be reached</h1>
         <p class="muted current-origin"></p>
+        <p id="problem-message" hidden></p>
+        <p id="problem-fix" class="fix" hidden></p>
+        <p id="problem-retry" class="muted" role="status"></p>
         <div class="actions">
           <button class="switch" type="button">Switch server</button>
           <button id="open-offline" type="button">Open offline</button>
-          <button id="retry" class="primary" type="button">Retry</button>
+          <button id="retry" class="primary" type="button">Retry now</button>
         </div>
+        <p id="retry-error" class="error" hidden></p>
+      </section>
+
+      <!-- The server needs a newer desktop app: the web app is not loaded (BRAI-367) -->
+      <section id="view-update_required" hidden>
+        <h1>Please update Brainitive Desktop</h1>
+        <p><strong id="update-server"></strong> <span class="muted" id="update-origin"></span></p>
+        <p>This server needs a newer version of the desktop app than the one installed, so it is not opened. Your data on the server is safe.</p>
+        <dl class="versions">
+          <dt>This app</dt><dd id="update-app"></dd>
+          <dt>Needed by the server</dt><dd id="update-min"></dd>
+          <dt>Server</dt><dd id="update-server-version"></dd>
+        </dl>
+        <p class="muted">Download: <span id="update-url"></span>. After installing, quit and reopen the app.</p>
+        <div class="actions">
+          <button class="switch" type="button">Switch server</button>
+          <button id="update-check" type="button">Check again</button>
+          <button id="update-download" class="primary" type="button">Download the update</button>
+        </div>
+        <p id="update-error" class="error" hidden></p>
       </section>
 
       <footer class="muted footer">

@@ -21,7 +21,7 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 pub enum ApiError {
     /// Certificate problems: expired, self-signed / unknown issuer, wrong host name.
     #[error("The server's security certificate is not trusted ({0}). The app never skips this check.")]
-    Tls(String),
+    Tls(TlsReason),
     #[error("The server could not be reached. Check the address and your connection.")]
     Network(String),
     #[error("The server took too long to answer.")]
@@ -40,6 +40,30 @@ pub enum ApiError {
     Api { status: u16, code: String, message: String },
     #[error("The server sent an unexpected answer.")]
     InvalidResponse,
+}
+
+/// Why a certificate was refused (the verifier's wording is mapped, never shown raw).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TlsReason {
+    Expired,
+    WrongHost,
+    /// Self-signed, or issued by an authority this computer does not trust.
+    Untrusted,
+    Revoked,
+    Other,
+}
+
+impl std::fmt::Display for TlsReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Expired => "the certificate has expired",
+            Self::WrongHost => "the certificate is for a different address",
+            Self::Untrusted => "it is self-signed or issued by an unknown authority",
+            Self::Revoked => "the certificate was revoked",
+            Self::Other => "the secure connection failed",
+        })
+    }
 }
 
 impl ApiError {
@@ -504,35 +528,32 @@ fn error_chain(error: &dyn std::error::Error) -> String {
     parts.join(": ")
 }
 
-/// A readable reason when the transport error is a certificate problem.
-fn tls_problem(error: &reqwest::Error) -> Option<String> {
+/// A reason when the transport error is a certificate problem.
+fn tls_problem(error: &reqwest::Error) -> Option<TlsReason> {
     classify_tls(&error_chain(error))
 }
 
-pub(crate) fn classify_tls(chain: &str) -> Option<String> {
+pub(crate) fn classify_tls(chain: &str) -> Option<TlsReason> {
     let lower = chain.to_ascii_lowercase();
     if !(lower.contains("certificate") || lower.contains("tls") || lower.contains("handshake")) {
         return None;
     }
-    Some(
-        if lower.contains("expired") {
-            "the certificate has expired"
-        } else if lower.contains("notvalidforname") || lower.contains("not valid for") || lower.contains("hostname") {
-            "the certificate is for a different address"
-        } else if lower.contains("unknownissuer")
-            || lower.contains("unknown issuer")
-            || lower.contains("self-signed")
-            || lower.contains("self signed")
-            || lower.contains("untrusted")
-        {
-            "it is self-signed or issued by an unknown authority"
-        } else if lower.contains("revoked") {
-            "the certificate was revoked"
-        } else {
-            "the secure connection failed"
-        }
-        .to_string(),
-    )
+    Some(if lower.contains("expired") {
+        TlsReason::Expired
+    } else if lower.contains("notvalidforname") || lower.contains("not valid for") || lower.contains("hostname") {
+        TlsReason::WrongHost
+    } else if lower.contains("unknownissuer")
+        || lower.contains("unknown issuer")
+        || lower.contains("self-signed")
+        || lower.contains("self signed")
+        || lower.contains("untrusted")
+    {
+        TlsReason::Untrusted
+    } else if lower.contains("revoked") {
+        TlsReason::Revoked
+    } else {
+        TlsReason::Other
+    })
 }
 
 /// `device.platform` of the exchange request.
@@ -643,17 +664,22 @@ mod tests {
     #[test]
     fn tls_errors_are_recognised() {
         assert_eq!(
-            classify_tls("error sending request: invalid peer certificate: UnknownIssuer").as_deref(),
-            Some("it is self-signed or issued by an unknown authority")
+            classify_tls("error sending request: invalid peer certificate: UnknownIssuer"),
+            Some(TlsReason::Untrusted)
         );
         assert_eq!(
-            classify_tls("invalid peer certificate: Expired").as_deref(),
-            Some("the certificate has expired")
+            classify_tls("invalid peer certificate: Expired"),
+            Some(TlsReason::Expired)
         );
         assert_eq!(
-            classify_tls("invalid peer certificate: NotValidForName").as_deref(),
-            Some("the certificate is for a different address")
+            classify_tls("invalid peer certificate: NotValidForName"),
+            Some(TlsReason::WrongHost)
         );
+        assert_eq!(
+            classify_tls("invalid peer certificate: Revoked"),
+            Some(TlsReason::Revoked)
+        );
+        assert_eq!(classify_tls("tls handshake eof"), Some(TlsReason::Other));
         assert_eq!(classify_tls("tcp connect error: Connection refused"), None);
     }
 }

@@ -1,7 +1,7 @@
 //! What happens when: start-up, connecting a server, signing in, deep links, a lost web
 //! session, signing out, switching and forgetting servers (BRAI-354 / 355 / 356 / 357).
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::AppHandle;
@@ -10,10 +10,12 @@ use url::Url;
 
 use crate::api::{ApiError, InstanceInfo};
 use crate::links::{self, DeepLink};
+use crate::problem::Problem;
+use crate::reconnect;
 use crate::server::ServerOrigin;
 use crate::session::SessionError;
 use crate::shell;
-use crate::state::{state, Notice, Phase};
+use crate::state::{state, Notice, Phase, UpdateRequired};
 use crate::version::{meets_minimum, APP_VERSION};
 
 /// What the connect screen shows after "Continue": the server that answered.
@@ -128,13 +130,14 @@ pub async fn use_server(app: &AppHandle, origin: ServerOrigin) -> Result<(), UiE
     // always ask the server again: the version rule must hold for recent servers too
     let check = check_server(app, origin.as_str()).await?;
     if check.app_too_old {
-        return Err(UiError::new(
-            "app_too_old",
-            format!(
-                "This server needs Brainitive Desktop {} or later (this is {APP_VERSION}). Please update the app.",
-                check.min_desktop_version.unwrap_or_default()
-            ),
-        ));
+        let update = UpdateRequired::new(
+            &check.name,
+            &check.origin,
+            check.version.clone(),
+            check.min_desktop_version.as_deref().unwrap_or_default(),
+        );
+        show_update_required(app, update);
+        return Ok(());
     }
     let origin = check.origin;
     {
@@ -162,14 +165,34 @@ pub async fn use_server(app: &AppHandle, origin: ServerOrigin) -> Result<(), UiE
     Ok(())
 }
 
-/// The stored sign-in → a web session → the app. `to`: a path to land on.
+/// The stored sign-in → a web session → the app. `to`: a path to land on. The server is asked
+/// first (`/api/v1/instance`, concurrently with the session): a server that needs a newer app
+/// never gets its web app loaded, and a failure is reported as what it is (see `problem.rs`).
 pub async fn restore(app: &AppHandle, origin: ServerOrigin, to: Option<String>) {
-    shell::show_local(app, Phase::Connecting, None);
+    restore_inner(app, origin, to, false).await
+}
+
+/// `silent`: an automatic retry keeps the problem screen up instead of flashing "Connecting…".
+async fn restore_inner(app: &AppHandle, origin: ServerOrigin, to: Option<String>, silent: bool) {
+    if !silent {
+        shell::show_local(app, Phase::Connecting, None);
+    }
     if !state(app).session.has_stored_sign_in(&origin).await {
         shell::show_local(app, Phase::SignIn, None);
         return;
     }
-    match state(app).session.web_session_url(&origin, to.as_deref()).await {
+    let host = origin.display_name();
+    let app_state = state(app);
+    let (gate, session) = tokio::join!(
+        instance_gate(app, &origin),
+        app_state.session.web_session_url(&origin, to.as_deref())
+    );
+    match gate {
+        Err(problem) => return show_unreachable(app, problem),
+        Ok(Some(update)) => return show_update_required(app, update),
+        Ok(None) => {}
+    }
+    match session {
         Ok(url) => shell::enter_app(app, &origin, url),
         Err(SessionError::SignedOut(_)) => shell::show_local(
             app,
@@ -178,11 +201,155 @@ pub async fn restore(app: &AppHandle, origin: ServerOrigin, to: Option<String>) 
                 "You were signed out of this server. Sign in again to continue.",
             )),
         ),
-        Err(e @ SessionError::Offline(_)) => {
-            shell::show_local(app, Phase::Unreachable, Some(Notice::error(e.to_string())))
+        Err(e) => {
+            log::warn!("web session failed: {e}");
+            show_unreachable(app, Problem::from_session(&e, &host));
         }
-        Err(e) => shell::show_local(app, Phase::Unreachable, Some(Notice::error(e.to_string()))),
     }
+}
+
+/// `Ok(None)`: the server answered and this app is new enough.
+async fn instance_gate(app: &AppHandle, origin: &ServerOrigin) -> Result<Option<UpdateRequired>, Problem> {
+    let host = origin.display_name();
+    let (info, final_origin) = state(app).session.api().instance(origin).await.map_err(|e| {
+        log::warn!("instance check failed: {e:?}");
+        Problem::from_api(&e, &host)
+    })?;
+    if &final_origin != origin {
+        return Err(Problem::from_api(&ApiError::BadRedirect(final_origin.display_name()), &host));
+    }
+    let min = info.min_versions.as_ref().and_then(|m| m.desktop.clone());
+    let update = min
+        .as_deref()
+        .filter(|m| !meets_minimum(APP_VERSION, m))
+        .map(|m| UpdateRequired::new(&info.name, origin, info.version.clone(), m));
+    state(app).lock().instance = Some((origin.clone(), info));
+    Ok(update)
+}
+
+/// "Please update Brainitive Desktop": the web app is not loaded, nothing retries by itself.
+pub fn show_update_required(app: &AppHandle, update: UpdateRequired) {
+    log::info!(
+        "server {} needs desktop {} (this is {APP_VERSION})",
+        update.display_name,
+        update.min_version
+    );
+    {
+        let s = state(app);
+        let mut inner = s.lock();
+        inner.reconnect_gen += 1;
+        inner.update = Some(update);
+    }
+    shell::show_local(app, Phase::UpdateRequired, None);
+}
+
+/// The Unreachable screen with a classified problem. A transient one is tried again by itself
+/// (backoff, and as soon as the network is back); certificate problems wait for the user.
+pub fn show_unreachable(app: &AppHandle, mut problem: Problem) {
+    log::info!("server unreachable: {:?}", problem.kind);
+    let (generation, wait, origin) = {
+        let s = state(app);
+        let mut inner = s.lock();
+        inner.reconnect_gen += 1;
+        problem.attempts = inner.reconnect_attempts;
+        let wait = reconnect::delay(inner.reconnect_attempts);
+        if problem.retryable {
+            inner.reconnect_attempts = inner.reconnect_attempts.saturating_add(1);
+            problem.retry_at_ms = Some(now_ms() + wait.as_millis() as u64);
+        }
+        inner.problem = Some(problem.clone());
+        (inner.reconnect_gen, wait, inner.current_origin())
+    };
+    shell::show_local(app, Phase::Unreachable, None);
+    if let (true, Some(origin)) = (problem.retryable, origin) {
+        let handle = app.clone();
+        let probe = problem.probes_network();
+        tauri::async_runtime::spawn(async move { auto_reconnect(handle, generation, origin, probe, wait).await });
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Whether this loop is still the one the Unreachable screen is waiting for.
+fn still_waiting(app: &AppHandle, generation: u64) -> bool {
+    let s = state(app);
+    let inner = s.lock();
+    inner.phase == Phase::Unreachable && inner.reconnect_gen == generation
+}
+
+/// Waits out the backoff in short steps, then tries again. Earlier: when the server's name
+/// resolves after it failed to (the network is back), or the computer woke from sleep.
+async fn auto_reconnect(app: AppHandle, generation: u64, origin: ServerOrigin, probe: bool, wait: Duration) {
+    let started = Instant::now();
+    let wall_start = SystemTime::now();
+    let mut lookup_failed = false;
+    let mut after_wake = false;
+    loop {
+        let remaining = wait.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        tokio::time::sleep(reconnect::next_sleep(remaining)).await;
+        if !still_waiting(&app, generation) {
+            return;
+        }
+        let wall = wall_start.elapsed().unwrap_or_default();
+        if crate::poll::woke_from_sleep(started.elapsed(), wall) {
+            log::info!("woke from sleep: trying the server again");
+            after_wake = true;
+            break;
+        }
+        if probe {
+            match resolves(&origin).await {
+                false => lookup_failed = true,
+                true if lookup_failed => {
+                    log::info!("the network is back: trying the server again");
+                    break;
+                }
+                true => {}
+            }
+        }
+    }
+    if after_wake {
+        // Wi-Fi needs a moment after a wake
+        tokio::time::sleep(crate::poll::WAKE_GRACE).await;
+    }
+    if still_waiting(&app, generation) {
+        restore_inner(&app, origin, None, true).await;
+    }
+}
+
+/// A local name lookup of the server's host: the cheapest "is the network back?" question.
+async fn resolves(origin: &ServerOrigin) -> bool {
+    let Some(target) = reconnect::lookup_target(&origin.url()) else {
+        return false;
+    };
+    match tokio::time::timeout(Duration::from_secs(2), tokio::net::lookup_host(target)).await {
+        Ok(Ok(mut addrs)) => addrs.next().is_some(),
+        _ => false,
+    }
+}
+
+/// "Retry" (screen button): ends the automatic loop and tries now. On the update screen:
+/// asks the server again whether the app is new enough.
+pub async fn retry_now(app: &AppHandle) -> Result<(), UiError> {
+    let (update, current) = {
+        let s = state(app);
+        let mut inner = s.lock();
+        inner.reconnect_gen += 1;
+        inner.reconnect_attempts = 0;
+        (inner.update.clone(), inner.current_origin())
+    };
+    if let Some(update) = update {
+        let origin = ServerOrigin::parse(&update.origin).map_err(|e| UiError::new("invalid_url", e.to_string()))?;
+        return use_server(app, origin).await;
+    }
+    if let Some(origin) = current {
+        restore(app, origin, None).await;
+    }
+    Ok(())
 }
 
 /// "Sign in with your browser": PKCE + state, then the system browser.
@@ -194,6 +361,7 @@ pub async fn start_sign_in(app: &AppHandle) -> Result<String, UiError> {
     let info = fresh_instance(app, &origin).await?;
     if let Some(min) = info.min_versions.as_ref().and_then(|m| m.desktop.as_deref()) {
         if !meets_minimum(APP_VERSION, min) {
+            show_update_required(app, UpdateRequired::new(&info.name, &origin, info.version.clone(), min));
             return Err(UiError::new(
                 "app_too_old",
                 format!("This server needs Brainitive Desktop {min} or later."),

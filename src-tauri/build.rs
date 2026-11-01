@@ -10,6 +10,7 @@ fn main() {
             "start_sign_in",
             "cancel_sign_in",
             "retry_connect",
+            "open_download_page",
             "open_offline",
             "switch_server",
             "sign_out",

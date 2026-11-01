@@ -5,6 +5,9 @@ use semver::Version;
 /// The version of this build (`Cargo.toml` → `tauri.conf.json`).
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Where "Please update Brainitive Desktop" sends the user (opened from Rust, never from a page).
+pub const DOWNLOAD_URL: &str = "https://www.brainitive.app/download";
+
 /// Reads `1.2.3`, `v1.2.3`, `1.2` and `1` (missing parts are 0). Build metadata is ignored.
 pub fn parse_lenient(raw: &str) -> Option<Version> {
     let raw = raw.trim().trim_start_matches(['v', 'V']);
@@ -52,6 +55,37 @@ mod tests {
         assert_eq!(parse_lenient("1..2"), None);
         assert_eq!(parse_lenient("1.2.3.4"), None);
         assert_eq!(parse_lenient("latest"), None);
+    }
+
+    #[test]
+    fn prerelease_tags_follow_semver_precedence() {
+        let order = [
+            "1.0.0-alpha",
+            "1.0.0-alpha.1",
+            "1.0.0-alpha.beta",
+            "1.0.0-beta",
+            "1.0.0-beta.2",
+            "1.0.0-beta.11",
+            "1.0.0-rc.1",
+            "1.0.0",
+        ];
+        for pair in order.windows(2) {
+            let (low, high) = (parse_lenient(pair[0]).unwrap(), parse_lenient(pair[1]).unwrap());
+            assert!(low < high, "{} < {}", pair[0], pair[1]);
+            assert!(!meets_minimum(pair[0], pair[1]), "{} must not meet {}", pair[0], pair[1]);
+            assert!(meets_minimum(pair[1], pair[0]), "{} meets {}", pair[1], pair[0]);
+        }
+        // a short core with a tag, a v prefix and build metadata
+        assert_eq!(parse_lenient("1.2-beta.1"), Version::parse("1.2.0-beta.1").ok());
+        assert_eq!(parse_lenient("v2.0.0-rc.1+build.7"), Version::parse("2.0.0-rc.1").ok());
+        // a pre-release of the next version is still above the previous release
+        assert!(meets_minimum("0.2.0-alpha.1", "0.1.9"));
+        assert!(!meets_minimum("0.2.0-alpha.1", "0.2.0"));
+        // build metadata never matters
+        assert!(meets_minimum("1.0.0+a", "1.0.0+b"));
+        // an unreadable tag is an unreadable minimum
+        assert!(meets_minimum("0.1.0", "1.0.0-"));
+        assert!(meets_minimum("0.1.0", "1.0.0-be ta"));
     }
 
     #[test]

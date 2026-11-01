@@ -5,7 +5,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
-type Phase = 'choose' | 'sign_in' | 'waiting' | 'connecting' | 'unreachable' | 'in_app';
+type Phase = 'choose' | 'sign_in' | 'waiting' | 'connecting' | 'unreachable' | 'update_required' | 'in_app';
 
 interface Notice {
     level: 'info' | 'error';
@@ -25,9 +25,31 @@ interface RecentEntry extends ServerSummary {
     is_current: boolean;
 }
 
+interface Problem {
+    kind: string;
+    title: string;
+    message: string;
+    fix: string;
+    retryable: boolean;
+    retry_at_ms: number | null;
+    attempts: number;
+}
+
+interface UpdateRequired {
+    server_name: string;
+    origin: string;
+    display_name: string;
+    server_version: string | null;
+    min_version: string;
+    app_version: string;
+    download_url: string;
+}
+
 interface UiState {
     phase: Phase;
     notice: Notice | null;
+    problem: Problem | null;
+    update: UpdateRequired | null;
     current: ServerSummary | null;
     recent: RecentEntry[];
     app_version: string;
@@ -55,12 +77,13 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
     return el as T;
 };
 
-const views = ['choose', 'confirm', 'sign_in', 'waiting', 'connecting', 'unreachable'] as const;
+const views = ['choose', 'confirm', 'sign_in', 'waiting', 'connecting', 'unreachable', 'update_required'] as const;
 type View = (typeof views)[number];
 
 let state: UiState | null = null;
 let pendingCheck: ServerCheck | null = null;
 let lastSignInUrl: string | null = null;
+let countdown: number | undefined;
 
 function errorMessage(e: unknown): string {
     if (e && typeof e === 'object' && 'message' in e) return String((e as UiError).message);
@@ -135,6 +158,57 @@ function renderPresets(s: UiState): void {
     $('presets').hidden = s.presets.length === 0;
 }
 
+function setOptional(id: string, text: string | null): void {
+    const el = $(id);
+    el.textContent = text ?? '';
+    el.hidden = !text;
+}
+
+// "Trying again in 12 s": the server side retries by itself, this only shows when
+function renderRetryLine(p: Problem | null): void {
+    window.clearInterval(countdown);
+    const line = $('problem-retry');
+    if (p && !p.retryable) {
+        line.textContent = 'Brainitive will not retry by itself: this needs a fix first.';
+        return;
+    }
+    const at = p?.retry_at_ms;
+    if (!at) {
+        line.textContent = '';
+        return;
+    }
+    const tick = (): void => {
+        const left = Math.max(0, Math.ceil((at - Date.now()) / 1000));
+        line.textContent = left > 0 ? `Trying again in ${left} s…` : 'Trying again…';
+    };
+    tick();
+    countdown = window.setInterval(tick, 1000);
+}
+
+function renderProblem(p: Problem | null): void {
+    if (p) $('problem-title').textContent = p.title;
+    else
+        $('problem-title').replaceChildren(
+            Object.assign(document.createElement('span'), { className: 'current-name', textContent: state?.current?.name ?? 'The server' }),
+            " can't be reached",
+        );
+    setOptional('problem-message', p?.message ?? null);
+    setOptional('problem-fix', p?.fix ?? null);
+    showError('retry-error', null);
+    renderRetryLine(p);
+}
+
+function renderUpdate(u: UpdateRequired | null): void {
+    if (!u) return;
+    $('update-server').textContent = u.server_name;
+    $('update-origin').textContent = u.display_name;
+    $('update-app').textContent = u.app_version;
+    $('update-min').textContent = `${u.min_version} or later`;
+    $('update-server-version').textContent = u.server_version ?? 'unknown';
+    $('update-url').textContent = u.download_url;
+    showError('update-error', null);
+}
+
 async function refresh(): Promise<void> {
     state = await invoke<UiState>('get_state');
     $('app-version').textContent = state.app_version;
@@ -143,6 +217,9 @@ async function refresh(): Promise<void> {
     setText('.current-origin', state.current?.origin ?? '');
     renderRecent(state);
     renderPresets(state);
+    if (state.phase !== 'unreachable') window.clearInterval(countdown);
+    if (state.phase === 'unreachable') renderProblem(state.problem);
+    if (state.phase === 'update_required') renderUpdate(state.update);
 
     switch (state.phase) {
         case 'choose':
@@ -225,6 +302,16 @@ async function signIn(button: HTMLButtonElement): Promise<void> {
     }
 }
 
+async function retry(errorId: string): Promise<void> {
+    showError(errorId, null);
+    try {
+        await invoke('retry_connect');
+    } catch (e) {
+        showError(errorId, errorMessage(e));
+    }
+    await refresh();
+}
+
 function wire(): void {
     $('use-cloud').addEventListener('click', (ev) => {
         if (state) void check(state.cloud_origin, ev.currentTarget as HTMLButtonElement);
@@ -246,8 +333,14 @@ function wire(): void {
     $('copy-link').addEventListener('click', () => {
         if (lastSignInUrl) void navigator.clipboard.writeText(lastSignInUrl);
     });
-    $('retry').addEventListener('click', () => void invoke('retry_connect').then(refresh));
-    $('open-offline').addEventListener('click', () => void invoke('open_offline'));
+    $('retry').addEventListener('click', () => void retry('retry-error'));
+    $('update-check').addEventListener('click', () => void retry('update-error'));
+    $('update-download').addEventListener('click', () => {
+        invoke('open_download_page').catch((e) => showError('update-error', errorMessage(e)));
+    });
+    $('open-offline').addEventListener('click', () => {
+        invoke('open_offline').catch((e) => showError('retry-error', errorMessage(e)));
+    });
     document.querySelectorAll<HTMLButtonElement>('.switch').forEach((b) =>
         b.addEventListener('click', () => {
             pendingCheck = null;

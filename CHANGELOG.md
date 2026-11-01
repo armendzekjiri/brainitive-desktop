@@ -5,6 +5,15 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Phase 09, reliability and diagnostics:
+
+- **Unreachable screen and version gate** (BRAI-367): "can't reach the server" now says why — no
+  network, address not found, connection refused, no answer, self-signed / expired / wrong-host
+  certificate (never bypassed), server error (HTTP 5xx), not a Brainitive server — with a suggested
+  fix. It retries by itself (5 s → 60 s backoff, at once when the network is back or after sleep);
+  Open offline keeps working. A server that needs a newer desktop app shows "Please update
+  Brainitive Desktop" (server, both versions, download link) and the web app is not loaded.
+
 Phase 05, native desktop experience:
 
 - **Menus and shortcuts** (BRAI-362): full app menu with ⌘ on macOS / Ctrl on Windows and Linux:
