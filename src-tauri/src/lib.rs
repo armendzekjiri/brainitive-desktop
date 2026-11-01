@@ -6,6 +6,7 @@ pub mod badge;
 pub mod bridge;
 pub mod capture;
 pub mod commands;
+pub mod downloads;
 pub mod flows;
 pub mod hotkeys;
 pub mod links;
@@ -39,6 +40,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(hotkeys::on_shortcut)
@@ -95,6 +97,7 @@ pub fn run() {
             });
             tray::install(&handle)?;
             tray::start_poller(&handle);
+            downloads::clean_staging(&handle);
             if let Err(e) = hotkeys::apply(&handle) {
                 log::warn!("{e}");
             }

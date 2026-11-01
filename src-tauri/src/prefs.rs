@@ -20,6 +20,7 @@ pub struct PrefsView {
     capture_shortcut: String,
     switcher_shortcut: String,
     keep_in_tray: bool,
+    ask_where_to_save: bool,
 }
 
 pub fn view(app: &AppHandle) -> PrefsView {
@@ -35,6 +36,7 @@ pub fn view(app: &AppHandle) -> PrefsView {
         capture_shortcut: crate::shortcuts::label_of(prefs.capture_shortcut.as_deref()),
         switcher_shortcut: crate::shortcuts::label_of(prefs.switcher_shortcut.as_deref()),
         keep_in_tray: prefs.keep_in_tray,
+        ask_where_to_save: prefs.ask_where_to_save,
     }
 }
 
@@ -140,6 +142,7 @@ pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value:
         let prefs = &mut inner.settings.preferences;
         match key.as_str() {
             "keep_in_tray" => prefs.keep_in_tray = value,
+            "ask_where_to_save" => prefs.ask_where_to_save = value,
             _ => return Err("unknown setting".into()),
         }
         inner.save_settings();

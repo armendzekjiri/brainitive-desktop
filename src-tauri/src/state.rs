@@ -108,6 +108,8 @@ pub struct Inner {
     pub queue_path: PathBuf,
     /// A flush of the capture queue is running.
     pub flushing: bool,
+    /// Downloads in progress (BRAI-363).
+    pub downloads: Vec<crate::downloads::Pending>,
 }
 
 /// What a click on one of our notifications opens.
@@ -161,6 +163,7 @@ impl AppState {
                 queue: CaptureQueue::load(&queue_path),
                 queue_path,
                 flushing: false,
+                downloads: Vec::new(),
             }),
             session: Session::default(),
             poll_now: tokio::sync::Notify::new(),

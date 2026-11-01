@@ -3,11 +3,12 @@
 //! own webview data store, the same navigation guard, remote IPC capability, downloads and user
 //! agent (BRAI-350 / BRAI-351).
 
+#[cfg(not(target_os = "macos"))]
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use tauri::ipc::CapabilityBuilder;
-use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent};
+use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
@@ -284,7 +285,7 @@ fn build_app_window(
             on_new_window(&popup, url);
             NewWindowResponse::Deny
         })
-        .on_download(move |_webview, event| on_download(&download, event));
+        .on_download(move |_webview, event| crate::downloads::on_download(&download, event));
 
     #[cfg(target_os = "macos")]
     let builder = builder.data_store_identifier(store);
@@ -530,53 +531,6 @@ fn on_new_window(app: &AppHandle, url: Url) {
     }
 }
 
-fn on_download(app: &AppHandle, event: DownloadEvent<'_>) -> bool {
-    match event {
-        DownloadEvent::Requested { destination, .. } => {
-            let name = destination
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| "download".to_string());
-            if let Ok(dir) = app.path().download_dir() {
-                *destination = unique_path(dir, &name);
-            }
-            true
-        }
-        DownloadEvent::Finished { success, .. } => {
-            let (title, body) = if success {
-                ("Download finished", "The file is in your Downloads folder.")
-            } else {
-                ("Download failed", "The file could not be downloaded.")
-            };
-            crate::bridge::show_notification(app, title, body, None);
-            true
-        }
-        _ => true,
-    }
-}
-
-/// `name.ext`, `name (1).ext`, … — never overwrites an existing file.
-pub fn unique_path(dir: PathBuf, name: &str) -> PathBuf {
-    // keep only the last path component: a server-suggested "../x" must stay in the folder
-    let name = std::path::Path::new(name)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "download".into());
-    let candidate = dir.join(&name);
-    if !candidate.exists() {
-        return candidate;
-    }
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
-        _ => (name.clone(), String::new()),
-    };
-    (1..10_000)
-        .map(|i| dir.join(format!("{stem} ({i}){ext}")))
-        .find(|p| !p.exists())
-        .unwrap_or(candidate)
-}
-
 /// Opens an http(s) / mailto link in the system browser / mail client (once per 2 s per URL:
 /// the navigation and page-load handlers can both see the same link).
 pub fn open_external(app: &AppHandle, url: &Url) {
@@ -700,18 +654,5 @@ mod tests {
         let id = ServerOrigin::cloud().store_id();
         assert_eq!(unhex16(&server::hex(&id)), Some(id));
         assert_eq!(unhex16("zz"), None);
-    }
-
-    #[test]
-    fn downloads_never_overwrite_or_escape_the_folder() {
-        let dir = std::env::temp_dir().join(format!("brainitive-dl-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(unique_path(dir.clone(), "a.pdf"), dir.join("a.pdf"));
-        std::fs::write(dir.join("a.pdf"), b"x").unwrap();
-        assert_eq!(unique_path(dir.clone(), "a.pdf"), dir.join("a (1).pdf"));
-        assert_eq!(unique_path(dir.clone(), "../../etc/a.pdf"), dir.join("a (1).pdf"));
-        std::fs::write(dir.join("README"), b"x").unwrap();
-        assert_eq!(unique_path(dir.clone(), "README"), dir.join("README (1)"));
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

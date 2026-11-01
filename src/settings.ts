@@ -13,9 +13,10 @@ interface Prefs {
     capture_shortcut: string;
     switcher_shortcut: string;
     keep_in_tray: boolean;
+    ask_where_to_save: boolean;
 }
 
-type Toggle = 'keep_in_tray';
+type Toggle = 'keep_in_tray' | 'ask_where_to_save';
 
 type Which = 'capture' | 'switcher';
 type Choice = { mode: 'off' } | { mode: 'default' } | { mode: 'keys'; keys: string };
