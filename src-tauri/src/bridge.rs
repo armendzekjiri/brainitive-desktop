@@ -17,7 +17,7 @@ use url::Url;
 
 use crate::links;
 use crate::shell::{self, MAIN};
-use crate::state::state;
+use crate::state::{state, NotificationTarget};
 
 const MAX_TITLE: usize = 120;
 const MAX_BODY: usize = 500;
@@ -106,6 +106,15 @@ pub async fn brainitive_sign_out(app: AppHandle, webview: Webview) -> Result<(),
 
 /// A native notification; a click focuses the app and opens `target` (a page of the server).
 pub fn show_notification(app: &AppHandle, title: &str, body: &str, target: Option<Url>) {
+    notify(app, title, body, target.map(NotificationTarget::Page));
+}
+
+/// A notification about a downloaded file; a click shows it in Finder / Explorer.
+pub fn show_file_notification(app: &AppHandle, title: &str, body: &str, file: std::path::PathBuf) {
+    notify(app, title, body, Some(NotificationTarget::File(file)));
+}
+
+fn notify(app: &AppHandle, title: &str, body: &str, target: Option<NotificationTarget>) {
     let id = {
         let s = state(app);
         let mut inner = s.lock();
@@ -130,28 +139,40 @@ pub fn on_notification_action(app: &AppHandle, action_id: &str, id: Option<i32>)
     if action_id != "tap" {
         return;
     }
-    shell::focus_main(app);
     let target = id.and_then(|id| state(app).lock().notifications.remove(&id));
-    let current = state(app).lock().current_origin();
-    if let (Some(target), Some(origin)) = (target, current) {
-        // the server may have been switched since the notification was shown
-        if origin.contains(&target) {
-            if let Some(w) = shell::main_window(app) {
-                let _ = w.navigate(target);
+    match target {
+        Some(NotificationTarget::File(path)) => {
+            use tauri_plugin_opener::OpenerExt;
+            if let Err(e) = app.opener().reveal_item_in_dir(&path) {
+                log::warn!("could not show the file: {e}");
             }
         }
+        Some(NotificationTarget::Page(page)) => {
+            // the server may have been switched since the notification was shown
+            let current = state(app).lock().current_origin();
+            match current {
+                Some(origin) if origin.contains(&page) => shell::navigate_to(app, &origin, page),
+                _ => shell::focus_main(app),
+            }
+        }
+        None => shell::focus_main(app),
     }
 }
 
-/// Dock badge on macOS, launcher badge on Linux (Unity API). Windows needs an overlay icon:
-/// not implemented yet (docs/SPIKE.md).
+/// The unread badge, from the web app (`brainitive_set_badge`) or the tray poller
+/// (`GET /notifications/unread-count`): dock badge on macOS, launcher badge on Linux (Unity
+/// API), an overlay icon with the count on the Windows taskbar button (`badge.rs`).
 pub fn set_badge(app: &AppHandle, count: i64) {
     #[cfg(not(target_os = "windows"))]
     if let Some(w) = shell::main_window(app) {
         let _ = w.set_badge_count(if count > 0 { Some(count) } else { None });
     }
     #[cfg(target_os = "windows")]
-    let _ = (app, count);
+    if let Some(w) = shell::main_window(app) {
+        let icon = crate::badge::render(count)
+            .map(|rgba| tauri::image::Image::new_owned(rgba, crate::badge::SIZE, crate::badge::SIZE));
+        let _ = w.set_overlay_icon(icon);
+    }
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 //! See docs/ARCHITECTURE.md (modules, flows) and docs/SECURITY.md (threat model).
 
 pub mod api;
+pub mod badge;
 pub mod bridge;
 pub mod capture;
 pub mod commands;

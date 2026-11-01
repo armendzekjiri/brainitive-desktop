@@ -80,8 +80,8 @@ pub struct Inner {
     pub reauth_at: Option<Instant>,
     /// Origins that already got their remote capability (Tauri can add, not remove, them).
     pub capabilities: HashSet<String>,
-    /// Native notification id → page to open on click.
-    pub notifications: HashMap<i32, Url>,
+    /// Native notification id → what a click opens.
+    pub notifications: HashMap<i32, NotificationTarget>,
     pub next_notification: i32,
     pub notify_times: VecDeque<Instant>,
     pub last_external: Option<(Url, Instant)>,
@@ -108,6 +108,15 @@ pub struct Inner {
     pub queue_path: PathBuf,
     /// A flush of the capture queue is running.
     pub flushing: bool,
+}
+
+/// What a click on one of our notifications opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationTarget {
+    /// A page of the server (checked again on click: the server may have been switched).
+    Page(Url),
+    /// A downloaded file: shown in Finder / Explorer.
+    File(PathBuf),
 }
 
 pub struct AppState {
