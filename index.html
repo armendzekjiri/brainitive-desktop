@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Brainitive</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script type="module" src="/src/main.ts"></script>
+  </head>
+  <body>
+    <main class="card" aria-live="polite">
+      <header class="brand">
+        <img src="/logo.png" alt="" width="40" height="40" />
+        <span>Brainitive</span>
+      </header>
+
+      <div id="notice" class="notice" hidden>
+        <span id="notice-text"></span>
+        <button id="notice-close" class="link" type="button" aria-label="Dismiss">×</button>
+      </div>
+
+      <!-- Choose: Cloud or self-hosted (BRAI-354) -->
+      <section id="view-choose" hidden>
+        <h1>Where is your Brainitive?</h1>
+        <button id="use-cloud" class="option" type="button">
+          <strong>Brainitive Cloud</strong>
+          <small>www.brainitive.app</small>
+        </button>
+
+        <form id="self-hosted" class="option form" novalidate>
+          <label for="server-url"><strong>Self-hosted server</strong></label>
+          <div class="row">
+            <input id="server-url" type="text" inputmode="url" autocomplete="url" spellcheck="false"
+                   placeholder="brainitive.example.com" />
+            <button id="check" class="primary" type="submit">Continue</button>
+          </div>
+          <p id="check-error" class="error" hidden></p>
+        </form>
+
+        <div id="presets" hidden>
+          <p class="muted">Development</p>
+          <div id="preset-list" class="chips"></div>
+        </div>
+
+        <div id="recent" hidden>
+          <p class="muted">Recent servers</p>
+          <ul id="recent-list" class="recent"></ul>
+        </div>
+      </section>
+
+      <!-- Confirm what answered -->
+      <section id="view-confirm" hidden>
+        <h1 id="confirm-name"></h1>
+        <p class="muted"><span id="confirm-origin"></span> · <span id="confirm-version"></span></p>
+        <p id="confirm-too-old" class="error" hidden></p>
+        <div class="actions">
+          <button id="confirm-back" type="button">Back</button>
+          <button id="confirm-use" class="primary" type="button">Use this server</button>
+        </div>
+      </section>
+
+      <!-- Sign in with the system browser (BRAI-355) -->
+      <section id="view-sign_in" hidden>
+        <h1>Sign in to <span class="current-name"></span></h1>
+        <p class="muted current-origin"></p>
+        <p>Your browser opens so you can sign in with your password, Google, Microsoft or GitHub. Then you come straight back here.</p>
+        <div class="actions">
+          <button class="switch" type="button">Switch server</button>
+          <button id="sign-in" class="primary" type="button">Sign in with your browser</button>
+        </div>
+        <p id="sign-in-error" class="error" hidden></p>
+      </section>
+
+      <section id="view-waiting" hidden>
+        <h1>Continue in your browser</h1>
+        <p>Confirm “Sign in to Brainitive Desktop” in the browser window that just opened.</p>
+        <p class="muted">Browser didn't open? <button id="copy-link" class="link" type="button">Copy the sign-in link</button></p>
+        <div class="actions">
+          <button id="cancel-sign-in" type="button">Cancel</button>
+          <button id="sign-in-again" type="button">Open the browser again</button>
+        </div>
+      </section>
+
+      <section id="view-connecting" hidden>
+        <div class="spinner" aria-hidden="true"></div>
+        <h1>Connecting to <span class="current-name"></span>…</h1>
+      </section>
+
+      <section id="view-unreachable" hidden>
+        <h1><span class="current-name"></span> can't be reached</h1>
+        <p class="muted current-origin"></p>
+        <div class="actions">
+          <button class="switch" type="button">Switch server</button>
+          <button id="open-offline" type="button">Open offline</button>
+          <button id="retry" class="primary" type="button">Retry</button>
+        </div>
+      </section>
+
+      <footer class="muted footer">
+        <span>Brainitive Desktop <span id="app-version"></span></span>
+      </footer>
+    </main>
+  </body>
+</html>

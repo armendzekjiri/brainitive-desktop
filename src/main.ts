@@ -1,0 +1,262 @@
+// The bundled screens: connect a server (BRAI-354), sign in with the browser (BRAI-355).
+// Everything that talks to a server runs in Rust (src-tauri/src/flows.rs); this page only
+// renders state and forwards clicks. Server-provided text is set with textContent only.
+
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+
+type Phase = 'choose' | 'sign_in' | 'waiting' | 'connecting' | 'unreachable' | 'in_app';
+
+interface Notice {
+    level: 'info' | 'error';
+    message: string;
+}
+
+interface ServerSummary {
+    origin: string;
+    display_name: string;
+    name: string;
+    version: string | null;
+    is_cloud?: boolean;
+}
+
+interface RecentEntry extends ServerSummary {
+    last_used: number;
+    is_current: boolean;
+}
+
+interface UiState {
+    phase: Phase;
+    notice: Notice | null;
+    current: ServerSummary | null;
+    recent: RecentEntry[];
+    app_version: string;
+    cloud_origin: string;
+    presets: { label: string; origin: string }[];
+}
+
+interface ServerCheck {
+    origin: string;
+    display_name: string;
+    name: string;
+    version: string | null;
+    min_desktop_version: string | null;
+    app_too_old: boolean;
+}
+
+interface UiError {
+    kind: string;
+    message: string;
+}
+
+const $ = <T extends HTMLElement = HTMLElement>(id: string): T => {
+    const el = document.getElementById(id);
+    if (!el) throw new Error(`#${id} missing`);
+    return el as T;
+};
+
+const views = ['choose', 'confirm', 'sign_in', 'waiting', 'connecting', 'unreachable'] as const;
+type View = (typeof views)[number];
+
+let state: UiState | null = null;
+let pendingCheck: ServerCheck | null = null;
+let lastSignInUrl: string | null = null;
+
+function errorMessage(e: unknown): string {
+    if (e && typeof e === 'object' && 'message' in e) return String((e as UiError).message);
+    return String(e);
+}
+
+function show(view: View): void {
+    for (const v of views) $(`view-${v}`).hidden = v !== view;
+}
+
+function setText(selector: string, text: string): void {
+    document.querySelectorAll<HTMLElement>(selector).forEach((el) => (el.textContent = text));
+}
+
+function showError(id: string, message: string | null): void {
+    const el = $(id);
+    el.textContent = message ?? '';
+    el.hidden = !message;
+}
+
+function busy(button: HTMLButtonElement, on: boolean): void {
+    button.disabled = on;
+    button.setAttribute('aria-busy', String(on));
+}
+
+function renderNotice(notice: Notice | null): void {
+    const box = $('notice');
+    box.hidden = !notice;
+    box.className = `notice ${notice?.level ?? ''}`;
+    $('notice-text').textContent = notice?.message ?? '';
+}
+
+function renderRecent(s: UiState): void {
+    const list = $('recent-list');
+    list.replaceChildren();
+    for (const r of s.recent) {
+        const li = document.createElement('li');
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = 'recent-open';
+        const name = document.createElement('strong');
+        name.textContent = r.name;
+        const origin = document.createElement('small');
+        origin.textContent = r.is_current ? `${r.display_name} · current` : r.display_name;
+        open.append(name, origin);
+        open.addEventListener('click', () => void useServer(r.origin, open));
+
+        const forget = document.createElement('button');
+        forget.type = 'button';
+        forget.className = 'link danger';
+        forget.textContent = 'Forget';
+        forget.title = `Sign out of ${r.display_name} and delete its data on this computer`;
+        forget.addEventListener('click', () => void forgetServer(r, forget));
+
+        li.append(open, forget);
+        list.append(li);
+    }
+    $('recent').hidden = s.recent.length === 0;
+}
+
+function renderPresets(s: UiState): void {
+    const list = $('preset-list');
+    list.replaceChildren();
+    for (const p of s.presets) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'chip';
+        b.textContent = p.label;
+        b.addEventListener('click', () => void check(p.origin, b));
+        list.append(b);
+    }
+    $('presets').hidden = s.presets.length === 0;
+}
+
+async function refresh(): Promise<void> {
+    state = await invoke<UiState>('get_state');
+    $('app-version').textContent = state.app_version;
+    renderNotice(state.notice);
+    setText('.current-name', state.current?.name ?? 'your server');
+    setText('.current-origin', state.current?.origin ?? '');
+    renderRecent(state);
+    renderPresets(state);
+
+    switch (state.phase) {
+        case 'choose':
+            show(pendingCheck ? 'confirm' : 'choose');
+            break;
+        case 'in_app':
+        case 'connecting':
+            show('connecting');
+            break;
+        default:
+            show(state.phase);
+    }
+}
+
+async function check(input: string, button: HTMLButtonElement): Promise<void> {
+    showError('check-error', null);
+    busy(button, true);
+    try {
+        const result = await invoke<ServerCheck>('check_server', { input });
+        pendingCheck = result;
+        $('confirm-name').textContent = result.name;
+        $('confirm-origin').textContent = result.origin;
+        $('confirm-version').textContent = result.version ? `Brainitive ${result.version}` : 'Brainitive';
+        showError(
+            'confirm-too-old',
+            result.app_too_old
+                ? `This server needs Brainitive Desktop ${result.min_desktop_version} or later (this is ${state?.app_version}). Please update the app.`
+                : null,
+        );
+        ($('confirm-use') as HTMLButtonElement).disabled = result.app_too_old;
+        show('confirm');
+    } catch (e) {
+        showError('check-error', errorMessage(e));
+    } finally {
+        busy(button, false);
+    }
+}
+
+async function useServer(origin: string, button?: HTMLButtonElement): Promise<void> {
+    if (button) busy(button, true);
+    try {
+        await invoke('use_server', { origin });
+        pendingCheck = null;
+        await refresh();
+    } catch (e) {
+        pendingCheck = null;
+        show('choose');
+        showError('check-error', errorMessage(e));
+    } finally {
+        if (button) busy(button, false);
+    }
+}
+
+// two clicks instead of window.confirm (not implemented by every webview)
+async function forgetServer(r: RecentEntry, button: HTMLButtonElement): Promise<void> {
+    if (button.dataset.armed !== '1') {
+        button.dataset.armed = '1';
+        button.textContent = 'Click again to forget';
+        window.setTimeout(() => {
+            button.dataset.armed = '';
+            button.textContent = 'Forget';
+        }, 4000);
+        return;
+    }
+    busy(button, true);
+    await invoke('forget_server', { origin: r.origin });
+    await refresh();
+}
+
+async function signIn(button: HTMLButtonElement): Promise<void> {
+    showError('sign-in-error', null);
+    busy(button, true);
+    try {
+        lastSignInUrl = await invoke<string>('start_sign_in');
+        await refresh();
+    } catch (e) {
+        showError('sign-in-error', errorMessage(e));
+    } finally {
+        busy(button, false);
+    }
+}
+
+function wire(): void {
+    $('use-cloud').addEventListener('click', (ev) => {
+        if (state) void check(state.cloud_origin, ev.currentTarget as HTMLButtonElement);
+    });
+    $('self-hosted').addEventListener('submit', (ev) => {
+        ev.preventDefault();
+        void check(($('server-url') as HTMLInputElement).value, $('check') as HTMLButtonElement);
+    });
+    $('confirm-back').addEventListener('click', () => {
+        pendingCheck = null;
+        show('choose');
+    });
+    $('confirm-use').addEventListener('click', (ev) => {
+        if (pendingCheck) void useServer(pendingCheck.origin, ev.currentTarget as HTMLButtonElement);
+    });
+    $('sign-in').addEventListener('click', (ev) => void signIn(ev.currentTarget as HTMLButtonElement));
+    $('sign-in-again').addEventListener('click', (ev) => void signIn(ev.currentTarget as HTMLButtonElement));
+    $('cancel-sign-in').addEventListener('click', () => void invoke('cancel_sign_in').then(refresh));
+    $('copy-link').addEventListener('click', () => {
+        if (lastSignInUrl) void navigator.clipboard.writeText(lastSignInUrl);
+    });
+    $('retry').addEventListener('click', () => void invoke('retry_connect').then(refresh));
+    $('open-offline').addEventListener('click', () => void invoke('open_offline'));
+    document.querySelectorAll<HTMLButtonElement>('.switch').forEach((b) =>
+        b.addEventListener('click', () => {
+            pendingCheck = null;
+            void invoke('switch_server').then(refresh);
+        }),
+    );
+    $('notice-close').addEventListener('click', () => void invoke('dismiss_notice').then(refresh));
+}
+
+wire();
+void listen('desktop://changed', () => void refresh());
+void refresh();
