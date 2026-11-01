@@ -12,7 +12,10 @@ interface Prefs {
     zoom_percent: number;
     capture_shortcut: string;
     switcher_shortcut: string;
+    keep_in_tray: boolean;
 }
+
+type Toggle = 'keep_in_tray';
 
 type Which = 'capture' | 'switcher';
 type Choice = { mode: 'off' } | { mode: 'default' } | { mode: 'keys'; keys: string };
@@ -21,6 +24,11 @@ let recording: { which: Which; button: HTMLButtonElement } | null = null;
 
 function render(p: Prefs): void {
     $('version').textContent = p.app_version;
+    document.querySelectorAll('.tray-name').forEach((el) => (el.textContent = p.platform === 'macos' ? 'menu bar' : 'tray'));
+    document.querySelectorAll<HTMLInputElement>('[data-toggle]').forEach((input) => {
+        const key = input.dataset.toggle as Toggle;
+        input.checked = Boolean(p[key]);
+    });
     document.querySelectorAll('.mod').forEach((el) => (el.textContent = p.platform === 'macos' ? '⌘' : 'Ctrl+'));
     $('zoom').textContent = `${p.zoom_percent} %`;
     $('server').textContent = p.server ?? 'Not connected';
@@ -91,6 +99,15 @@ document.querySelectorAll<HTMLElement>('[data-shortcut]').forEach((row) => {
 });
 
 window.addEventListener('blur', stopRecording);
+
+document.querySelectorAll<HTMLInputElement>('[data-toggle]').forEach((input) => {
+    input.addEventListener('change', () => {
+        const key = input.dataset.toggle as Toggle;
+        invoke<Prefs>('settings_set_toggle', { key, value: input.checked })
+            .then(render)
+            .catch(() => void refresh());
+    });
+});
 
 async function refresh(): Promise<void> {
     render(await invoke<Prefs>('settings_get'));

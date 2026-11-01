@@ -23,6 +23,8 @@ pub struct CaptureContext {
     /// "⇧⌘Space" etc.; empty when the shortcut is off.
     shortcut: String,
     platform: &'static str,
+    /// Text to start with ([`open_quick_capture`]), handed over once.
+    prefill: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,9 +37,10 @@ pub struct CaptureResult {
 #[tauri::command]
 pub async fn capture_context(app: AppHandle, webview: Webview) -> Result<CaptureContext, String> {
     popup::ensure_caller(&app, &webview, Popup::Capture)?;
-    let (origin, phase, queued, shortcut) = {
+    let (origin, phase, queued, shortcut, prefill) = {
         let s = state(&app);
-        let inner = s.lock();
+        let mut inner = s.lock();
+        let prefill = inner.capture_prefill.take();
         let origin = inner.current_origin();
         let queued = origin.as_ref().map(|o| inner.queue.count_for(o)).unwrap_or(0);
         (
@@ -45,6 +48,7 @@ pub async fn capture_context(app: AppHandle, webview: Webview) -> Result<Capture
             inner.phase,
             queued,
             crate::shortcuts::label_of(inner.settings.preferences.capture_shortcut.as_deref()),
+            prefill,
         )
     };
     let signed_in = match &origin {
@@ -57,7 +61,26 @@ pub async fn capture_context(app: AppHandle, webview: Webview) -> Result<Capture
         queued,
         shortcut,
         platform: crate::api::platform(),
+        prefill,
     })
+}
+
+/// Opens the quick-capture window, optionally with text already in it (for other native
+/// sources, e.g. a voice-capture shortcut that transcribes locally). The text is only handed to
+/// the bundled capture page; nothing is sent until the user saves.
+pub fn open_quick_capture(app: &AppHandle, prefill: Option<String>) {
+    let prefill = prefill
+        .map(|t| t.chars().take(queue::MAX_TEXT).collect::<String>())
+        .filter(|t| !t.trim().is_empty());
+    let has_prefill = prefill.is_some();
+    state(app).lock().capture_prefill = prefill;
+    popup::show(app, Popup::Capture);
+    if has_prefill {
+        // already in front (no focus event): ask the page to read its context again
+        if let Some(w) = tauri::Manager::get_webview_window(app, Popup::Capture.label()) {
+            let _ = w.eval("window.dispatchEvent(new Event('focus'))");
+        }
+    }
 }
 
 /// Saves a capture to the private inbox; offline (or a server problem) → queued on this

@@ -327,7 +327,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
     };
     match action {
         MenuAction::Settings => crate::popup::show(app, crate::popup::Popup::Settings),
-        MenuAction::QuickCapture => crate::popup::show(app, crate::popup::Popup::Capture),
+        MenuAction::QuickCapture => crate::capture::open_quick_capture(app, None),
         MenuAction::QuickSwitcher => crate::popup::show(app, crate::popup::Popup::Switcher),
         MenuAction::NewWindow => {
             let current = shell::target_window(app).and_then(|w| w.url().ok());

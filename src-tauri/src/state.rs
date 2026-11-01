@@ -96,8 +96,13 @@ pub struct Inner {
     pub app_window_seq: u32,
     /// Popup label → whether an app window had the focus before it opened.
     pub popup_return: HashMap<String, bool>,
-    /// Ids of the registered global shortcuts: (quick capture, quick switcher).
-    pub hotkey_ids: (Option<u32>, Option<u32>),
+    /// Registered global shortcuts: shortcut id → what it does.
+    pub hotkeys: HashMap<u32, crate::hotkeys::HotkeyAction>,
+    /// Text the quick-capture window starts with (`capture::open_quick_capture`), taken once.
+    pub capture_prefill: Option<String>,
+    pub tray: Option<tauri::tray::TrayIcon<Wry>>,
+    pub tray_data: crate::tray::TrayData,
+    pub etags: crate::tray::EtagCache,
     /// Quick captures waiting to be sent, and where they are stored.
     pub queue: CaptureQueue,
     pub queue_path: PathBuf,
@@ -108,6 +113,8 @@ pub struct Inner {
 pub struct AppState {
     inner: Mutex<Inner>,
     pub session: Session,
+    /// Wakes the tray poller (sign-in, a tray action).
+    pub poll_now: tokio::sync::Notify,
 }
 
 impl AppState {
@@ -137,12 +144,17 @@ impl AppState {
                 focused_app_window: None,
                 app_window_seq: 0,
                 popup_return: HashMap::new(),
-                hotkey_ids: (None, None),
+                hotkeys: HashMap::new(),
+                capture_prefill: None,
+                tray: None,
+                tray_data: Default::default(),
+                etags: HashMap::new(),
                 queue: CaptureQueue::load(&queue_path),
                 queue_path,
                 flushing: false,
             }),
             session: Session::default(),
+            poll_now: tokio::sync::Notify::new(),
         }
     }
 

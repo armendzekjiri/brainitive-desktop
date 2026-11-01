@@ -26,6 +26,7 @@ fn main() {
             "settings_close",
             "settings_set_shortcut",
             "settings_record_shortcut",
+            "settings_set_toggle",
             // the quick-capture window (capabilities/capture.json)
             "capture_context",
             "capture_submit",

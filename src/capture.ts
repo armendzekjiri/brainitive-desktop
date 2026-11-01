@@ -11,6 +11,7 @@ interface Context {
     queued: number;
     shortcut: string;
     platform: 'macos' | 'windows' | 'linux';
+    prefill: string | null;
 }
 
 interface Result {
@@ -36,6 +37,10 @@ async function refresh(): Promise<void> {
     text.select();
     try {
         const ctx = await invoke<Context>('capture_context');
+        if (ctx.prefill) {
+            text.value = ctx.prefill;
+            text.setSelectionRange(text.value.length, text.value.length);
+        }
         $('save-keys').textContent = ctx.platform === 'macos' ? '⌘↩' : 'Ctrl+↩';
         $('where').textContent = ctx.server ? `to ${ctx.server}` : '';
         if (!ctx.server) setStatus('Connect Brainitive to a server first.', 'error');

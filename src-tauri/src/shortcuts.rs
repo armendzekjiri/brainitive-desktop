@@ -22,7 +22,7 @@ pub enum ShortcutError {
     TooSimple,
     #[error("That shortcut belongs to the system.")]
     Reserved,
-    #[error("Quick capture and the quick switcher need different shortcuts.")]
+    #[error("Another Brainitive shortcut already uses these keys.")]
     Duplicate,
 }
 
@@ -51,20 +51,22 @@ pub fn parse(accelerator: &str) -> Result<Shortcut, ShortcutError> {
     Ok(shortcut)
 }
 
-/// The capture and switcher shortcuts (`None` = off).
-pub type ShortcutPair = (Option<Shortcut>, Option<Shortcut>);
-
-/// The two shortcuts the app registers; checks each and that they differ. The error names the
-/// one at fault ("capture" / "switcher").
-pub fn parse_pair(capture: Option<&str>, switcher: Option<&str>) -> Result<ShortcutPair, (&'static str, ShortcutError)> {
-    let capture = capture.map(parse).transpose().map_err(|e| ("capture", e))?;
-    let switcher = switcher.map(parse).transpose().map_err(|e| ("switcher", e))?;
-    if let (Some(a), Some(b)) = (&capture, &switcher) {
-        if a.id() == b.id() {
-            return Err(("switcher", ShortcutError::Duplicate));
+/// Checks every shortcut the app registers (`None` = off) and that no two are the same. The
+/// error carries the name of the one at fault. Generic over any number of global shortcuts
+/// (quick capture, quick switcher, later voice capture …).
+pub fn parse_all<N: Copy>(
+    shortcuts: &[(N, Option<&str>)],
+) -> Result<Vec<(N, Shortcut)>, (N, ShortcutError)> {
+    let mut out: Vec<(N, Shortcut)> = Vec::new();
+    for (name, accelerator) in shortcuts {
+        let Some(accelerator) = accelerator else { continue };
+        let shortcut = parse(accelerator).map_err(|e| (*name, e))?;
+        if out.iter().any(|(_, s)| s.id() == shortcut.id()) {
+            return Err((*name, ShortcutError::Duplicate));
         }
+        out.push((*name, shortcut));
     }
-    Ok((capture, switcher))
+    Ok(out)
 }
 
 /// The stored form, e.g. `shift+super+Space` (stable, parses back to the same shortcut).
@@ -210,8 +212,8 @@ mod tests {
 
     #[test]
     fn defaults_are_valid_and_different() {
-        let (c, s) = parse_pair(Some(DEFAULT_CAPTURE), Some(DEFAULT_SWITCHER)).unwrap();
-        let (c, s) = (c.unwrap(), s.unwrap());
+        let all = parse_all(&[("capture", Some(DEFAULT_CAPTURE)), ("switcher", Some(DEFAULT_SWITCHER))]).unwrap();
+        let (c, s) = (all[0].1, all[1].1);
         assert_eq!(c.key, Code::Space);
         assert!(c.mods.contains(Modifiers::SHIFT));
         assert_ne!(c.id(), s.id());
@@ -247,13 +249,16 @@ mod tests {
     }
 
     #[test]
-    fn the_two_shortcuts_must_differ() {
+    fn shortcuts_must_differ() {
         assert_eq!(
-            parse_pair(Some("Control+Shift+KeyJ"), Some("ctrl+shift+j")),
-            Err(("switcher", ShortcutError::Duplicate))
+            parse_all(&[("capture", Some("Control+Shift+KeyJ")), ("switcher", Some("ctrl+shift+j"))]).unwrap_err(),
+            ("switcher", ShortcutError::Duplicate)
         );
-        assert!(parse_pair(None, None).unwrap() == (None, None));
-        assert_eq!(parse_pair(Some("x"), None).unwrap_err().0, "capture");
+        assert!(parse_all::<&str>(&[("capture", None), ("switcher", None)]).unwrap().is_empty());
+        assert_eq!(parse_all(&[("capture", Some("x")), ("switcher", None)]).unwrap_err().0, "capture");
+        // off ones are skipped, a third one is checked against both
+        let three = [("a", Some("Control+Shift+KeyJ")), ("b", None), ("c", Some("Control+Alt+KeyJ"))];
+        assert_eq!(parse_all(&three).unwrap().len(), 2);
     }
 
     #[test]

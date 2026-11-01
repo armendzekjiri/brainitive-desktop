@@ -10,6 +10,7 @@
     "allow-settings-reset-zoom",
     "allow-settings-close",
     "allow-settings-set-shortcut",
-    "allow-settings-record-shortcut"
+    "allow-settings-record-shortcut",
+    "allow-settings-set-toggle"
   ]
 }

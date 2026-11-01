@@ -10,6 +10,7 @@ pub mod hotkeys;
 pub mod links;
 pub mod menu;
 pub mod pkce;
+pub mod poll;
 pub mod popup;
 pub mod prefs;
 pub mod queue;
@@ -20,6 +21,7 @@ pub mod settings;
 pub mod shell;
 pub mod shortcuts;
 pub mod state;
+pub mod tray;
 pub mod version;
 
 use tauri::{Manager, RunEvent, WindowEvent};
@@ -70,6 +72,7 @@ pub fn run() {
             prefs::settings_close,
             prefs::settings_set_shortcut,
             prefs::settings_record_shortcut,
+            prefs::settings_set_toggle,
             capture::capture_context,
             capture::capture_submit,
             capture::capture_close,
@@ -81,7 +84,16 @@ pub fn run() {
             let handle = app.handle().clone();
 
             menu::install(&handle)?;
-            app.on_menu_event(|app, event| menu::on_menu_event(app, event.id().as_ref()));
+            app.on_menu_event(|app, event| {
+                let id = event.id().as_ref();
+                if id.starts_with("tray-") {
+                    tray::on_menu_event(app, id);
+                } else {
+                    menu::on_menu_event(app, id);
+                }
+            });
+            tray::install(&handle)?;
+            tray::start_poller(&handle);
             if let Err(e) = hotkeys::apply(&handle) {
                 log::warn!("{e}");
             }
@@ -140,6 +152,24 @@ pub fn run() {
                 popup::on_focus_lost(app, &label);
             }
         }
+        // "keep running in the tray": closing the main window hides it (the web app keeps
+        // running, so its notifications still arrive); the tray / dock icon brings it back
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == shell::MAIN && state(app).lock().settings.preferences.keep_in_tray => {
+            api.prevent_close();
+            if let Some(w) = shell::main_window(app) {
+                #[cfg(target_os = "macos")]
+                if w.is_fullscreen().unwrap_or(false) {
+                    let _ = w.set_fullscreen(false);
+                }
+                let _ = w.hide();
+            }
+        }
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => shell::focus_main(app),
         RunEvent::WindowEvent {
             label,
             event: WindowEvent::CloseRequested { api, .. },

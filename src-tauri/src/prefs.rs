@@ -19,6 +19,7 @@ pub struct PrefsView {
     /// "⇧⌘Space" etc.; empty = off.
     capture_shortcut: String,
     switcher_shortcut: String,
+    keep_in_tray: bool,
 }
 
 pub fn view(app: &AppHandle) -> PrefsView {
@@ -33,6 +34,7 @@ pub fn view(app: &AppHandle) -> PrefsView {
         zoom_percent: (prefs.zoom * 100.0).round() as u32,
         capture_shortcut: crate::shortcuts::label_of(prefs.capture_shortcut.as_deref()),
         switcher_shortcut: crate::shortcuts::label_of(prefs.switcher_shortcut.as_deref()),
+        keep_in_tray: prefs.keep_in_tray,
     }
 }
 
@@ -126,4 +128,21 @@ pub fn settings_record_shortcut(app: AppHandle, webview: Webview, active: bool) 
     } else {
         crate::hotkeys::apply(&app)
     }
+}
+
+/// An on / off preference of the window.
+#[tauri::command]
+pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value: bool) -> Result<PrefsView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    {
+        let s = state(&app);
+        let mut inner = s.lock();
+        let prefs = &mut inner.settings.preferences;
+        match key.as_str() {
+            "keep_in_tray" => prefs.keep_in_tray = value,
+            _ => return Err("unknown setting".into()),
+        }
+        inner.save_settings();
+    }
+    Ok(view(&app))
 }

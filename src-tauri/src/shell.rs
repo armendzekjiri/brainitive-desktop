@@ -149,6 +149,7 @@ pub fn show_local(app: &AppHandle, phase: Phase, notice: Option<crate::state::No
         inner.phase = phase;
         inner.notice = notice;
     }
+    crate::tray::reset(app);
     let local = local_url(app);
     match main_window(app) {
         Some(w) => {
@@ -188,7 +189,8 @@ pub fn enter_app(app: &AppHandle, origin: &ServerOrigin, url: Url) {
     open_main(app, origin.store_id(), WebviewUrl::External(url));
     refresh_title(app);
     focus_main(app);
-    // signed in again: send the quick captures that waited
+    // signed in: the tray polls now; the quick captures that waited are sent
+    crate::tray::reset(app);
     let handle = app.clone();
     tauri::async_runtime::spawn(async move { crate::capture::flush(&handle).await });
 }
