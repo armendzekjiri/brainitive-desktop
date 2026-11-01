@@ -188,6 +188,9 @@ pub fn enter_app(app: &AppHandle, origin: &ServerOrigin, url: Url) {
     open_main(app, origin.store_id(), WebviewUrl::External(url));
     refresh_title(app);
     focus_main(app);
+    // signed in again: send the quick captures that waited
+    let handle = app.clone();
+    tauri::async_runtime::spawn(async move { crate::capture::flush(&handle).await });
 }
 
 /// Navigates the main window, or (re)builds it when the data store differs.

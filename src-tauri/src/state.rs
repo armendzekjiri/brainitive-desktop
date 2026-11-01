@@ -11,6 +11,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, Wry};
 use url::Url;
 
 use crate::api::InstanceInfo;
+use crate::queue::CaptureQueue;
 use crate::server::ServerOrigin;
 use crate::session::Session;
 use crate::settings::Settings;
@@ -95,6 +96,13 @@ pub struct Inner {
     pub app_window_seq: u32,
     /// Popup label → whether an app window had the focus before it opened.
     pub popup_return: HashMap<String, bool>,
+    /// Ids of the registered global shortcuts: (quick capture, quick switcher).
+    pub hotkey_ids: (Option<u32>, Option<u32>),
+    /// Quick captures waiting to be sent, and where they are stored.
+    pub queue: CaptureQueue,
+    pub queue_path: PathBuf,
+    /// A flush of the capture queue is running.
+    pub flushing: bool,
 }
 
 pub struct AppState {
@@ -103,7 +111,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(settings_path: PathBuf) -> Self {
+    pub fn new(settings_path: PathBuf, queue_path: PathBuf) -> Self {
         let settings = Settings::load(&settings_path);
         Self {
             inner: Mutex::new(Inner {
@@ -129,6 +137,10 @@ impl AppState {
                 focused_app_window: None,
                 app_window_seq: 0,
                 popup_return: HashMap::new(),
+                hotkey_ids: (None, None),
+                queue: CaptureQueue::load(&queue_path),
+                queue_path,
+                flushing: false,
             }),
             session: Session::default(),
         }
@@ -142,6 +154,12 @@ impl AppState {
 impl Inner {
     pub fn current_origin(&self) -> Option<ServerOrigin> {
         self.settings.current.clone()
+    }
+
+    pub fn save_queue(&self) {
+        if let Err(e) = self.queue.save(&self.queue_path) {
+            log::warn!("could not save the capture queue: {e}");
+        }
     }
 
     pub fn save_settings(&self) {

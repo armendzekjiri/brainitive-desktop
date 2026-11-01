@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capture",
+  "description": "The bundled quick-capture window only (capture.html). It sends a capture through Rust (POST /api/v1/captures with the stored app token); the token never reaches this page.",
+  "local": true,
+  "windows": ["capture"],
+  "permissions": [
+    "allow-capture-context",
+    "allow-capture-submit",
+    "allow-capture-close"
+  ]
+}

@@ -325,6 +325,7 @@ pub async fn sign_out(app: &AppHandle) {
         return;
     };
     state(app).session.sign_out(&origin).await;
+    crate::capture::drop_queue(app, &origin);
     crate::bridge::set_badge(app, 0);
     if let Some(w) = shell::main_window(app) {
         // the window uses this server's own data store, so this clears only its data
@@ -350,6 +351,7 @@ pub fn switch_server(app: &AppHandle) {
 /// remove it from the recent list.
 pub async fn forget_server(app: &AppHandle, origin: ServerOrigin) {
     state(app).session.sign_out(&origin).await;
+    crate::capture::drop_queue(app, &origin);
     let was_current = {
         let s = state(app);
         let mut inner = s.lock();

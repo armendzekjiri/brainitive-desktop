@@ -22,6 +22,7 @@ export default defineConfig({
             input: {
                 index: 'index.html',
                 settings: 'settings.html',
+                capture: 'capture.html',
             },
         },
     },

@@ -121,6 +121,12 @@ pub fn dismiss(app: &AppHandle, popup: Popup) {
         return;
     };
     let _ = window.hide();
+    if popup == Popup::Settings {
+        // a shortcut recording that was not finished must not leave the shortcuts paused
+        if let Err(e) = crate::hotkeys::apply(app) {
+            log::warn!("{e}");
+        }
+    }
     let app_was_active = state(app)
         .lock()
         .popup_return

@@ -24,6 +24,12 @@ fn main() {
             "settings_open_account",
             "settings_reset_zoom",
             "settings_close",
+            "settings_set_shortcut",
+            "settings_record_shortcut",
+            // the quick-capture window (capabilities/capture.json)
+            "capture_context",
+            "capture_submit",
+            "capture_close",
         ])),
     )
     .expect("failed to run tauri-build");

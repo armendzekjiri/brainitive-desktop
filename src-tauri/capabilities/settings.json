@@ -8,6 +8,8 @@
     "allow-settings-get",
     "allow-settings-open-account",
     "allow-settings-reset-zoom",
-    "allow-settings-close"
+    "allow-settings-close",
+    "allow-settings-set-shortcut",
+    "allow-settings-record-shortcut"
   ]
 }

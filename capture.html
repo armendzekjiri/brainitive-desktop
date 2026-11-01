@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quick Capture</title>
+    <link rel="stylesheet" href="/src/native.css" />
+    <link rel="stylesheet" href="/src/popup.css" />
+    <script type="module" src="/src/capture.ts"></script>
+  </head>
+  <body class="popup">
+    <form id="form" class="capture" novalidate>
+      <header class="popup-head">
+        <img src="/logo.png" alt="" width="18" height="18" />
+        <strong>Quick capture</strong>
+        <span id="where" class="muted"></span>
+        <span class="spacer"></span>
+        <kbd>Esc</kbd>
+      </header>
+      <textarea id="text" rows="4" placeholder="An idea, a task, a note…" aria-label="Capture" autofocus></textarea>
+      <div class="capture-row">
+        <input id="url" type="url" inputmode="url" spellcheck="false" placeholder="Link (optional)" aria-label="Link" />
+        <select id="type" aria-label="Becomes">
+          <option value="">Decide later</option>
+          <option value="issue">Issue</option>
+          <option value="task">Task</option>
+          <option value="page">Doc</option>
+          <option value="bookmark">Bookmark</option>
+          <option value="snippet">Snippet</option>
+        </select>
+        <button id="save" class="primary" type="submit">Save <kbd class="on-accent" id="save-keys"></kbd></button>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </form>
+  </body>
+</html>

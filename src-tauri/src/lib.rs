@@ -3,13 +3,16 @@
 
 pub mod api;
 pub mod bridge;
+pub mod capture;
 pub mod commands;
 pub mod flows;
+pub mod hotkeys;
 pub mod links;
 pub mod menu;
 pub mod pkce;
 pub mod popup;
 pub mod prefs;
+pub mod queue;
 pub mod secrets;
 pub mod server;
 pub mod session;
@@ -33,6 +36,11 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(hotkeys::on_shortcut)
+                .build(),
+        )
         .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -60,14 +68,23 @@ pub fn run() {
             prefs::settings_open_account,
             prefs::settings_reset_zoom,
             prefs::settings_close,
+            prefs::settings_set_shortcut,
+            prefs::settings_record_shortcut,
+            capture::capture_context,
+            capture::capture_submit,
+            capture::capture_close,
         ])
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");
-            app.manage(AppState::new(settings_path));
+            let queue_path = app.path().app_local_data_dir()?.join("capture-queue.json");
+            app.manage(AppState::new(settings_path, queue_path));
             let handle = app.handle().clone();
 
             menu::install(&handle)?;
             app.on_menu_event(|app, event| menu::on_menu_event(app, event.id().as_ref()));
+            if let Err(e) = hotkeys::apply(&handle) {
+                log::warn!("{e}");
+            }
 
             // a click on one of our notifications
             let on_click = handle.clone();
