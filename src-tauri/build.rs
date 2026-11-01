@@ -18,6 +18,7 @@ fn main() {
             "brainitive_notify",
             "brainitive_set_badge",
             "brainitive_open_external",
+            "brainitive_sign_out",
         ])),
     )
     .expect("failed to run tauri-build");

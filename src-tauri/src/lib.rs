@@ -47,6 +47,7 @@ pub fn run() {
             bridge::brainitive_notify,
             bridge::brainitive_set_badge,
             bridge::brainitive_open_external,
+            bridge::brainitive_sign_out,
         ])
         .setup(|app| {
             let settings_path = app.path().app_config_dir()?.join("settings.json");

@@ -1,7 +1,7 @@
-//! The three commands the web app may call (`resources/js/lib/desktop.ts` in the app repo,
+//! The four commands the web app may call (`resources/js/lib/desktop.ts` in the app repo,
 //! `window.__TAURI_INTERNALS__.invoke(cmd, args)`):
 //! `brainitive_notify {title, body, url?}`, `brainitive_set_badge {count}`,
-//! `brainitive_open_external {url}`.
+//! `brainitive_open_external {url}`, `brainitive_sign_out {}` (after the web "Sign out").
 //!
 //! Two locks: the runtime capability lets only the current server's origin reach them, and
 //! every command checks again that the calling webview is the main window on that origin
@@ -83,6 +83,16 @@ pub fn brainitive_open_external(app: AppHandle, webview: Webview, url: String) -
     ensure_current_server(&app, &webview)?;
     let url = links::external_url(&url).ok_or("only http, https and mailto links")?;
     shell::open_external(&app, &url);
+    Ok(())
+}
+
+/// The web app's "Sign out" succeeded: sign the app out too (revoke this device, delete the
+/// keychain entry, clear this server's data, show the sign-in screen). Without it the stored
+/// sign-in would open a fresh web session right away.
+#[tauri::command]
+pub async fn brainitive_sign_out(app: AppHandle, webview: Webview) -> Result<(), String> {
+    ensure_current_server(&app, &webview)?;
+    crate::flows::sign_out(&app).await;
     Ok(())
 }
 

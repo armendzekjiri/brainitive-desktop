@@ -78,20 +78,19 @@ window uses them (`settings.pending_wipes`, retried at start-up).
 - **Sign in**: PKCE + state → system browser at `{origin}{authorize_path}` → `brainitive://auth/callback`
   → state check → exchange → refresh token to the keychain → web-session → app.
 - **Session lost in the webview** (`/login` reached): a fresh web session from the stored sign-in,
-  back to the last page (`?to=`). Twice within 30 s → sign-in screen. Right after `/` (the web
-  app's "Log out" lands there) → native sign-out.
+  back to the last page (`?to=`). Twice within 30 s → sign-in screen.
 - **Deep links** (BRAI-356): `brainitive://open?url=<path or URL on the current origin>` focuses the
   app and navigates (signed out → after sign-in); `brainitive://auth/callback` finishes a sign-in.
   A second launch focuses the running window (single-instance; on Windows / Linux it also carries
   the link).
-- **Sign out** (Server menu): `POST /auth/logout`, delete the keychain entry, clear this server's
+- **Sign out** (Server menu, or the web app's "Sign out" via `brainitive_sign_out`): `POST /auth/logout`, delete the keychain entry, clear this server's
   webview data.
 
 ## Remote content and the bridge
 
 See [SECURITY.md](./SECURITY.md). In short: the current origin gets a runtime capability
 (`Manager::add_capability`, `remote.urls = ["<origin>/*"]`) for exactly `brainitive_notify {title, body, url?}`,
-`brainitive_set_badge {count}`, `brainitive_open_external {url}` (called by the web app's
+`brainitive_set_badge {count}`, `brainitive_open_external {url}`, `brainitive_sign_out {}` (called by the web app's
 `resources/js/lib/desktop.ts` via `window.__TAURI_INTERNALS__.invoke`). The navigation guard keeps
 the main frame on the bundled screens and the current origin. The user agent ends with
 ` BrainitiveDesktop/<version>`.

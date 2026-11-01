@@ -21,7 +21,7 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
 - Every `/api/v1` call is made from **Rust** (`api.rs`, reqwest) — the API has no CORS, and tokens
   never enter the webview, localStorage or disk (refresh token: keychain only).
 - Refreshes go through `Session` (one async mutex): a refresh token used twice revokes the device.
-- Remote content gets only `brainitive_notify`, `brainitive_set_badge`, `brainitive_open_external`.
+- Remote content gets only `brainitive_notify`, `brainitive_set_badge`, `brainitive_open_external`, `brainitive_sign_out`.
   A new bridge command needs: the command (with the current-origin check), `build.rs` manifest,
   `shell::BRIDGE_PERMISSIONS`, SECURITY.md, and the web side in the app repo.
 - New local commands: `build.rs` manifest + `capabilities/local.json`.

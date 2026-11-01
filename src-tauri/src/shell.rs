@@ -19,10 +19,11 @@ use crate::version::APP_VERSION;
 pub const MAIN: &str = "main";
 
 /// The commands remote content (the current server's origin only) may call.
-pub const BRIDGE_PERMISSIONS: [&str; 3] = [
+pub const BRIDGE_PERMISSIONS: [&str; 4] = [
     "allow-brainitive-notify",
     "allow-brainitive-set-badge",
     "allow-brainitive-open-external",
+    "allow-brainitive-sign-out",
 ];
 
 /// The platform's default user agent + ` BrainitiveDesktop/<version>`. Wry can only replace the
@@ -267,8 +268,7 @@ fn on_navigation(app: &AppHandle, url: &Url) -> bool {
     match links::decide_navigation(url, instance.as_ref(), &local_origins(app)) {
         Navigation::Allow => true,
         Navigation::Home => {
-            // the logo link or the web app's "Log out" (→ `/`): stay in the app
-            state(app).lock().home_at = Some(Instant::now());
+            // the logo link (→ `/`): stay in the app; "Sign out" calls brainitive_sign_out
             if let Some(origin) = instance {
                 let target = origin.join("/dashboard");
                 defer_navigate(app, target);

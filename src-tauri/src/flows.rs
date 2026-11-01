@@ -145,7 +145,6 @@ pub async fn use_server(app: &AppHandle, origin: ServerOrigin) -> Result<(), UiE
         inner.save_settings();
         if previous.as_ref() != Some(&origin) {
             inner.last_good = None;
-            inner.home_at = None;
             inner.reauth_at = None;
         }
     }
@@ -295,23 +294,19 @@ fn path_of(url: &Url) -> String {
     path
 }
 
-/// The webview reached the server's `/login`: its session cookie is gone.
-/// - right after the web app's own "Log out" (`/` → `/login` within seconds): sign out here too;
+/// The webview reached the server's `/login`: its session cookie is gone (the web app's own
+/// "Sign out" calls `brainitive_sign_out` instead, so this is an expired session).
 /// - a second time within 30 s (the one-time session link failed): show the sign-in screen;
 /// - otherwise: a fresh web session from the stored sign-in, back to the last page.
 pub async fn on_web_session_lost(app: &AppHandle, origin: ServerOrigin) {
-    let (logout, looping, last) = {
+    let (looping, last) = {
         let s = state(app);
         let mut inner = s.lock();
-        let logout = inner.home_at.is_some_and(|t| t.elapsed() < Duration::from_secs(10));
         let looping = inner.reauth_at.is_some_and(|t| t.elapsed() < Duration::from_secs(30));
-        inner.home_at = None;
         inner.reauth_at = Some(Instant::now());
-        (logout, looping, inner.last_good.clone())
+        (looping, inner.last_good.clone())
     };
-    if logout {
-        sign_out(app).await;
-    } else if looping {
+    if looping {
         shell::show_local(
             app,
             Phase::SignIn,

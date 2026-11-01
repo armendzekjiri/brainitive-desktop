@@ -19,8 +19,8 @@ not have. Cards: BRAI-351 (remote IPC, CSP, navigation guard), BRAI-428 (app API
 **Remote content (the server's pages in the main webview)** can:
 - run in the main webview only while the main frame is on the **current server's origin**
   (exact scheme + host + port);
-- call exactly three commands — `brainitive_notify`, `brainitive_set_badge`,
-  `brainitive_open_external` — through a runtime capability for that origin
+- call exactly four commands — `brainitive_notify`, `brainitive_set_badge`,
+  `brainitive_open_external`, `brainitive_sign_out` — through a runtime capability for that origin
   (`shell::allow_bridge_for`, `remote.urls = ["<origin>/*"]`). Each command checks again that the
   caller is the main webview on the current origin, because Tauri can add but not remove a
   capability at runtime (after "Switch server" the old origin's capability still exists, the
@@ -96,8 +96,6 @@ store is deleted and it leaves the recent list.
   treats it as reuse and revokes the device; the user signs in again (fail-safe, not fail-open).
 - **Dev builds and the keychain**: unsigned debug builds change their code signature on every
   rebuild, so macOS may ask for keychain access again. Signed builds (phase 05) don't.
-- **Web logout detection** is heuristic (`/` followed by `/login` within 10 s). A dedicated bridge
-  command would be cleaner (see the open contract items in the README).
 - **macOS 13 and older** have no per-server data stores → the app requires macOS 14
   (`bundle.macOS.minimumSystemVersion`).
 - Remote content can still show notifications (≤ 20/min, text clipped) and a badge; those are the

@@ -75,8 +75,7 @@ pub struct Inner {
     pub rebuilding: bool,
     /// Last page of the server the main frame showed, to return to after a blocked load.
     pub last_good: Option<Url>,
-    /// When the webview last went to the server's `/` and `/login` (logout / loop detection).
-    pub home_at: Option<Instant>,
+    /// When the webview last reached the server's `/login` (sign-in loop detection).
     pub reauth_at: Option<Instant>,
     /// Origins that already got their remote capability (Tauri can add, not remove, them).
     pub capabilities: HashSet<String>,
@@ -107,7 +106,6 @@ impl AppState {
                 rebuild: None,
                 rebuilding: false,
                 last_good: None,
-                home_at: None,
                 reauth_at: None,
                 capabilities: HashSet::new(),
                 notifications: HashMap::new(),
