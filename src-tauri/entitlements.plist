@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hardened-runtime entitlements, applied when the macOS build is signed (docs/RELEASING.md).
+       No JIT / unsigned-memory entitlements: the webview's JavaScript runs in WebKit's own
+       helper processes (WKWebView), which carry their own entitlements; this process runs no JIT
+       (whisper.cpp is plain compiled code). Add one only if a signed build proves it needs it. -->
+
+  <!-- Voice capture (BRAI-439): without this the hardened runtime blocks the microphone silently
+       (the NSMicrophoneUsageDescription prompt never appears). -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
+  <!-- Outgoing connections to the Brainitive server. Only enforced for a sandboxed app (we are
+       not sandboxed, Developer ID distribution), kept so a later sandbox does not break it. -->
+  <key>com.apple.security.network.client</key>
+  <true/>
+</dict>
+</plist>

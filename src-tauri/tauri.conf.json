@@ -26,12 +26,25 @@
         "frame-src": "'none'",
         "frame-ancestors": "'none'"
       },
-      "capabilities": ["local", "settings", "capture", "switcher", "offline", "voice"]
+      "capabilities": [
+        "local",
+        "settings",
+        "capture",
+        "switcher",
+        "offline",
+        "voice"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "app",
+      "dmg",
+      "nsis",
+      "deb",
+      "appimage"
+    ],
     "category": "Productivity",
     "shortDescription": "Brainitive for your desktop",
     "longDescription": "Brainitive Desktop: boards, docs, whiteboards and plans of your Brainitive Cloud or self-hosted server in a native app.",
@@ -45,13 +58,40 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "minimumSystemVersion": "14.0"
+      "minimumSystemVersion": "14.0",
+      "entitlements": "entitlements.plist",
+      "signingIdentity": null,
+      "hardenedRuntime": true
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false,
+        "startMenuFolder": "Brainitive"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper",
+        "silent": true
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libasound2 | libasound2t64"
+        ],
+        "section": "utils"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
     }
   },
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["brainitive"]
+        "schemes": [
+          "brainitive"
+        ]
       }
     }
   }
