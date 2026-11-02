@@ -325,8 +325,9 @@ doesn't exist (the download then fails verification) — but cannot install anyt
 private key. **A stolen private key plus control of the releases is a full compromise** of every
 installed app: the key is kept offline, only GitHub Actions has a copy, and only the "Updater
 signing" step of a `v*` tag build (or a manual run on the default branch) sees it — after
-`tauri build`, which never gets it; Apple / Azure secrets reach only the `tauri build` step of their
-OS, never `$GITHUB_ENV` (BRAI-377). Rotating it needs one release signed with the old key that carries the
+`tauri build`, which never gets it; Apple / Azure secrets reach only the signing steps that run
+**after** the build on what it produced (`scripts/macos-sign.sh`, the Windows signing steps), never
+`tauri build`, npm or cargo, never `$GITHUB_ENV` (BRAI-377, codex review 11). Rotating it needs one release signed with the old key that carries the
 new public key (docs/RELEASING.md). The repo must publish its releases publicly for updates to work.
 
 ## The Microsoft Store build (BRAI-442)

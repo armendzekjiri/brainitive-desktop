@@ -45,10 +45,24 @@ GitHub secrets (Settings → Secrets and variables → Actions):
 | A: `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Apple ID e-mail, app-specific password, Team ID |
 | B: `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` | Key ID, Issuer ID, full text of the `.p8` |
 
-`tauri.conf.json` keeps `signingIdentity: null`; Tauri reads the `APPLE_*` variables, which the
-workflow passes **only to the `tauri build` step** of the macOS runner (step `env:`, never
-`$GITHUB_ENV`; BRAI-377). Option B's `.p8` is written to the runner's temp folder (0600) by its own
-step and deleted right after the build. Hardened runtime is on; the only entitlements are `audio-input` (voice capture, without it
+**The build never sees these secrets** (codex review 11). `tauri.conf.json` keeps
+`signingIdentity: null`, and `tauri build` runs with no `APPLE_*` variable, so it makes an
+**unsigned** `Brainitive.app` and `.dmg` (npm, cargo and every crate's build script run in that
+step). The next step, **"macOS signing + notarization"**, is the only one with the Apple secrets
+(step `env:`, never `$GITHUB_ENV`). It runs [`scripts/macos-sign.sh`](../scripts/macos-sign.sh),
+which uses Apple's tools only:
+
+1. imports `APPLE_CERTIFICATE` (+ password) into a throwaway keychain in the runner's temp folder;
+2. `codesign --force --deep --options runtime --timestamp --entitlements src-tauri/entitlements.plist
+   --sign "$APPLE_SIGNING_IDENTITY"` on the `.app`, then `codesign --verify --deep --strict`;
+3. replaces Tauri's `.dmg` (it holds the unsigned app) with a new one made by `hdiutil` from the
+   signed app plus an `Applications` link, same file name, and signs it;
+4. `xcrun notarytool submit <dmg> --wait` (option A: Apple ID; option B: the API key, its `.p8`
+   written to a 0600 temp file), fails unless the status is `Accepted`, then
+   `xcrun stapler staple` on the `.dmg` **and** the `.app`, `stapler validate`, `spctl --assess`.
+
+The keychain and the `.p8` are deleted when the script exits. Without notarization secrets the app is
+signed but not notarized (a warning in the log). Hardened runtime is on; the only entitlements are `audio-input` (voice capture, without it
 a signed build never gets the microphone) and `network.client`. No JIT entitlement: WKWebView runs
 JavaScript in WebKit's own processes. If a signed build ever crashes on launch with a code-signing
 or JIT error, add the entitlement named in the crash log, not before.
@@ -82,13 +96,23 @@ reputation; identity validation needed, individuals in some regions only, check 
    `AZURE_TRUSTED_SIGNING_ENDPOINT` (e.g. `https://weu.codesigning.azure.net`, the region's
    endpoint), `AZURE_TRUSTED_SIGNING_ACCOUNT`, `AZURE_TRUSTED_SIGNING_PROFILE`.
 
-CI then installs `trusted-signing-cli` **0.11.0** (pinned: `cargo install --version 0.11.0
---locked`; check that `trusted-signing-cli --help` still has `-e -a -c -d` before bumping) and
-passes a config overlay with
-`bundle.windows.signCommand = "trusted-signing-cli -e … -a … -c … -d Brainitive %1"`
-(Tauri calls it for every binary and the installer). The overlay is written at build time, so
-`tauri.conf.json` itself never needs Azure. `AZURE_TENANT_ID` / `_CLIENT_ID` / `_CLIENT_SECRET` go
-to the Windows `tauri build` step only (step `env:`).
+CI then signs **after** the build, so `tauri build` and its build scripts never see Azure
+credentials (codex review 11):
+
+1. **Windows signing tool** (no secrets): `cargo install trusted-signing-cli --version 0.11.0
+   --locked --root $RUNNER_TEMP/signing-tools` (pinned; check that `trusted-signing-cli --help`
+   still has `-e -a -c -d` before bumping).
+2. **tauri build** with `--no-bundle` (no secrets): `src-tauri/target/release/brainitive-desktop.exe`.
+3. **Windows signing (app)**: `trusted-signing-cli -e <endpoint> -a <account> -c <profile> -d
+   Brainitive brainitive-desktop.exe`.
+4. **tauri bundle (Windows)** (no secrets): `npx tauri bundle --bundles nsis` packs the signed exe
+   into the installer.
+5. **Windows signing (installer)**: the same command on `bundle/nsis/*-setup.exe`.
+
+Only steps 3 and 5 get `AZURE_TENANT_ID` / `_CLIENT_ID` / `_CLIENT_SECRET` and the three
+`AZURE_TRUSTED_SIGNING_*` values (step `env:`); `tauri.conf.json` never needs Azure. The NSIS
+uninstaller that the installer writes is not signed separately (Tauri's `signCommand` used to sign
+it inside the build, which would hand the credentials to the build again).
 
 **Alternative: a `.pfx` (OV/EV) certificate.** Not wired in CI. EV certificates live on hardware
 tokens / cloud HSMs and usually need the vendor's signing tool; with an exportable OV `.pfx`:
@@ -188,8 +212,15 @@ ready — restart to install" and installs only when the user clicks **Restart t
   `release` events never reach a signing step.
 - Every secret is passed through `env:` of the one step that uses it; nothing is written to
   `$GITHUB_ENV` (which would hand it to every later step, `npm`, `cargo` and their build scripts
-  included). `tauri build` gets the Apple / Azure credentials of its own OS only; the updater key
-  never reaches `tauri build` at all.
+  included).
+- **No signing secret reaches a build step** (codex review 11): `npm ci`, `npm run build`,
+  `cargo test` / `clippy`, `tauri build` and `tauri bundle` run without any; the Apple secrets go
+  to "macOS signing + notarization" only, the Azure ones to "Windows signing (app)" /
+  "(installer)" only, the updater key to "Updater signing" only, and those steps build nothing.
+  `scripts/workflow-secrets.test.mjs` (`node --test scripts/`) fails when a change breaks that.
+- Residual: the signing steps run on the same runner after the build, so a process a compromised
+  build left running could still watch them. Moving signing to its own job (fresh runner, the
+  unsigned bundle as an artifact) would close that; not done yet to keep the pipeline simple.
 
 ### Actions are pinned to commit SHAs
 
