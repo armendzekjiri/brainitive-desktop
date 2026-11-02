@@ -120,3 +120,6 @@ All six gaps above are closed on the server and adopted here:
 6. `captures=inbox`; capture deletes drop captures that left the inbox (the view's state filter is
    gone). A `task_list` delete drops the list and its tasks.
 Old stored cursors keep working (the filters are sent with the cursor), no client migration.
+
+Related (not sync): the minimum desktop version (`/api/v1/instance`) is now re-checked by the poller
+about every 6 hours and after a wake (`version::Recheck`, `flows::recheck_minimum`).

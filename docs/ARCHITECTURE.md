@@ -128,6 +128,9 @@ window uses them (`settings.pending_wipes`, retried at start-up).
     pre-release tags, `v` prefix and build metadata tolerated) → phase `update_required`: server name,
     both versions, the download link (opened from Rust), "Check again". The web app is not loaded, and
     "Open offline" refuses. The same screen replaces the old error in `use_server` and `start_sign_in`.
+    While the app runs the tray poller asks again (`flows::recheck_minimum`, scheduled by the pure
+    `version::Recheck`): about every 6 hours after a successful poll, at once after a wake from
+    sleep, 15 min after a failed try; a server that raised its minimum meanwhile gets this screen.
 - **Sign in**: PKCE + state → system browser at `{origin}{authorize_path}` → `brainitive://auth/callback`
   → state check → exchange → refresh token to the keychain → web-session → app.
 - **Session lost in the webview** (`/login` reached): a fresh web session from the stored sign-in,

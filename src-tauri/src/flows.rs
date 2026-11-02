@@ -227,6 +227,26 @@ async fn instance_gate(app: &AppHandle, origin: &ServerOrigin) -> Result<Option<
     Ok(update)
 }
 
+/// The poller's re-check of `min_versions.desktop` while the app runs (about every 6 hours and
+/// after a wake, `version::Recheck`). A server that now needs a newer app gets the "Please
+/// update" screen, like at connect. `false`: the answer didn't come (try again soon).
+pub async fn recheck_minimum(app: &AppHandle, origin: &ServerOrigin) -> bool {
+    match instance_gate(app, origin).await {
+        Ok(Some(update)) => {
+            // the user may have switched servers meanwhile
+            if state(app).lock().current_origin().as_ref() == Some(origin) {
+                show_update_required(app, update);
+            }
+            true
+        }
+        Ok(None) => true,
+        Err(problem) => {
+            log::info!("minimum version re-check failed: {:?}", problem.kind);
+            false
+        }
+    }
+}
+
 /// Whether `origin` needs a newer app: the update screen is up, or its last `/api/v1/instance`
 /// answer says so. Nothing is loaded or synced with such a server.
 pub fn app_too_old(inner: &crate::state::Inner, origin: &ServerOrigin) -> bool {

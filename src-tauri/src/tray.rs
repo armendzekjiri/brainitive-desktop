@@ -626,6 +626,7 @@ pub fn start_poller(app: &AppHandle) {
         let mut tick: u32 = 0;
         let mut polled_origin: Option<ServerOrigin> = None;
         let mut delay = Duration::from_secs(3);
+        let mut recheck = crate::version::Recheck::default();
         loop {
             let wall_before = SystemTime::now();
             let notified = {
@@ -638,6 +639,7 @@ pub fn start_poller(app: &AppHandle) {
             let wall = SystemTime::now().duration_since(wall_before).unwrap_or_default();
             if !notified && poll::woke_from_sleep(delay, wall) {
                 state(&app).lock().tray_data.my_day_stale = true;
+                recheck.woke(std::time::Instant::now());
                 tokio::time::sleep(poll::WAKE_GRACE).await;
             }
 
@@ -648,12 +650,14 @@ pub fn start_poller(app: &AppHandle) {
                     refresh(&app);
                 }
                 backoff.succeeded();
+                recheck.reset();
                 delay = poll::INTERVAL;
                 continue;
             };
             if polled_origin.as_ref() != Some(&origin) {
                 polled_origin = Some(origin.clone());
                 tick = 0;
+                recheck.reset();
                 let s = state(&app);
                 let mut inner = s.lock();
                 inner.etags.clear();
@@ -666,6 +670,17 @@ pub fn start_poller(app: &AppHandle) {
             match result {
                 Ok(()) => {
                     backoff.succeeded();
+                    // the minimum desktop version can rise while the app runs
+                    if recheck.due(std::time::Instant::now()) {
+                        if crate::flows::recheck_minimum(&app, &origin).await {
+                            recheck.checked(std::time::Instant::now());
+                        } else {
+                            recheck.failed(std::time::Instant::now());
+                        }
+                        if state(&app).lock().phase == crate::state::Phase::UpdateRequired {
+                            continue;
+                        }
+                    }
                     crate::capture::flush(&app).await;
                     // offline mode: send what waited, pull what changed (BRAI-366)
                     if let Err(e) = crate::offline::sync(&app, &origin).await {

@@ -1,5 +1,7 @@
 //! Version checks: the app against `min_versions.desktop` of `GET /api/v1/instance`.
 
+use std::time::{Duration, Instant};
+
 use semver::Version;
 
 /// The version of this build (`Cargo.toml` → `tauri.conf.json`).
@@ -28,6 +30,50 @@ pub fn parse_lenient(raw: &str) -> Option<Version> {
     }
     let pre = rest.split('+').next().unwrap_or("");
     Version::parse(&format!("{padded}{pre}")).ok()
+}
+
+/// How often the poller asks the server for `min_versions.desktop` again while the app runs.
+pub const RECHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// After a failed re-check (the instance answer didn't come): try again after this.
+pub const RECHECK_RETRY: Duration = Duration::from_secs(15 * 60);
+
+/// When the minimum version is asked again (pure scheduling; the call is in `flows.rs`, the
+/// loop in `tray.rs`): about every 6 hours, at once after the computer woke from sleep, and
+/// 15 minutes after a failed try. A new server counts as just checked (connecting did it).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Recheck {
+    next: Option<Instant>,
+}
+
+impl Recheck {
+    /// Whether to ask now. The first question for a server only starts the 6 hours.
+    pub fn due(&mut self, now: Instant) -> bool {
+        match self.next {
+            None => {
+                self.next = Some(now + RECHECK_EVERY);
+                false
+            }
+            Some(at) => now >= at,
+        }
+    }
+
+    pub fn checked(&mut self, now: Instant) {
+        self.next = Some(now + RECHECK_EVERY);
+    }
+
+    pub fn failed(&mut self, now: Instant) {
+        self.next = Some(now + RECHECK_RETRY);
+    }
+
+    /// The computer woke from sleep: the next chance asks.
+    pub fn woke(&mut self, now: Instant) {
+        self.next = Some(now);
+    }
+
+    /// Another server (or none): start over.
+    pub fn reset(&mut self) {
+        self.next = None;
+    }
 }
 
 /// Whether `app` is at least `min`. An unreadable minimum blocks nobody (the server's mistake
@@ -101,5 +147,37 @@ mod tests {
         // a broken minimum does not lock anyone out
         assert!(meets_minimum("0.1.0", "soon"));
         assert!(meets_minimum(APP_VERSION, "0.1.0"));
+    }
+
+    #[test]
+    fn the_minimum_is_asked_again_about_every_six_hours() {
+        let t0 = Instant::now();
+        let hours = |h: u64| t0 + Duration::from_secs(h * 3600);
+        let mut r = Recheck::default();
+        // the first question only starts the clock (connecting just checked)
+        assert!(!r.due(t0));
+        assert!(!r.due(hours(5)));
+        assert!(r.due(hours(6)));
+        assert!(r.due(hours(7)), "still due until it was done");
+        r.checked(hours(7));
+        assert!(!r.due(hours(12)));
+        assert!(r.due(hours(13)));
+    }
+
+    #[test]
+    fn a_wake_asks_at_once_and_a_failure_retries_soon() {
+        let t0 = Instant::now();
+        let mut r = Recheck::default();
+        assert!(!r.due(t0));
+        r.woke(t0 + Duration::from_secs(60));
+        assert!(r.due(t0 + Duration::from_secs(61)));
+        r.failed(t0 + Duration::from_secs(61));
+        assert!(!r.due(t0 + Duration::from_secs(61 + 14 * 60)));
+        assert!(r.due(t0 + Duration::from_secs(61 + 15 * 60)));
+        // another server: the clock starts over
+        r.reset();
+        assert!(!r.due(t0 + Duration::from_secs(10_000)));
+        assert!(!r.due(t0 + Duration::from_secs(10_000 + 5 * 3600)));
+        assert!(r.due(t0 + Duration::from_secs(10_000 + 6 * 3600)));
     }
 }

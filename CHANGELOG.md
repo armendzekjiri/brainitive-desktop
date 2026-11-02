@@ -5,6 +5,11 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Also:
+
+- **"Please update" while the app is running**: the server's minimum desktop version is checked
+  again about every 6 hours and after the computer wakes up, not only when connecting.
+
 Sync v2 (BRAI-441):
 
 - **Offline copy follows the server's v2 feed**: the lists you work in come from the server
