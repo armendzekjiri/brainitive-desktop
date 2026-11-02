@@ -333,7 +333,9 @@ page (`task_resize`, 180…620 pt, the top stays put).
 
 - **Where to**: `GET /api/v1/capture-destinations` — the projects with at least one board the user
   may write to, every workspace in one call (`model::parse_destinations`). Kept per server +
-  `account_epoch` (`TaskState.kept`), shown at once on open and loaded again when older than 60 s.
+  `account_epoch` (`TaskState.kept`, with the answer's ETag), shown at once on open and asked again
+  with `If-None-Match` on every open (304 → the kept list and configs stay); a server without ETags
+  is asked again only when the list is older than 60 s (`model::stale`).
   The project field is a searchable select (name, key, workspace; grouped by workspace when there
   are several). Board only when the project has more than one.
 - **Starting choice**: `Preferences.new_task` (origin → `{project_id, board_id, type_id, at}`, ≤ 10
@@ -356,8 +358,13 @@ page (`task_resize`, 180…620 pt, the top stays put).
   `capture::save`: the title and description as a capture with `intended_type: issue`, queued in
   `capture-queue.json` when offline). Signed out / no server → "Sign in to Brainitive" / "Connect
   to Brainitive" + Open Brainitive.
-- **Offline issues**: `POST /api/v1/sync`'s `issue.create` has no description and no type, so the
-  window doesn't queue issues (the inbox keeps everything the user typed).
+- **Offline issues**: on a server with the client-gaps sync types, a create whose request finds no
+  server goes to the outbox as `issue.create {board_id, title, description?, item_type_id?,
+  priority_id?}` (`model::offline_change`; the REST `request_id` is not reused, the outbox change
+  has its own) and the window shows "Task saved — created once Brainitive is back online"
+  (`CreatedView.pending`, nothing to open yet). An older server, or a full outbox, keeps **Save to
+  Inbox instead**. The created issue isn't put into the offline copy (it isn't assigned work by
+  itself; the feed brings it when it is).
 
 ## Voice capture (BRAI-439)
 
@@ -448,10 +455,17 @@ mouse-up; a click within 0.4 s after the panel hid on blur is the click that blu
 - **Tabs** (`panel::view`, pure mapping): **Today** `GET /me/today` (ETag via the poller's ETag
   cache: events not over yet, all-day first, ≤ 8; open work due today / overdue, ≤ 30), **My Day**
   `GET /me/my-day` (ETag, also updates the tray), **Assigned** `GET /me/work?status=open&limit=100`
-  grouped by project, **Inbox** `GET /notifications?limit=25` worded like the web bell
-  (`NotificationMessage.tsx`) + `unread-count`, **Timer** `GET /me/timer` (ETag; elapsed from
-  `started_at`), `GET /work-logs?from=D&to=D` (D = the user's date of `/me/today`), start
-  candidates = open issues of My Day + Assigned. Last tab: `Preferences.panel_tab`.
+  (ETag) grouped by project, **Inbox** `GET /notifications?limit=25` (ETag on the first page) +
+  `unread-count`: each row's text is the server's `summary` and its link the server's `url`
+  (`null` = no link); a row without those fields (older server) is worded like the web bell
+  (`view::describe`, mirrors `NotificationMessage.tsx`) with the payload's link. **Timer**
+  `GET /me/timer` (ETag; elapsed from `started_at`; `timer.description` under the issue); today's
+  total = `today_logged_seconds` + the running time (ticking) — an older server without the field
+  gets `GET /work-logs?from=D&to=D` (D = the user's date of `/me/today`) with the entries; start
+  candidates = open issues of My Day + Assigned (offline without a live answer: the offline copy's),
+  with an optional "What are you working on?" (`description`, newer servers). Last tab:
+  `Preferences.panel_tab`. ETags: `tray::get_cached_request` (key = server + path + query; a server
+  without ETags is asked in full, nothing kept), the decision is the pure `api::revalidate`.
 - **Data**: `PanelState.kept` holds the last answers for one server + sign-in (`account_epoch`;
   another one drops them, a write after a switch is dropped by `PollTicket`). Opening shows the
   kept data at once, then refreshes (answers < 15 s old are kept). Changes: `PATCH /me/work/{id}`,
@@ -461,8 +475,22 @@ mouse-up; a click within 0.4 s after the panel hid on blur is the click that blu
   else the page shows the choice; a 422 shows it too (timer keeps running).
 - **Offline** (server unreachable / not in the app): the kept data, else the offline copy (My Day,
   assigned work, Today = due work without events). Done ticks → the outbox (`work.done`,
-  `offline::queue_work_done`); a tick whose request finds no server goes there too. Timer and
-  mark-read have no sync type: disabled with a hint. Header dot: `view::sync_status`.
+  `offline::queue_work_done`); a tick whose request finds no server goes there too. On a server
+  with the client-gaps sync types (`offline::extended_sync`, below) timer start / stop / discard,
+  opening a notification (read) and **Mark all read** go to the outbox too (`timer.start` with the
+  device clock, `timer.stop {stopped_at}`, `timer.discard`, `notification.read`,
+  `notifications.read_all {before}` with `before` = the newest `created_at` the panel showed,
+  `view::read_all_before`), also when the request finds no server (`queue_instead`). The page shows
+  them at once (`view::TimerOverlay`, `view::PendingReads`): a timer started offline runs with a
+  "Waiting to sync" badge (discard takes the unsent start back; stop waits for its sync, it needs
+  the server's id), a stopped / discarded one goes with a note, read rows and the unread count
+  follow. A sync result's live state (`record_type` `timer` / `notification` / `unread_count`)
+  updates the tray, badge and panel (`panel::apply_sync_states`): a start refused because another
+  timer runs (`conflict`) shows that timer and lists a problem; a stop refused for want of an
+  activity (`invalid` + `activities`) is kept as `Outbox.activity_needed` and the Timer tab shows the
+  inline choice (while that timer still runs); a pick resends the stop with `activity_id` and the
+  same `stopped_at`. On an older server (flag false / unknown) these stay disabled with the hint.
+  Header dot: `view::sync_status`.
 - **Signed out / no server**: "Sign in to Brainitive" / "Connect to Brainitive" + Open Brainitive,
   and "Switch to <name>" for the other saved servers.
 - **Server switcher**: the header's name is a button ("Work ▾") with the saved servers
@@ -510,7 +538,10 @@ bundled `offline` window shows it:
   kept. `task_list` records carry `can.manage_items`: false hides "Add task". ≤ 200 pages per sync.
 - **Outbox** (`outbox.rs`, `outbox.json` next to it, ≤ 1000): `work.done` (with `base.fields.done`),
   `my_day.add`, `list_task.create`, `list_task.update` (`base.fields` title / status),
-  `capture.create`, each with its own `request_id`. Unsent changes fold together (tick + untick =
+  `capture.create`, and from the panel / New task window (servers with the client-gaps types only):
+  `timer.start`, `timer.stop`, `timer.discard`, `notification.read`, `notifications.read_all`,
+  `issue.create` (+ description, type) — each with its own `request_id`. A read twice is one; a
+  later "mark all read" moves the unsent one's `before` forward. Unsent changes fold together (tick + untick =
   nothing; an edit of an unsent new task changes its create); a change that went out once is never
   edited, the next one is based on its value. Sent in order, ≤ 50 per `POST /api/v1/sync`; per
   result: applied / conflict → done (a conflict is listed with mine / theirs: the server's value
@@ -518,7 +549,13 @@ bundled `offline` window shows it:
   kept (dropped after 5 tries), rate_limited / error → kept, stop. A batch refused with a 4xx is
   sent one by one; a single change refused is dropped and listed. Nothing 4xx is retried forever.
   An applied / conflict result carries `entity` + `record_type` (the feed's record): it replaces the
-  cached one (`entity: null` keeps the local patch until the next pull).
+  cached one (`entity: null` keeps the local patch until the next pull). `gone` (a timer that no
+  longer runs, a deleted notification) is dropped without a problem (logged); `timer`,
+  `notification` and `unread_count` records go to the panel / tray, not the cache.
+- **What the server takes** (`Cache.extended_sync`): `today_logged_seconds` in a `GET /me/timer`
+  answer (tray poll or panel, `offline::note_timer_answer`) means the server has the client-gaps
+  sync types (they came in the same server release; `/instance`'s `version` can't tell a build
+  before it from one after). Kept in `cache.json` so it is known offline; `None` = not known = no.
 - **Sync** (`offline.rs`): `GET /me` once per session — another account's cache / outbox are deleted
   first — then the outbox, then the feed. Runs after every tray poll while in the app, on **Sync now**
   (tray, window; when the server answers while the unreachable screen is up, the app reconnects too)
@@ -614,12 +651,16 @@ error parsing, API request paths, call-error classification, shortcut rules and 
 Brainitive key (letters, conflicts, migration of old defaults, labels per OS), the capture
 queue, the voice recorder state machine, model download verification / removal, resampling and the
 meter, transcript clean-up, polling backoff / wake / plan, tray menu model and API parsing, the menu-bar panel (placement per bar edge / monitor / clamping,
-tray clicks, each tab's mapping, ids it may act on, offline decisions), saved servers (default
+tray clicks, each tab's mapping, ids it may act on, offline decisions, the server's notification
+summary / url vs. the older-server fallback, today's total, the waiting timer / read overlays,
+`read_all`'s `before`, the activity choice of a refused stop), ETag reuse (`api::revalidate`, keys
+with the query), the client-gaps outbox changes (payloads, folding, ok / conflict / invalid +
+activities / gone), the older-server detection (`extended_sync_of`), saved servers (default
 names, name cleaning, order / moves, the limit, ⌃⌘1…9 / Alt+1…9 vs. every menu, global and editor
 shortcut, the switch dropping every in-memory account answer while queue / memory stay per origin,
 sign-out vs. forget, a running sync stopped by a switch, per-server ETags, tray Servers ▸), New task (defaults per OS,
 migration, letter T, memory per server, destinations / config parsing, payload, request id reuse,
-error mapping, window height), switcher result parsing,
+error mapping, window height, the offline `issue.create`, ETag vs. 1-minute throttle), switcher result parsing,
 download names / moves, the overlay badge, menu ids / accelerators, updater channels / URLs /
 redirects / key guard / schedule / labels, and the updater plugin with a throwaway minisign key:
 bad signature, foreign key, signed-version mismatch, equal / older versions, a loopback-served

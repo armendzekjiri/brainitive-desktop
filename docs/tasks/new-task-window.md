@@ -139,13 +139,15 @@ state, signed out; the panel footer width.
 
 ## Open questions (API)
 
-1. **Offline issues**: `POST /api/v1/sync` `issue.create` has no `description` and no `type_id`, so
-   the window can't queue an issue without losing them and offers the inbox instead. With those
-   two fields (and the desktop outbox learning `issue.create`) offline creates could be queued.
+1. ~~**Offline issues**: `issue.create` has no `description` and no `type_id`~~ **Answered**
+   (server v1.49.0 client gaps): it takes `description` and `item_type_id`; on such a server an
+   offline create goes to the outbox ([api-client-gaps.md](api-client-gaps.md)). Older servers keep
+   "Save to Inbox instead".
 2. **Recent destinations**: there is no server list of recently used projects / boards
    (`/me/navigation`'s `recent` only resolves what the device sends); the window remembers its own
-   last choice per server. A shared "last created in" (web + apps) would keep them in step.
-3. `GET /capture-destinations` is the only one-call list of writable boards across workspaces; it
-   has no ETag and no `updated_since`, so the window refetches it at most once a minute while used.
+   last choice per server. A shared "last created in" (web + apps) would keep them in step. (Still
+   open.)
+3. ~~`GET /capture-destinations` has no ETag~~ **Answered**: it has one; the window asks with
+   `If-None-Match` on every open. The 1-minute throttle stays only for servers without ETags.
 4. `POST /boards/{id}/items` 402 `limit.billing_url` is not shown (the window shows the message
-   only); say if an "Upgrade" button that opens it from Rust is wanted.
+   only); say if an "Upgrade" button that opens it from Rust is wanted. (Still open.)

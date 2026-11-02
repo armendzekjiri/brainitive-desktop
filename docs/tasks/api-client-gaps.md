@@ -68,3 +68,47 @@ support is learned from the answers themselves:
 Security stays: every call in Rust, the page gets ids / flags only (no URL, no token), commands
 take ids from the kept answers, `ensure_caller` first in every command; no new command (the
 existing ones get optional arguments), no new crate.
+
+## Result
+
+**Built** (as planned; no new command, no new crate, no capability change)
+
+- ETag: `api::revalidate` (pure) + `tray::get_cached_request` (key = server + path + query); the
+  panel's `/me/work` and `/notifications` and the New task window's `/capture-destinations` send
+  `If-None-Match`. The window asks again on every open when it has a tag, else at most once a minute.
+- Notifications: `view::note_text` / `note_url` (server `summary` / `url`; `url: null` = no link;
+  rows without the fields → the client wording and payload link). Opening still goes through Rust's
+  copy + `links::resolve_deep_link_target` into the main window.
+- Timer: `today_logged_seconds` + the running time as today's total (ticking); `/work-logs` only on
+  an older server. `timer.description` under the running timer; "What are you working on?" on start.
+- Outbox: `TimerStart` / `TimerStop` / `TimerDiscard` / `NotificationRead` / `NotificationsReadAll`
+  / `IssueCreate`; `gone` dropped quietly (logged); a `timer.start` conflict is a "timer_running"
+  problem and its entity (the running timer) is shown; an `invalid` stop with activities becomes
+  `Outbox.activity_needed` (kept on disk) → inline choice in the Timer tab + a notification, the pick
+  resends with the same `stopped_at`; `timer` / `notification` / `unread_count` records update the
+  tray, badge and panel (`panel::apply_sync_states`).
+- Panel overlay: a timer started offline runs with "Waiting to sync" (Discard takes the unsent
+  start back, Stop waits for its sync), stopped / discarded timers go with a note, read rows and the
+  unread count follow; `read_all.before` = newest `created_at` shown (`view::read_all_before`).
+  The offline hint shows only on servers without the sync types.
+- New task offline: `issue.create` (+ description, `item_type_id`, priority) → "Task saved";
+  older server / full outbox → Save to Inbox instead.
+- **Old-server detection**: `offline_cache::extended_sync_of` on every `/me/timer` answer (tray poll
+  and panel), kept as `Cache.extended_sync` in `cache.json`; unknown = old behaviour.
+
+**Tests**: `cargo test` 320 unit tests (25 new or changed) + 14 capability tests: ETag reuse /
+AskAgain / no-tag server, ETag key with query; summary / url / null url / blank summary / older-row
+fallback, `replace_note`; each new change's payload (and `item_type_id` from the New task draft);
+read folding and `before` moving forward; taking back an unsent start; results ok / conflict
+(timer_running + entity) / invalid + activities (kept, cleaned, resend, only once) / invalid
+without activities / gone; `activity_needed` persisted and cleared; `iso_utc` round trip;
+`extended_sync_of` (new / old / not a timer answer / old cache file); pending reads + unread count +
+`read_all_before`; timer overlay (stop, discard, offline start, sent start); activity choice only
+for the same timer; offline start candidates; offline hint per server kind; destinations staleness.
+Gate: `npm run build`, `cargo test`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt
+--check`, `npx tauri build --debug --bundles app` — all green.
+
+**Not tested live**: no run against a server (the dev DB still has the pending
+`work_timers.description` migration, and the running app was not touched): the real 304s, an
+offline round trip (QA 4C.13a/b, 8A.21–8A.25), the conflict / activity notifications, and an older
+server (QA 4C.13, 8A.16a). The page changes were type-checked and built, not viewed.

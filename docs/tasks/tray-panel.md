@@ -144,15 +144,17 @@ setup (`contentLayoutRect` vs the webview frame), not with a screenshot.
 mouse-up toggle on Windows, the solid panel style, "Open Panel…" on Linux, and the WebView2 /
 WebKitGTK rendering of the page.
 
-**Open questions (API)**
+**Open questions (API)** — 1–4 answered by the server's v1.49.0 client gaps, used since
+[api-client-gaps.md](api-client-gaps.md); older servers keep the behaviour described above.
 
-1. `/me/work` has no ETag; the Assigned tab refetches (≤ 100 rows) at most every 15 s while open.
-2. `/notifications` has no ETag; there is also no per-item URL field, so the panel derives the link
-   from the payload like the web bell (`item_url`, `context_url`, …). A server-built
-   `{text, url}` per notification would keep the apps in sync with the web wording.
-3. `/me/today` has `date` but `/work-logs` needs the date sent by the client; a `today` total on
-   `/me/timer` (minutes logged today) would save a call.
-4. Timer start / stop / discard and "mark read" have no `POST /api/v1/sync` type, so they are
-   disabled offline.
+1. ~~`/me/work` has no ETag~~ **Answered**: it has one; the Assigned tab sends `If-None-Match`
+   (304 → the kept list).
+2. ~~`/notifications` has no ETag and no per-item URL~~ **Answered**: the first page has an ETag,
+   and each row has `summary` (the bell's sentence) and `url` (absolute, or null when the user
+   can't open it). The panel uses them; the client wording / payload link are only the fallback.
+3. ~~a `today` total on `/me/timer`~~ **Answered**: `today_logged_seconds`; `/work-logs` is only
+   asked by older servers.
+4. ~~Timer / mark-read have no sync type~~ **Answered**: `timer.start|stop|discard`,
+   `notification.read`, `notifications.read_all {before}`; they work offline through the outbox.
 5. "Bring over" (`POST /me/my-day/carry-over`) exists, but the panel only links to My Work for it.
-   Say if it should be a button.
+   Say if it should be a button. (Still open.)

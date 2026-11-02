@@ -139,12 +139,17 @@ URLs it should not act on, or showing another account's data.
   (`/api/v1/…` paths only, no redirects). The page gets `has_link` flags; a click sends a reference
   (`{kind: work|event|notification, id}` or a fixed page), Rust takes the URL from **its own copy**
   of the server's answer and opens it with `links::resolve_deep_link_target` (this server, never an
-  auth page); anything else just focuses the app.
+  auth page); anything else just focuses the app. A notification's link is the row's server-built
+  `url` (absolute; null = no link), else the payload's on an older server — the same check either
+  way, so a foreign host is never opened.
 - **Ids**: commands act only on ids in the panel's kept answers of the current server + sign-in
   (work `issue:<n>` / `task:<n>`, notification uuids — hex and dashes —, the timer's own activity
   ids; the timer id is never taken from the page; start candidates = open issues the server listed
-  in My Day / assigned work). Offline ticks are checked against the offline copy as in the
-  offline window. The server enforces its own policies anyway; nothing new is trusted.
+  in My Day / assigned work, or the offline copy's when nothing live was loaded). Offline ticks are
+  checked against the offline copy as in the offline window. Offline timer / read changes go to the
+  same per-server outbox with ids from those answers (an activity for a refused stop only from that
+  result's own `activities`); the timer description is one line, ≤ 255 characters. The server
+  enforces its own policies anyway; nothing new is trusted.
 - **Whose data**: the kept answers belong to one origin + `account_epoch`; another server, a
   sign-out or another sign-in drops them, answers that arrive after a switch are dropped
   (`PollTicket`), and the window is destroyed on sign-out (`Popup::holds_account_data`).
@@ -174,7 +179,8 @@ duplicating issues on retries, or showing another account's projects.
 - **Ids**: `task_config` / `task_create` accept only projects, boards, types and priorities of the
   kept answers of the current origin + `account_epoch` (`model::draft`); the server checks
   `BoardPolicy::createItems` anyway. Title ≤ 255 and description ≤ 100 000 characters are checked
-  before sending; the window height is clamped.
+  before sending; the window height is clamped. An offline create (newer servers) is the same
+  checked draft, queued as `issue.create` in this server's outbox (wiped with the sign-in).
 - **Idempotency**: every create carries a `request_id` (uuid v4). It is reused only for the same
   board + body after a call that got no answer, so a retry returns the first issue (200) and never
   makes a second; any answer or other input gets a new one (the server would answer 409 for the

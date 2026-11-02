@@ -53,8 +53,12 @@ The first stable release of Brainitive Desktop for macOS, Windows and Linux.
   optional description in Markdown, the priority and the type. **⌘↩ / Ctrl+↩** creates it; then
   **Open** shows it in Brainitive, or **New another**. Problems show next to the field (a missing
   title, a plan limit, a board you can no longer use).
-- **Offline** (or when the server has a problem) you can **Save to Inbox instead**: the title and
-  description go to your inbox (sent when you're back) and you turn them into a task later.
+- **Offline** the task is kept on this computer and created once Brainitive can reach the server
+  again — with its description, type and priority ("Task saved"). On an older server (or when the
+  server has a problem) you can **Save to Inbox instead**: the title and description go to your
+  inbox (sent when you're back) and you turn them into a task later.
+- The project list is checked again every time the window opens and only downloaded when it
+  changed (servers older than Brainitive v1.49.0's final build: at most once a minute).
 - **Linux**: no shortcut by default, because Ctrl+Alt+T opens the terminal on Ubuntu; set one in
   Settings → Shortcuts. **Updating** gives you the new shortcut only if none of your shortcuts
   uses those keys already; otherwise it starts off. If you had given **T** to another letter, New
@@ -94,12 +98,21 @@ The first stable release of Brainitive Desktop for macOS, Windows and Linux.
 - **Click the menu-bar / tray icon** for a panel like the macOS Weather extra: frosted glass right
   under the icon (Windows: above the tray; Linux: tray menu → Open Panel…). **Today** (next events,
   work due or overdue), **My Day** and **Assigned** (grouped by project; tick to finish),
-  **Inbox** (latest notifications, unread badge, open + mark read, Mark all read) and **Timer**
-  (live clock, Stop & log with an inline activity choice, Discard, start a timer on one of your
-  issues, today's entries and total). ⌘1–5, arrow keys, Esc; it remembers the last tab.
+  **Inbox** (latest notifications in the same words as the web's bell, unread badge, open + mark
+  read, Mark all read) and **Timer** (live clock, Stop & log with an inline activity choice,
+  Discard, start a timer on one of your issues with an optional "What are you working on?", which
+  shows under the running timer, and today's total, ticking). ⌘1–5, arrow keys, Esc; it remembers
+  the last tab.
 - **Right-click** (or ⌃-click) the icon for the menu with Quit, Settings and the rest.
-- **Offline** the panel shows what was loaded last (or the offline copy); ticks wait in the offline
-  outbox and sync later; timer and mark-read wait for the connection.
+- **Offline** the panel shows what was loaded last (or the offline copy); ticks, **starting,
+  stopping and discarding the timer**, opening a notification and **Mark all read** wait on this
+  computer with a "Waiting to sync" badge and are sent when the server is back (stop keeps the
+  time you stopped at; Mark all read only marks what you had seen). If another timer was started
+  meanwhile, the panel shows it and tells you yours wasn't saved; if the time needs an activity,
+  the Timer tab asks for it next time. Older servers: the timer and mark-read wait for the
+  connection, as before.
+- Notifications open the page the server names, and only when you can still open it.
+- The panel asks the server for less: unchanged lists come back as "not modified".
 - The tray's timer now counts from when it really started.
 
 - **Menu bar / tray** (BRAI-360): quick capture, quick switcher, today's My Day (tick work done),
