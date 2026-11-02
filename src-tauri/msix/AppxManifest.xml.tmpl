@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The MSIX manifest of the Microsoft Store build (BRAI-442, docs/MICROSOFT-STORE.md).
+  Rendered by scripts/msix-manifest.mjs: {{VERSION}} = tauri.conf.json's version as X.Y.Z.0.
+  The identity is the one Partner Center reserved (docs/MICROSOFT-STORE-LISTING.md § 7);
+  src-tauri/tests/msix_manifest.rs and scripts/msix-manifest.test.mjs keep it in sync with the
+  docs and with src-tauri/src/msstore/mod.rs (APPLICATION_ID, STARTUP_TASK_ID).
+
+  - EntryPoint="Windows.FullTrustApplication" (not uap10:RuntimeBehavior / TrustLevel, which need
+    Windows 10 2004): the app runs as a normal full-trust Win32 process from Windows 10 1809 on.
+  - No WebView2 bootstrapper and no package dependency: the WebView2 Runtime ships with
+    Windows 11 and is installed on Windows 10 through Microsoft Edge / Windows Update. The VC++
+    runtime is linked statically (tauri-build), so no Microsoft.VCLibs dependency either.
+  - uap10 is declared for later manifest features; nothing from it is used, so Windows 10 1809
+    reads this manifest unchanged.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
+  xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap uap3 uap10 desktop rescap">
+
+  <Identity
+    Name="Ndize.al.Brainitive"
+    Publisher="CN=B7545416-53F6-4408-AB46-55AD313FFC15"
+    Version="{{VERSION}}"
+    ProcessorArchitecture="x64" />
+
+  <Properties>
+    <DisplayName>Brainitive</DisplayName>
+    <PublisherDisplayName>Ndize.al</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+    <Description>Notes, tasks, boards and calendar of your Brainitive Cloud or self-hosted server.</Description>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="en-us" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Brainitive" Executable="Brainitive.exe" EntryPoint="Windows.FullTrustApplication">
+      <uap:VisualElements
+        DisplayName="Brainitive"
+        Description="Notes, tasks, boards and calendar of your Brainitive Cloud or self-hosted server."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+          ShortName="Brainitive"
+          Wide310x150Logo="Assets\Wide310x150Logo.png"
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png" />
+      </uap:VisualElements>
+
+      <Extensions>
+        <!-- brainitive:// links (sign-in return, page links): Windows starts Brainitive.exe with the
+             URI as its only argument; a second instance hands it to the running one
+             (tauri-plugin-single-instance + deep-link), as with the NSIS install. -->
+        <uap3:Extension Category="windows.protocol">
+          <uap3:Protocol Name="brainitive" Parameters="&quot;%1&quot;" />
+        </uap3:Extension>
+
+        <!-- Settings → "Open Brainitive when you log in". Off until the user turns it on
+             (WinRT StartupTask, src-tauri/src/msstore/packaged.rs). -->
+        <desktop:Extension Category="windows.startupTask" Executable="Brainitive.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="BrainitiveStartup" Enabled="false" DisplayName="Brainitive" />
+        </desktop:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <Capability Name="internetClient" />
+    <!-- a Win32 (Tauri + WebView2) app: global shortcuts, tray icon, Credential Manager -->
+    <rescap:Capability Name="runFullTrust" />
+    <!-- voice capture (BRAI-439): on-device speech to text -->
+    <DeviceCapability Name="microphone" />
+  </Capabilities>
+</Package>
