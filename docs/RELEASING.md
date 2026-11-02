@@ -201,6 +201,28 @@ v6+ keeps credentials in a separate file (we never push from CI), v7 refuses for
 
 ## 5. Cut a release
 
+### Release day checklist (v1.0.0)
+
+Nothing is bumped until the day. Then, in order:
+
+1. `node scripts/bump-version.mjs 1.0.0` (add `--dry-run` first to see the changes). It sets
+   `version` in `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`
+   and `src-tauri/tauri.conf.json`; `node scripts/bump-version.mjs 1.0.0 --check` verifies them.
+   Then `cd src-tauri && cargo check --locked` (the lock file must not change).
+2. In `CHANGELOG.md` turn `## [1.0.0] - unreleased` into `## [1.0.0] - YYYY-MM-DD` (keep an empty
+   `## [Unreleased]` above it) and check the README says 1.0.0 is released (status line, screenshots).
+3. Run the gate (`npm run build`, `cargo test`, `cargo clippy --all-targets -- -D warnings`,
+   `cargo fmt --check`), commit "chore(release): v1.0.0", `git tag v1.0.0`, push the commit and the tag.
+4. Wait for the **Build** workflow; check the draft release (three installers, `SHA256SUMS`,
+   `latest.json`), try each installer on a clean machine (`docs/QA-CHECKLIST.md`), then **publish the draft**.
+5. In the Brainitive app's `.env` on the server set `DESKTOP_DOWNLOAD_MACOS_URL`,
+   `DESKTOP_DOWNLOAD_WINDOWS_URL` (and the Linux ones if used) to the published assets (section 6),
+   reload PHP / clear the config cache if one is used, and open `/download` to check the buttons.
+6. Website: `brainitive.app` (the brainitive-website repo): add the Desktop release (announcement /
+   download section, screenshots), and in the app repo the homepage / changelog / docs-site entry
+   for the Desktop release as in the app's own release flow.
+
+
 1. Pick the version `X.Y.Z` (Desktop has its own numbers; CHANGELOG "Unreleased" → `## X.Y.Z`).
 2. Set it in **all three**: `package.json` (and `package-lock.json`: `npm install --package-lock-only`),
    `src-tauri/Cargo.toml` (then `cargo check` to refresh `Cargo.lock`), `src-tauri/tauri.conf.json`.
