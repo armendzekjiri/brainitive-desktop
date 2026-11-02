@@ -20,9 +20,13 @@ interface ServerSummary {
     is_cloud?: boolean;
 }
 
+// a saved server (the user's order; ⌃⌘1…9 / Alt+1…9 for the first nine)
 interface RecentEntry extends ServerSummary {
+    id: string;
+    label: string;
     last_used: number;
     is_current: boolean;
+    shortcut: string | null;
 }
 
 interface Problem {
@@ -138,23 +142,31 @@ function renderRecent(s: UiState): void {
         open.type = 'button';
         open.className = 'recent-open';
         const name = document.createElement('strong');
-        name.textContent = r.name;
+        name.textContent = r.label;
         const origin = document.createElement('small');
-        origin.textContent = r.is_current ? `${r.display_name} · current` : r.display_name;
+        const details = [r.display_name, r.is_current ? 'current' : null, r.shortcut].filter(Boolean);
+        origin.textContent = details.join(' · ');
         open.append(name, origin);
-        open.addEventListener('click', () => void useServer(r.origin, open));
+        // a saved server: switched to by its id (no new check; the server is asked on restore)
+        open.addEventListener('click', () => void switchTo(r.id, open));
 
         const forget = document.createElement('button');
         forget.type = 'button';
         forget.className = 'link danger';
         forget.textContent = 'Forget';
-        forget.title = `Sign out of ${r.display_name} and delete its data on this computer`;
+        forget.title = `Sign out of ${r.label} and delete its data on this computer`;
         forget.addEventListener('click', () => void forgetServer(r, forget));
 
         li.append(open, forget);
         list.append(li);
     }
     $('recent').hidden = s.recent.length === 0;
+    // "Add Server…" from inside a server: one click back to it (still signed in)
+    const current = s.recent.find((r) => r.is_current);
+    const back = $<HTMLButtonElement>('choose-back');
+    back.hidden = !current;
+    back.textContent = current ? `Back to ${current.label}` : '';
+    back.dataset.id = current?.id ?? '';
 }
 
 function renderPresets(s: UiState): void {
@@ -327,6 +339,20 @@ async function useServer(origin: string, button?: HTMLButtonElement): Promise<vo
     }
 }
 
+async function switchTo(id: string, button?: HTMLButtonElement): Promise<void> {
+    if (button) busy(button, true);
+    showError('check-error', null);
+    try {
+        await invoke('switch_to_server', { id });
+        pendingCheck = null;
+        await refresh();
+    } catch (e) {
+        showError('check-error', errorMessage(e));
+    } finally {
+        if (button) busy(button, false);
+    }
+}
+
 // two clicks instead of window.confirm (not implemented by every webview)
 async function forgetServer(r: RecentEntry, button: HTMLButtonElement): Promise<void> {
     if (button.dataset.armed !== '1') {
@@ -373,6 +399,10 @@ function wire(): void {
     $('self-hosted').addEventListener('submit', (ev) => {
         ev.preventDefault();
         void check(($('server-url') as HTMLInputElement).value, $('check') as HTMLButtonElement);
+    });
+    $('choose-back').addEventListener('click', (ev) => {
+        const b = ev.currentTarget as HTMLButtonElement;
+        if (b.dataset.id) void switchTo(b.dataset.id, b);
     });
     $('confirm-back').addEventListener('click', () => {
         pendingCheck = null;

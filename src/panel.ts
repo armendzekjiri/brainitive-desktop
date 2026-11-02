@@ -20,6 +20,16 @@ interface Head {
     tab: Tab;
     platform: 'macos' | 'windows' | 'linux';
     offline_hint: string | null;
+    // the saved servers for the header's switcher (ids and names only)
+    servers: ServerChoice[];
+}
+
+interface ServerChoice {
+    id: string;
+    name: string;
+    host: string;
+    current: boolean;
+    shortcut: string | null;
 }
 
 interface WorkRow {
@@ -672,11 +682,90 @@ function render(): void {
     requestResize();
 }
 
+// ── the server switcher ("Work ▾") ───────────────────────────────────────────
+
+const serverMenu = $('server-menu');
+const hostButton = $<HTMLButtonElement>('host');
+
+function switchServer(id: string): void {
+    closeServerMenu();
+    invoke('panel_switch_server', { id }).catch((e) => showNotice(errorMessage(e), true));
+}
+
+function closeServerMenu(focusHost = false): void {
+    if (serverMenu.hidden) return;
+    serverMenu.hidden = true;
+    hostButton.setAttribute('aria-expanded', 'false');
+    if (focusHost) hostButton.focus();
+}
+
+function openServerMenu(): void {
+    const servers = head?.servers ?? [];
+    const items: HTMLElement[] = servers.map((s) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.setAttribute('role', 'menuitemradio');
+        b.setAttribute('aria-checked', String(s.current));
+        b.title = s.host;
+        const check = document.createElement('span');
+        check.className = 'mark';
+        check.textContent = s.current ? '✓' : '';
+        const label = document.createElement('span');
+        label.className = 'label';
+        label.textContent = s.name;
+        b.append(check, label);
+        if (s.shortcut) {
+            const keys = document.createElement('span');
+            keys.className = 'keys';
+            keys.textContent = s.shortcut;
+            b.append(keys);
+        }
+        b.addEventListener('click', () => (s.current ? closeServerMenu(true) : switchServer(s.id)));
+        return b;
+    });
+    if (items.length) items.push(document.createElement('hr'));
+    const manage = document.createElement('button');
+    manage.type = 'button';
+    manage.setAttribute('role', 'menuitem');
+    manage.append(Object.assign(document.createElement('span'), { className: 'mark' }), 'Manage Servers…');
+    manage.addEventListener('click', () => {
+        closeServerMenu();
+        void invoke('panel_run', { action: 'manage_servers' }).catch(() => {});
+    });
+    items.push(manage);
+    serverMenu.replaceChildren(...items);
+    serverMenu.hidden = false;
+    hostButton.setAttribute('aria-expanded', 'true');
+    (serverMenu.querySelector<HTMLElement>('[aria-checked="true"]') ?? serverMenu.querySelector<HTMLElement>('button'))?.focus();
+}
+
+hostButton.addEventListener('click', () => (serverMenu.hidden ? openServerMenu() : closeServerMenu(true)));
+document.addEventListener('mousedown', (e) => {
+    if (!serverMenu.hidden && !serverMenu.contains(e.target as Node) && !hostButton.contains(e.target as Node)) closeServerMenu();
+});
+
+/** Signed out of this server: the other saved servers are one click away. */
+function renderSignedOutServers(): void {
+    const box = $('so-servers');
+    const others = (head?.servers ?? []).filter((s) => !s.current);
+    box.hidden = others.length === 0;
+    box.replaceChildren(
+        ...others.map((s) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = `Switch to ${s.name}`;
+            b.addEventListener('click', () => switchServer(s.id));
+            return b;
+        }),
+    );
+}
+
 function renderHead(): void {
     if (!head) return;
     const ready = head.state === 'ready';
     panel.hidden = !ready;
     signedOut.hidden = ready;
+    renderSignedOutServers();
     if (!ready) {
         $('so-title').textContent = head.state === 'no_server' ? 'Connect to Brainitive' : 'Sign in to Brainitive';
         $('so-text').textContent =
@@ -686,7 +775,7 @@ function renderHead(): void {
         requestResize();
         return;
     }
-    $('host').textContent = head.server ?? 'Brainitive';
+    $('host-name').textContent = head.server ?? 'Brainitive';
     const dot = $('dot');
     dot.className = `dot ${head.status}`;
     const sync = $('sync');
@@ -793,6 +882,23 @@ function focusables(): HTMLElement[] {
 }
 
 document.addEventListener('keydown', (e) => {
+    if (!serverMenu.hidden) {
+        // the server list has the keys while it is open
+        const items = Array.from(serverMenu.querySelectorAll<HTMLElement>('button'));
+        const i = items.indexOf(document.activeElement as HTMLElement);
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            closeServerMenu(true);
+            return;
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const next = e.key === 'ArrowDown' ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+            items[next]?.focus();
+            return;
+        }
+        if (e.key === 'Tab') closeServerMenu();
+    }
     if (e.key === 'Escape') {
         e.preventDefault();
         if (activityPrompt) {

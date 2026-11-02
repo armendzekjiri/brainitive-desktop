@@ -13,7 +13,10 @@
     <div id="panel" class="panel" hidden>
       <header class="head">
         <span id="dot" class="dot" aria-hidden="true"></span>
-        <span id="host" class="host"></span>
+        <button id="host" class="host" type="button" aria-haspopup="menu" aria-expanded="false" title="Switch server">
+          <span id="host-name"></span><span class="caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="server-menu" class="server-menu" role="menu" aria-label="Servers" hidden></div>
         <span id="sync" class="sync"></span>
       </header>
 
@@ -61,6 +64,7 @@
       <strong id="so-title">Sign in to Brainitive</strong>
       <p id="so-text" class="muted">See today, your work, notifications and the timer right here.</p>
       <button id="so-button" class="primary" type="button">Open Brainitive</button>
+      <div id="so-servers" class="so-servers" hidden></div>
     </div>
   </body>
 </html>

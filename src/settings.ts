@@ -29,6 +29,25 @@ interface Prefs {
     start_hidden: boolean;
     shortcut_problem: string | null;
     updates: Updates;
+    // a section to show once ("servers": Manage Servers…)
+    focus: string | null;
+}
+
+// Settings → Servers (ids and names only; switching takes the id)
+interface ServerRow {
+    id: string;
+    name: string;
+    default_name: string;
+    host: string;
+    current: boolean;
+    signed_in: boolean;
+    last_used: number;
+    shortcut: string | null;
+}
+
+interface ServersView {
+    servers: ServerRow[];
+    max: number;
 }
 
 // the Brainitive key's letters (BRAI-440)
@@ -99,7 +118,142 @@ function render(p: Prefs): void {
     renderLetters(p);
     renderVoice(p);
     renderUpdates(p.updates);
+    $('servers-keys').textContent = p.platform === 'macos' ? '⌃⌘1…9' : 'Alt+1…9';
+    if (p.focus === 'servers') $('servers-section').scrollIntoView({ block: 'start' });
 }
+
+// ── Settings → Servers ─────────────────────────────────────────────────────────
+
+function serversError(message: string | null): void {
+    const el = $('servers-error');
+    el.textContent = message ?? '';
+    el.hidden = !message;
+}
+
+function lastUsed(seconds: number): string {
+    if (!seconds) return 'not used yet';
+    const d = new Date(seconds * 1000);
+    const today = new Date();
+    return d.toDateString() === today.toDateString()
+        ? `used today, ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+        : `used ${d.toLocaleDateString()}`;
+}
+
+function button(text: string, onClick: (b: HTMLButtonElement) => void, title?: string): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = text;
+    if (title) b.title = title;
+    b.addEventListener('click', () => onClick(b));
+    return b;
+}
+
+async function serverCall(command: string, args: Record<string, unknown>): Promise<void> {
+    serversError(null);
+    try {
+        const view = await invoke<ServersView | null>(command, args);
+        if (view) renderServers(view);
+        else await refreshServers();
+    } catch (e) {
+        serversError(errorMessage(e));
+        await refreshServers();
+    }
+}
+
+function renderServers(v: ServersView): void {
+    const list = $('servers');
+    // a name being typed keeps what the user typed
+    const editing = document.activeElement instanceof HTMLInputElement && document.activeElement.classList.contains('server-name')
+        ? document.activeElement.dataset.id
+        : undefined;
+    if (editing) return;
+    list.replaceChildren(
+        ...v.servers.map((s, i) => {
+            const li = document.createElement('li');
+            li.className = s.current ? 'server current' : 'server';
+
+            const name = document.createElement('input');
+            name.className = 'server-name';
+            name.type = 'text';
+            name.maxLength = 60;
+            name.spellcheck = false;
+            name.value = s.name;
+            name.placeholder = s.default_name;
+            name.dataset.id = s.id;
+            name.setAttribute('aria-label', `Name of ${s.host}`);
+            const save = (): void => {
+                if (name.value.trim() === s.name) return;
+                void serverCall('settings_rename_server', { id: s.id, name: name.value });
+            };
+            name.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') name.blur();
+                if (e.key === 'Escape') {
+                    e.stopPropagation();
+                    name.value = s.name;
+                    name.blur();
+                }
+            });
+            name.addEventListener('blur', save);
+
+            const order = document.createElement('span');
+            order.className = 'order';
+            const up = button('↑', () => void serverCall('settings_move_server', { id: s.id, direction: 'up' }), 'Move up');
+            const down = button('↓', () => void serverCall('settings_move_server', { id: s.id, direction: 'down' }), 'Move down');
+            up.disabled = i === 0;
+            down.disabled = i === v.servers.length - 1;
+            order.append(up, down);
+
+            const details = document.createElement('span');
+            details.className = 'details';
+            const signed = document.createElement('span');
+            signed.className = s.signed_in ? 'on' : '';
+            signed.textContent = s.signed_in ? 'Signed in' : 'Signed out';
+            details.append(
+                `${s.host} · `,
+                signed,
+                ` · ${lastUsed(s.last_used)}${s.shortcut ? ` · ${s.shortcut}` : ''}${s.current ? ' · current' : ''}`,
+            );
+
+            const actions = document.createElement('span');
+            actions.className = 'actions';
+            const switchTo = button(s.current ? 'Current' : 'Switch to', () => void serverCall('settings_switch_server', { id: s.id }));
+            switchTo.disabled = s.current;
+            const signOut = button('Sign out', () => void serverCall('settings_sign_out_server', { id: s.id }), 'Sign this computer out of the server; it stays in the list');
+            signOut.disabled = !s.signed_in;
+            // two clicks instead of window.confirm
+            const forget = button('Forget', (b) => {
+                if (b.dataset.armed !== '1') {
+                    b.dataset.armed = '1';
+                    b.textContent = 'Click again to forget';
+                    window.setTimeout(() => {
+                        b.dataset.armed = '';
+                        b.textContent = 'Forget';
+                    }, 4000);
+                    return;
+                }
+                b.disabled = true;
+                void serverCall('settings_forget_server', { id: s.id });
+            }, 'Sign out, delete its data on this computer and remove it from the list');
+            forget.className = 'danger';
+            actions.append(switchTo, signOut, forget);
+
+            li.append(name, order, details, actions);
+            return li;
+        }),
+    );
+    $('servers-count').textContent = v.servers.length ? `${v.servers.length} of ${v.max} servers` : 'No server yet.';
+    ($('server-add') as HTMLButtonElement).disabled = v.servers.length >= v.max;
+}
+
+async function refreshServers(): Promise<void> {
+    try {
+        renderServers(await invoke<ServersView>('settings_servers'));
+    } catch (e) {
+        serversError(errorMessage(e));
+    }
+}
+
+$('server-add').addEventListener('click', () => void invoke('settings_add_server').catch((e) => serversError(errorMessage(e))));
 
 function renderLetters(p: Prefs): void {
     document.querySelectorAll('.leader-label').forEach((el) => (el.textContent = p.leader_shortcut || 'Brainitive key'));
@@ -347,5 +501,10 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') void invoke('settings_close');
 });
 
-onShown(() => void refresh());
+// the server list reads the keychain (signed in?): only when the window comes up, and after a change
+onShown(() => {
+    void refresh();
+    void refreshServers();
+});
 void refresh();
+void refreshServers();
