@@ -2,7 +2,8 @@
 
 This is the checklist for the person who has the **Apple Developer Program** membership. All the
 code, the entitlements and the CI workflow are ready. Only the Apple steps below are missing.
-Background and the Windows / updater parts are in [`RELEASING.md`](RELEASING.md).
+Background and the Windows / updater parts are in [`RELEASING.md`](RELEASING.md). An AI agent
+doing this on the account holder's Mac starts with [`SIGNING-AGENT-BRIEF.md`](SIGNING-AGENT-BRIEF.md).
 
 Time needed: about 30 minutes, plus Apple's wait for a new membership.
 

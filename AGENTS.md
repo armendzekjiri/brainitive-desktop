@@ -2,9 +2,13 @@
 
 Guidance for AI coding agents (Claude, Codex, Copilot, Cursor) in **Brainitive Desktop**.
 
-This is its **own git repository** (future remote `armendzekjiri/brainitive-desktop`, BSL 1.1). It is
-checked out inside the Brainitive app repo at `brainitive/desktop/` (gitignored there) so local
-agents share the app's docs and memory. **Never commit desktop files to the app repo, and never
+This is its **own git repository** (remote `armendzekjiri/brainitive-desktop`, public, BSL 1.1). On
+Armend's machine it is checked out inside the Brainitive app repo at `brainitive/desktop/`
+(gitignored there), so local agents share the app's docs and memory. In a standalone clone the
+`../` paths below don't exist; the server contract is `docs/ai/API.md` in the app repo.
+
+**Signing or building releases on someone else's Mac?** Start with
+[docs/SIGNING-AGENT-BRIEF.md](docs/SIGNING-AGENT-BRIEF.md). **Never commit desktop files to the app repo, and never
 commit app files here.** Releases and versions are this repo's own (0.x → Desktop 1.0).
 
 ## Read first
