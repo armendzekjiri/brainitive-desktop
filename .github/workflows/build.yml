@@ -76,7 +76,7 @@ jobs:
               src-tauri/target/release/bundle/appimage/*.AppImage.sig
             updater-glob: src-tauri/target/release/bundle/appimage/*.AppImage
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # webkit2gtk-4.1 + ayatana appindicator (tray), librsvg, patchelf (AppImage), libasound2-dev
       # (cpal / ALSA, voice capture), libdbus-1-dev (keyring). cmake and a C++ compiler are on all runners.
@@ -87,7 +87,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libdbus-1-dev pkg-config libasound2-dev libssl-dev xdg-utils
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
           cache: npm
@@ -97,7 +97,7 @@ jobs:
           components: clippy
           targets: ${{ matrix.rust-targets }}
 
-      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
 
@@ -261,7 +261,7 @@ jobs:
 
       - name: Upload installers
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installers-${{ matrix.artifact }}
           path: ${{ matrix.bundle-glob }}
@@ -276,9 +276,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: installers
           pattern: installers-*

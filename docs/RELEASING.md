@@ -189,6 +189,13 @@ signing secrets (done 2026-11-02, resolved with `git ls-remote`). To update one:
 git ls-remote https://github.com/<owner>/<action> "refs/tags/<tag>*"   # annotated: use the ^{} line
 ```
 
+Current pins (2026-11-02), all `runs.using: node24`, each the newest release at least two weeks old:
+`actions/checkout` v7.0.1, `actions/setup-node` v7.1.0, `Swatinem/rust-cache` v2.9.2,
+`actions/upload-artifact` v7.0.2, `actions/download-artifact` v8.0.2. Notes on the major bumps: checkout
+v6+ keeps credentials in a separate file (we never push from CI), v7 refuses fork-PR checkouts in
+`pull_request_target` / `workflow_run` (we use neither); upload/download-artifact keep our usage
+(`name`, `path`, `pattern` + `merge-multiple`) unchanged.
+
 `dtolnay/rust-toolchain` is pinned to the commit its `1.90.0` branch pointed to. Dependabot
 (`package-ecosystem: github-actions`) can keep SHA pins and their comments current.
 
