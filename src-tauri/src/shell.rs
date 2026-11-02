@@ -536,10 +536,13 @@ fn on_navigation(app: &AppHandle, label: &str, url: &Url) -> bool {
         }
         Navigation::Foreign(url) => {
             // Windows reports top-level navigations only → open outside right away. macOS and
-            // Linux also report iframes (YouTube, Figma embeds), and wry 0.57 hands this handler
-            // the URL only (no WKNavigationAction.targetFrame / WebKitGTK frame name), so a
-            // top-level load can't be told apart here: allow, the page-load guard reverts a
-            // top-level one as soon as it commits (`links::decide_page_load`, BRAI-377).
+            // Linux also report iframes (YouTube, Figma embeds), and wry 0.57.1 hands this handler
+            // the URL only (no WKNavigationAction.targetFrame / WebKitGTK frame name; re-checked
+            // for the codex review, finding 7: still so in the pinned tauri 2.12.5 / wry 0.57.1),
+            // so a top-level load can't be told apart here: allow, the page-load guard reverts a
+            // top-level one as soon as it commits (`links::decide_page_load`, BRAI-377). Until
+            // then the foreign page has no IPC: the bridge capability is `<origin>/*` and every
+            // bridge command checks the current origin again (`bridge::is_bridge_caller`).
             if cfg!(windows) {
                 open_external(app, &url);
                 false
