@@ -105,12 +105,80 @@ pub fn quarantine_value(unix_secs: u64, id: &str) -> String {
 
 /// Marks a saved download as coming from the internet: the `com.apple.quarantine` attribute on
 /// macOS (one already there, e.g. from WebKit, is kept), the `Zone.Identifier` stream (Mark of
-/// the Web, zone 3) on Windows. Linux has no such flag.
-pub fn mark_downloaded(path: &Path) {
-    if let Err(e) = quarantine(path) {
-        log::warn!("could not mark the download as downloaded: {e}");
+/// the Web, zone 3) on Windows. Linux has no such flag. `false`: it could not be marked (the
+/// user is warned, codex review 10).
+pub fn mark_downloaded(path: &Path) -> bool {
+    match quarantine(path) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("could not mark the download as downloaded: {e}");
+            false
+        }
     }
 }
+
+/// Downloads tracked at once. Never evicted while they run (an evicted one would finish without
+/// its quarantine mark, codex review 10): a new one beyond this is refused.
+pub const MAX_ACTIVE: usize = 50;
+
+/// Whether a new download may start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Admit {
+    Yes,
+    /// The same URL is downloading already: macOS reports no path when a download finishes, so
+    /// two of them couldn't be told apart (one would stay unmarked).
+    Busy,
+    Full,
+}
+
+pub fn admit(active: &[Pending], url: &str) -> Admit {
+    if active.iter().any(|p| p.url == url) {
+        Admit::Busy
+    } else if active.len() >= MAX_ACTIVE {
+        Admit::Full
+    } else {
+        Admit::Yes
+    }
+}
+
+/// What happens when a download ends (pure part of [`on_download`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Finish {
+    /// Staged: the Save dialog, then marked where the user put it.
+    AskWhere(Pending),
+    /// Saved: mark this file.
+    Saved { path: PathBuf, name: String },
+    /// Saved, but nobody knows where (no record, no path): the user is warned.
+    Unmarked,
+    /// Failed (a staged file is deleted).
+    Failed { staged: Option<PathBuf> },
+}
+
+/// `reported`: the path the webview reports (Windows / Linux; none on macOS).
+pub fn finish(pending: Option<Pending>, success: bool, reported: Option<PathBuf>) -> Finish {
+    match (pending, success) {
+        (Some(p), true) if p.staged => Finish::AskWhere(p),
+        (Some(p), true) => Finish::Saved {
+            path: p.path,
+            name: p.name,
+        },
+        (None, true) => match reported {
+            Some(path) => Finish::Saved {
+                name: path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                path,
+            },
+            None => Finish::Unmarked,
+        },
+        (p, false) => Finish::Failed {
+            staged: p.filter(|p| p.staged).map(|p| p.path),
+        },
+    }
+}
+
+const UNMARKED: &str = "Brainitive could not mark it as downloaded from the internet: be careful when opening it.";
 
 #[cfg(target_os = "macos")]
 fn quarantine(path: &Path) -> std::io::Result<()> {
@@ -219,42 +287,70 @@ pub fn on_download(app: &AppHandle, event: DownloadEvent<'_>) -> bool {
                     .map(|dir| (unique_path(&dir, &name), false))
             });
             let Some((path, staged)) = target else {
-                return true; // the webview's own default
+                // no folder of ours to put it in: the webview's own default could not be
+                // tracked to its end (no quarantine mark) — refuse instead
+                crate::bridge::show_notification(
+                    app,
+                    "Download not started",
+                    "Brainitive has no folder to save downloads in.",
+                    None,
+                );
+                return false;
             };
-            *destination = path.clone();
-            let s = state(app);
-            let mut inner = s.lock();
-            if inner.downloads.len() >= 50 {
-                inner.downloads.remove(0);
+            let refused = {
+                let s = state(app);
+                let mut inner = s.lock();
+                match admit(&inner.downloads, url.as_str()) {
+                    Admit::Yes => {
+                        inner.downloads.push(Pending {
+                            url: url.to_string(),
+                            name,
+                            path: path.clone(),
+                            staged,
+                        });
+                        None
+                    }
+                    Admit::Busy => Some("This file is being downloaded already."),
+                    Admit::Full => Some("Too many downloads at once. Wait for some to finish."),
+                }
+            };
+            if let Some(reason) = refused {
+                if staged {
+                    remove_staged(&path);
+                }
+                crate::bridge::show_notification(app, "Download not started", reason, None);
+                return false;
             }
-            inner.downloads.push(Pending {
-                url: url.to_string(),
-                name,
-                path,
-                staged,
-            });
+            *destination = path;
             true
         }
         DownloadEvent::Finished { url, path, success } => {
             let pending = take(app, &url, path.as_deref());
-            match (pending, success) {
-                (Some(p), true) if p.staged => ask_where(app, p),
-                (Some(p), true) => {
-                    mark_downloaded(&p.path);
-                    crate::bridge::show_file_notification(
+            match finish(pending, success, path) {
+                Finish::AskWhere(p) => ask_where(app, p),
+                Finish::Saved { path, name } => {
+                    let body = if mark_downloaded(&path) {
+                        format!("{name} is in your Downloads folder.")
+                    } else {
+                        format!("{name} is in your Downloads folder. {UNMARKED}")
+                    };
+                    crate::bridge::show_file_notification(app, "Download finished", &body, path)
+                }
+                Finish::Unmarked => {
+                    log::warn!("a download finished that was not tracked: not marked");
+                    crate::bridge::show_notification(
                         app,
                         "Download finished",
-                        &format!("{} is in your Downloads folder.", p.name),
-                        p.path,
+                        &format!("The file was saved. {UNMARKED}"),
+                        None,
                     )
                 }
-                (pending, false) => {
-                    if let Some(p) = pending.filter(|p| p.staged) {
-                        remove_staged(&p.path);
+                Finish::Failed { staged } => {
+                    if let Some(path) = staged {
+                        remove_staged(&path);
                     }
                     crate::bridge::show_notification(app, "Download failed", "The file could not be downloaded.", None);
                 }
-                (None, true) => crate::bridge::show_notification(app, "Download finished", "The file was saved.", None),
             }
             true
         }
@@ -301,12 +397,13 @@ fn ask_where(app: &AppHandle, pending: Pending) {
         match move_file(&pending.path, &target) {
             Ok(()) => {
                 remove_staged(&pending.path);
-                mark_downloaded(&target);
+                let marked = mark_downloaded(&target);
                 let name = target
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| pending.name.clone());
-                crate::bridge::show_file_notification(&handle, "Download saved", &name, target);
+                let body = if marked { name } else { format!("{name}. {UNMARKED}") };
+                crate::bridge::show_file_notification(&handle, "Download saved", &body, target);
             }
             Err(e) => {
                 log::warn!("could not move the download: {e}");
@@ -471,6 +568,74 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"a,b");
         assert!(move_file(&dir.join("missing"), &dir.join("y")).is_err());
         move_file(&target, &target).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn every_successful_download_with_a_known_path_is_marked() {
+        let p = |url: &str, staged: bool| Pending {
+            url: url.into(),
+            name: "setup.dmg".into(),
+            path: PathBuf::from(format!("/staging/{url}/setup.dmg")),
+            staged,
+        };
+        // tracked: marked where it is, or after the Save dialog
+        assert_eq!(
+            finish(Some(p("a", false)), true, None),
+            Finish::Saved {
+                path: PathBuf::from("/staging/a/setup.dmg"),
+                name: "setup.dmg".into()
+            }
+        );
+        assert_eq!(finish(Some(p("a", true)), true, None), Finish::AskWhere(p("a", true)));
+        // untracked but the webview says where (Windows / Linux): marked too, not just "saved"
+        assert_eq!(
+            finish(None, true, Some(PathBuf::from("/Users/me/Downloads/x.exe"))),
+            Finish::Saved {
+                path: PathBuf::from("/Users/me/Downloads/x.exe"),
+                name: "x.exe".into()
+            }
+        );
+        // nobody knows where: the user is warned instead of a plain "saved"
+        assert_eq!(finish(None, true, None), Finish::Unmarked);
+        assert_eq!(
+            finish(Some(p("a", true)), false, None),
+            Finish::Failed {
+                staged: Some(PathBuf::from("/staging/a/setup.dmg"))
+            }
+        );
+        assert_eq!(finish(None, false, None), Finish::Failed { staged: None });
+    }
+
+    #[test]
+    fn running_downloads_are_never_evicted() {
+        let mut active: Vec<Pending> = Vec::new();
+        for i in 0..MAX_ACTIVE {
+            let url = format!("https://brainitive.example.com/f/{i}");
+            assert_eq!(admit(&active, &url), Admit::Yes);
+            active.push(Pending {
+                url,
+                name: format!("{i}.pdf"),
+                path: PathBuf::from(format!("/downloads/{i}.pdf")),
+                staged: false,
+            });
+        }
+        // the 51st is refused; the first 50 all stay tracked until they finish
+        assert_eq!(admit(&active, "https://brainitive.example.com/f/new"), Admit::Full);
+        assert_eq!(active.len(), MAX_ACTIVE);
+        // the same URL twice can't be told apart on macOS (no path when it finishes)
+        active.truncate(3);
+        assert_eq!(admit(&active, "https://brainitive.example.com/f/1"), Admit::Busy);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_file_that_cannot_be_marked_is_reported() {
+        assert!(!mark_downloaded(Path::new("/nonexistent-brainitive-dir/setup.dmg")));
+        let dir = temp("mark-ok");
+        let file = dir.join("ok.pdf");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(mark_downloaded(&file));
         let _ = std::fs::remove_dir_all(dir);
     }
 }
