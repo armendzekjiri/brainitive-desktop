@@ -417,7 +417,11 @@ pub async fn task_create(app: AppHandle, webview: Webview, input: TaskInput) -> 
 fn queue_create(app: &AppHandle, ticket: &Ticket, draft: &model::Draft) -> Result<CreatedView, ()> {
     let change = model::offline_change(draft);
     let title = draft.body["title"].as_str().unwrap_or_default().to_string();
-    if let Err(e) = crate::offline::queue(app, change) {
+    let owner = crate::state::AccountTicket {
+        origin: ticket.origin.clone(),
+        account: ticket.account,
+    };
+    if let Err(e) = crate::offline::queue(app, &owner, change) {
         log::info!("new task not queued: {}", e.message);
         return Err(());
     }

@@ -23,6 +23,7 @@ use crate::flows::UiError;
 use crate::popup::{self, Popup};
 use crate::server::ServerOrigin;
 use crate::session::CallError;
+use crate::state::AccountTicket;
 use crate::state::{state, Inner, Phase};
 use crate::tray::PollTicket;
 use geometry::{Edge, Rect, Screen};
@@ -483,7 +484,7 @@ async fn fetch_timer(app: &AppHandle, t: &PollTicket) -> Result<(), CallError> {
         })
         .unwrap_or(false);
         if stale {
-            crate::offline::with_outbox(app, |o| o.clear_activity_needed(None));
+            crate::offline::with_outbox(app, &t.account(), |o| o.clear_activity_needed(None));
         }
         keep(app, t, |k| k.timer = Some(Stored::new(body)));
     }
@@ -603,6 +604,12 @@ fn caller(app: &AppHandle, webview: &Webview) -> Result<(), UiError> {
     popup::ensure_caller(app, webview, Popup::Panel).map_err(|m| ui("not_allowed", m))
 }
 
+/// The sign-in a panel command acts for, taken when it starts (before any network wait): what it
+/// queues offline afterwards goes to that sign-in's outbox or nowhere (codex review 1).
+fn owner(app: &AppHandle) -> Result<AccountTicket, UiError> {
+    AccountTicket::now(&state(app).lock()).ok_or_else(|| ui("signed_out", "Sign in to Brainitive first."))
+}
+
 /// Whether the server can be asked now (signed in, in the app, not marked offline).
 fn online_ticket(app: &AppHandle) -> Result<PollTicket, UiError> {
     let s = state(app);
@@ -704,6 +711,7 @@ pub fn panel_set_tab(app: AppHandle, webview: Webview, tab: String) -> Result<()
 #[tauri::command]
 pub async fn panel_set_done(app: AppHandle, webview: Webview, work_id: String, done: bool) -> Result<(), UiError> {
     caller(&app, &webview)?;
+    let owner = owner(&app)?;
     let (work, offline) = {
         let s = state(&app);
         let mut inner = s.lock();
@@ -766,7 +774,7 @@ pub async fn panel_set_done(app: AppHandle, webview: Webview, work_id: String, d
             Err(e) => return Err(ui("server", call_message(&e))),
         }
     }
-    crate::offline::queue_work_done(&app, &work_id, done, work.done, &work.label)?;
+    crate::offline::queue_work_done(&app, &owner, &work_id, done, work.done, &work.label)?;
     changed(&app);
     Ok(())
 }
@@ -801,6 +809,7 @@ pub enum OpenTarget {
 #[tauri::command]
 pub async fn panel_open(app: AppHandle, webview: Webview, target: OpenTarget) -> Result<(), UiError> {
     caller(&app, &webview)?;
+    let owner = owner(&app)?;
     let mut mark_read: Option<(String, String)> = None;
     let path = {
         let s = state(&app);
@@ -863,8 +872,9 @@ pub async fn panel_open(app: AppHandle, webview: Webview, target: OpenTarget) ->
     }
     if let Some((id, title)) = mark_read {
         match route(&app) {
-            Ok(Route::Api(t)) => read_one(&app, &t, &id, &title).await,
-            Ok(Route::Outbox) => queue_read(&app, &id, &title),
+            Ok(Route::Api(t)) if t.account() == owner => read_one(&app, &t, &id, &title).await,
+            Ok(Route::Outbox) => queue_read(&app, &owner, &id, &title),
+            Ok(Route::Api(_)) => {}
             Err(_) => {}
         }
     }
@@ -872,7 +882,7 @@ pub async fn panel_open(app: AppHandle, webview: Webview, target: OpenTarget) ->
 }
 
 /// A notification read offline: `notification.read` in the outbox.
-fn queue_read(app: &AppHandle, id: &str, title: &str) {
+fn queue_read(app: &AppHandle, owner: &AccountTicket, id: &str, title: &str) {
     if !view::is_notification_id(id) {
         return;
     }
@@ -880,7 +890,7 @@ fn queue_read(app: &AppHandle, id: &str, title: &str) {
         notification_id: id.to_string(),
         title: title.to_string(),
     };
-    if let Err(e) = crate::offline::queue(app, change) {
+    if let Err(e) = crate::offline::queue(app, owner, change) {
         log::info!("notification read not queued: {}", e.message);
     }
     changed(app);
@@ -903,7 +913,7 @@ async fn read_one(app: &AppHandle, t: &PollTicket, id: &str, title: &str) {
             }
             changed(app);
         }
-        Err(e) if queue_instead(app, &e) => queue_read(app, id, title),
+        Err(e) if queue_instead(app, &e) => queue_read(app, &t.account(), id, title),
         Err(e) => log::info!("notification not marked read: {e}"),
     }
 }
@@ -911,6 +921,7 @@ async fn read_one(app: &AppHandle, t: &PollTicket, id: &str, title: &str) {
 #[tauri::command]
 pub async fn panel_mark_all_read(app: AppHandle, webview: Webview) -> Result<(), UiError> {
     caller(&app, &webview)?;
+    let owner = owner(&app)?;
     // offline: only what the user saw (newest shown), so a later one stays unread
     let before = {
         let s = state(&app);
@@ -921,6 +932,7 @@ pub async fn panel_mark_all_read(app: AppHandle, webview: Webview) -> Result<(),
     let queue = |app: &AppHandle| -> Result<(), UiError> {
         crate::offline::queue(
             app,
+            &owner,
             crate::outbox::Change::NotificationsReadAll { before: before.clone() },
         )?;
         changed(app);
@@ -967,7 +979,7 @@ pub fn apply_sync_states(app: &AppHandle, origin: &ServerOrigin, states: &[crate
                 })
                 .unwrap_or(false);
                 if stale {
-                    crate::offline::with_outbox(app, |o| o.clear_activity_needed(None));
+                    crate::offline::with_outbox(app, &t.account(), |o| o.clear_activity_needed(None));
                 }
                 timer_changed(app, &t, entity.clone());
             }
@@ -1038,7 +1050,13 @@ fn clean_description(text: Option<String>) -> Option<String> {
 
 /// A timer started offline: `timer.start` with the device's clock. Not while another one shows as
 /// running (the server would refuse it as a conflict anyway).
-fn queue_start(app: &AppHandle, work_id: &str, label: &str, description: Option<String>) -> Result<(), UiError> {
+fn queue_start(
+    app: &AppHandle,
+    owner: &AccountTicket,
+    work_id: &str,
+    label: &str,
+    description: Option<String>,
+) -> Result<(), UiError> {
     let issue_id = crate::outbox::work_ref(work_id)
         .filter(|(kind, _)| *kind == "board")
         .map(|(_, id)| id)
@@ -1057,6 +1075,7 @@ fn queue_start(app: &AppHandle, work_id: &str, label: &str, description: Option<
     }
     crate::offline::queue(
         app,
+        owner,
         crate::outbox::Change::TimerStart {
             issue_id,
             description,
@@ -1078,12 +1097,13 @@ pub async fn panel_timer_start(
     description: Option<String>,
 ) -> Result<(), UiError> {
     caller(&app, &webview)?;
+    let owner = owner(&app)?;
     let label = offered(&app, &work_id).ok_or_else(|| ui("not_found", "Pick an issue from the list."))?;
     let supported = crate::offline::extended_sync(&state(&app).lock());
     let description = clean_description(description).filter(|_| supported);
     let t = match route(&app)? {
         Route::Api(t) => t,
-        Route::Outbox => return queue_start(&app, &work_id, &label, description),
+        Route::Outbox => return queue_start(&app, &owner, &work_id, &label, description),
     };
     let mut body = json!({ "id": work_id });
     if let Some(d) = &description {
@@ -1097,7 +1117,7 @@ pub async fn panel_timer_start(
         }
         Err(CallError::Server { status: 409, .. }) => Err(ui("conflict", "Another timer is running. Stop it first.")),
         Err(CallError::Server { status: 403, .. }) => Err(ui("forbidden", "You can't log time on this issue.")),
-        Err(e) if queue_instead(&app, &e) => queue_start(&app, &work_id, &label, description),
+        Err(e) if queue_instead(&app, &e) => queue_start(&app, &owner, &work_id, &label, description),
         Err(e) => Err(ui("server", call_message(&e))),
     }
 }
@@ -1137,9 +1157,16 @@ fn current_timer(app: &AppHandle) -> Result<Value, UiError> {
 }
 
 /// A stop made offline: `timer.stop` with the device's clock.
-fn queue_stop(app: &AppHandle, timer_id: u64, activity_id: Option<u64>, title: String) -> Result<StopOutcome, UiError> {
+fn queue_stop(
+    app: &AppHandle,
+    owner: &AccountTicket,
+    timer_id: u64,
+    activity_id: Option<u64>,
+    title: String,
+) -> Result<StopOutcome, UiError> {
     crate::offline::queue(
         app,
+        owner,
         crate::outbox::Change::TimerStop {
             timer_id,
             stopped_at: crate::outbox::iso_utc(now_unix()),
@@ -1173,10 +1200,11 @@ pub async fn panel_timer_stop(
     activity_id: Option<u64>,
 ) -> Result<StopOutcome, UiError> {
     caller(&app, &webview)?;
+    let owner = owner(&app)?;
     // a stop refused offline for want of an activity: the pick sends it again (same stop time)
     let waiting = crate::offline::read_outbox(&app, |o, _| o.activity_needed.clone()).flatten();
     if let (Some(_), Some(id)) = (&waiting, activity_id) {
-        crate::offline::resend_stop(&app, id)?;
+        crate::offline::resend_stop(&app, &owner, id)?;
         changed(&app);
         return Ok(StopOutcome {
             stopped: true,
@@ -1205,7 +1233,7 @@ pub async fn panel_timer_stop(
     };
     let t = match route(&app)? {
         Route::Api(t) => t,
-        Route::Outbox => return queue_stop(&app, timer_id, activity, title),
+        Route::Outbox => return queue_stop(&app, &owner, timer_id, activity, title),
     };
     let mut request = json!({ "timer_id": timer_id });
     if let Some(id) = activity {
@@ -1217,7 +1245,7 @@ pub async fn panel_timer_stop(
         .await
     {
         Ok(response) => {
-            crate::offline::with_outbox(&app, |o| o.clear_activity_needed(Some(timer_id)));
+            crate::offline::with_outbox(&app, &owner, |o| o.clear_activity_needed(Some(timer_id)));
             let message = match response.body["result"].as_str() {
                 Some("logged") => "Time logged.",
                 Some("already_stopped") => "The timer was already stopped.",
@@ -1246,7 +1274,7 @@ pub async fn panel_timer_stop(
                 },
             })
         }
-        Err(e) if queue_instead(&app, &e) => queue_stop(&app, timer_id, activity, title),
+        Err(e) if queue_instead(&app, &e) => queue_stop(&app, &owner, timer_id, activity, title),
         Err(e) => Err(ui("server", call_message(&e))),
     }
 }
@@ -1255,9 +1283,10 @@ pub async fn panel_timer_stop(
 #[tauri::command]
 pub async fn panel_timer_discard(app: AppHandle, webview: Webview) -> Result<(), UiError> {
     caller(&app, &webview)?;
+    let owner = owner(&app)?;
     // a timer started offline and not sent yet: the start is taken back
     let unsent = crate::offline::read_outbox(&app, |o, _| o.pending_start().is_some_and(|(_, sent)| !sent));
-    if unsent == Some(true) && crate::offline::with_outbox(&app, |o| o.cancel_unsent_start()) == Some(true) {
+    if unsent == Some(true) && crate::offline::with_outbox(&app, &owner, |o| o.cancel_unsent_start()) == Some(true) {
         changed(&app);
         return Ok(());
     }
@@ -1267,6 +1296,7 @@ pub async fn panel_timer_discard(app: AppHandle, webview: Webview) -> Result<(),
     let queue = |app: &AppHandle| -> Result<(), UiError> {
         crate::offline::queue(
             app,
+            &owner,
             crate::outbox::Change::TimerDiscard {
                 timer_id,
                 title: title.clone(),
@@ -1285,7 +1315,7 @@ pub async fn panel_timer_discard(app: AppHandle, webview: Webview) -> Result<(),
         Err(e) if queue_instead(&app, &e) => return queue(&app),
         Err(e) => return Err(ui("server", call_message(&e))),
     };
-    crate::offline::with_outbox(&app, |o| o.clear_activity_needed(Some(timer_id)));
+    crate::offline::with_outbox(&app, &owner, |o| o.clear_activity_needed(Some(timer_id)));
     let body = if response.body.get("running").is_some() {
         response.body
     } else {

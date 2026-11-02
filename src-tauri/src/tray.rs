@@ -812,6 +812,14 @@ impl PollTicket {
         in_app && origin == Some(&self.origin) && account == self.account
     }
 
+    /// The same server + sign-in as an [`crate::state::AccountTicket`] (outbox writes).
+    pub fn account(&self) -> crate::state::AccountTicket {
+        crate::state::AccountTicket {
+            origin: self.origin.clone(),
+            account: self.account,
+        }
+    }
+
     fn holds(&self, inner: &crate::state::Inner) -> bool {
         self.still_current(
             inner.current_origin().as_ref(),
