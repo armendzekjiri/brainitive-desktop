@@ -152,7 +152,7 @@ pub struct Writer {
 impl Writer {
     /// Starts a fresh part file (an older one is truncated).
     pub fn create(data_dir: &Path, spec: &ModelSpec) -> Result<Self, ModelError> {
-        std::fs::create_dir_all(folder(data_dir))?;
+        crate::private_fs::ensure_dir(&folder(data_dir))?;
         let part = part_path(data_dir, spec);
         let file = File::create(&part)?;
         Ok(Self {

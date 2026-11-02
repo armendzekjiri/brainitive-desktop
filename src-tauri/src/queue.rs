@@ -5,7 +5,7 @@
 //! Entries belong to a server origin and are only ever sent there. Signing out of a server or
 //! forgetting it deletes its entries. Pure logic; the sending is in `capture.rs`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -170,12 +170,8 @@ impl CaptureQueue {
                 _ => Ok(()),
             };
         }
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        let tmp: PathBuf = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(self).expect("serializable"))?;
-        std::fs::rename(tmp, path)
+        // 0600 file (and temp file) in a 0700 folder on Unix (BRAI-377)
+        crate::private_fs::write_atomic(path, &serde_json::to_vec(self).expect("serializable"))
     }
 
     pub fn push(&mut self, entry: QueuedCapture) -> Result<(), QueueFull> {
@@ -366,6 +362,13 @@ mod tests {
         q.push(entry(&o("a.example.com"), "x", 1)).unwrap();
         q.save(&path).unwrap();
         assert_eq!(CaptureQueue::load(&path), q);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&path), 0o600, "the queue holds the user's text: 0600");
+            assert_eq!(mode(&dir), 0o700);
+        }
         q.entries.clear();
         q.save(&path).unwrap();
         assert!(!path.exists());

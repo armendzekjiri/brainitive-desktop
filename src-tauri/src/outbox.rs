@@ -9,7 +9,7 @@
 //! rate_limited / error → kept, try later. A 4xx is never retried forever. Pure logic; the
 //! sending is in `offline.rs`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -711,19 +711,10 @@ pub fn remove_file(path: &Path) -> std::io::Result<()> {
     }
 }
 
-/// A sibling temp file, then rename (a crash never leaves half a file). Mode 0600 on Unix.
+/// A sibling temp file, then rename (a crash never leaves half a file). The temp file is
+/// created with mode 0600 and the folder 0700 on Unix ([`crate::private_fs`]).
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp: PathBuf = path.with_extension("json.tmp");
-    std::fs::write(&tmp, bytes)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
-    std::fs::rename(tmp, path)
+    crate::private_fs::write_atomic(path, bytes)
 }
 
 #[cfg(test)]

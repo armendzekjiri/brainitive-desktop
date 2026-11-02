@@ -20,6 +20,7 @@ pub mod pkce;
 pub mod poll;
 pub mod popup;
 pub mod prefs;
+pub mod private_fs;
 pub mod problem;
 pub mod queue;
 pub mod reconnect;

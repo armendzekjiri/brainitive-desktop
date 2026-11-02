@@ -670,15 +670,7 @@ async fn download(app: &AppHandle, update: Update, trigger: Trigger) {
 }
 
 fn write_private(file: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-    if let Some(dir) = file.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(file)?.write_all(bytes)
+    crate::private_fs::write(file, bytes)
 }
 
 /// "Restart to Update": the user's click. Installs the waiting update (its signature is checked
