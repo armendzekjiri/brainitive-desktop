@@ -171,3 +171,114 @@ kbd.on-accent {
     flex: 1;
     text-align: right;
 }
+
+/* voice capture indicator (BRAI-439) */
+.voice {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    height: 100%;
+    padding: 12px 16px;
+}
+
+.voice section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex: 1;
+}
+
+.voice section[hidden] {
+    display: none;
+}
+
+.voice p {
+    margin: 0;
+}
+
+.voice .small {
+    font-size: 12px;
+}
+
+.voice-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: auto;
+}
+
+.voice-actions .spacer {
+    flex: 1;
+}
+
+.voice-live {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.voice .timer {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+}
+
+.rec-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--danger);
+    animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+    50% {
+        opacity: 0.35;
+    }
+}
+
+.meter {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--panel);
+    overflow: hidden;
+}
+
+.meter-fill {
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    transition: width 80ms linear;
+}
+
+.voice progress {
+    width: 100%;
+    accent-color: var(--accent);
+}
+
+.spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .rec-dot,
+    .spinner {
+        animation: none;
+    }
+}
+
+/* the microphone button in quick capture */
+.capture-row .mic {
+    flex: none;
+}

@@ -1,6 +1,7 @@
 // The quick-capture window (BRAI-359): opened by the global shortcut (⇧⌘Space / Ctrl+Shift+Space),
-// the tray or the menu. The text goes to Rust (`capture_submit`), which posts it to the server's
-// private inbox with the app token, or keeps it on this computer while offline.
+// the tray or the menu, and by voice capture with the transcribed text (BRAI-439). The text goes to
+// Rust (`capture_submit`), which posts it to the server's private inbox with the app token, or keeps
+// it on this computer while offline.
 
 import { invoke } from '@tauri-apps/api/core';
 import { $, busy, errorMessage, onShown } from './native';
@@ -38,7 +39,9 @@ async function refresh(): Promise<void> {
     try {
         const ctx = await invoke<Context>('capture_context');
         if (ctx.prefill) {
-            text.value = ctx.prefill;
+            // voice capture: added to what is already typed, never replacing it
+            const before = text.value.trimEnd();
+            text.value = before ? `${before} ${ctx.prefill}` : ctx.prefill;
             text.setSelectionRange(text.value.length, text.value.length);
         }
         $('save-keys').textContent = ctx.platform === 'macos' ? '⌘↩' : 'Ctrl+↩';
@@ -74,6 +77,11 @@ async function submit(): Promise<void> {
         busy(save, false);
     }
 }
+
+// voice capture (BRAI-439): the text comes back into this window
+$('mic').addEventListener('click', () => {
+    invoke('capture_voice').catch((e) => setStatus(errorMessage(e), 'error'));
+});
 
 $('form').addEventListener('submit', (e) => {
     e.preventDefault();

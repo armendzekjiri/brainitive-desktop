@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Voice Capture</title>
+    <link rel="stylesheet" href="/src/native.css" />
+    <link rel="stylesheet" href="/src/popup.css" />
+    <script type="module" src="/src/voice.ts"></script>
+  </head>
+  <body class="popup">
+    <div class="voice">
+      <header class="popup-head">
+        <img src="/logo.png" alt="" width="18" height="18" />
+        <strong>Voice capture</strong>
+        <span class="spacer"></span>
+        <kbd>Esc</kbd>
+      </header>
+
+      <section data-screen="intro" hidden>
+        <p>Speak instead of typing: hold <kbd class="shortcut"></kbd>, talk, let go. The text opens in
+          quick capture to check and save.</p>
+        <p class="muted small">The speech is turned into text <strong>on this computer</strong>; the audio is never
+          saved or sent anywhere. Needs a one-time download of the speech model (<span class="model-mb"></span> MB).</p>
+        <div class="voice-actions">
+          <button type="button" data-action="close">Not now</button>
+          <button type="button" class="primary" data-action="turn-on">Turn on</button>
+        </div>
+      </section>
+
+      <section data-screen="permission" hidden>
+        <p>Allow Brainitive to use the microphone in the system dialog.</p>
+        <p class="muted small">It is only used while you hold the voice-capture shortcut.</p>
+      </section>
+
+      <section data-screen="denied" hidden>
+        <p class="error" id="denied-message"></p>
+        <div class="voice-actions">
+          <button type="button" data-action="close">Close</button>
+          <button type="button" class="primary" data-action="privacy" id="privacy">Open Privacy Settings</button>
+        </div>
+      </section>
+
+      <section data-screen="downloading" hidden>
+        <p>Downloading the speech model… <span id="download-text"></span></p>
+        <progress id="download-bar" max="100" value="0"></progress>
+        <p class="muted small">One time only. You can close this window; the download goes on.</p>
+      </section>
+
+      <section data-screen="download_failed" hidden>
+        <p class="error" id="download-error"></p>
+        <div class="voice-actions">
+          <button type="button" data-action="close">Close</button>
+          <button type="button" class="primary" data-action="download">Try again</button>
+        </div>
+      </section>
+
+      <section data-screen="ready" hidden>
+        <p>Voice capture is ready. Hold <kbd class="shortcut"></kbd> and speak; let go when you're done.</p>
+        <div class="voice-actions">
+          <button type="button" data-action="close">Close</button>
+          <button type="button" class="primary" data-action="start">Start <kbd class="on-accent">↩</kbd></button>
+        </div>
+      </section>
+
+      <section data-screen="recording" hidden>
+        <div class="voice-live">
+          <span class="rec-dot" aria-hidden="true"></span>
+          <strong>Listening</strong>
+          <span id="timer" class="timer">0:00</span>
+          <span class="muted small">/ <span id="max">2:00</span></span>
+        </div>
+        <div class="meter" role="meter" aria-label="Microphone level" aria-valuemin="0" aria-valuemax="100" id="meter">
+          <div class="meter-fill" id="meter-fill"></div>
+        </div>
+        <div class="voice-actions">
+          <span class="muted small" id="recording-hint"></span>
+          <span class="spacer"></span>
+          <button type="button" data-action="cancel">Cancel</button>
+          <button type="button" class="primary" data-action="stop">Done <kbd class="on-accent">↩</kbd></button>
+        </div>
+      </section>
+
+      <section data-screen="transcribing" hidden>
+        <p class="voice-live"><span class="spinner" aria-hidden="true"></span> Turning your speech into text…</p>
+        <p class="muted small">On this computer. Esc cancels.</p>
+      </section>
+
+      <section data-screen="error" hidden>
+        <p class="error" id="error-message"></p>
+        <div class="voice-actions">
+          <button type="button" data-action="close">Close</button>
+          <button type="button" class="primary" data-action="start">Try again</button>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

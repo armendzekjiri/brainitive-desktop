@@ -12,6 +12,11 @@ interface Prefs {
     zoom_percent: number;
     capture_shortcut: string;
     switcher_shortcut: string;
+    voice_shortcut: string;
+    voice_enabled: boolean;
+    voice_language: string;
+    voice_languages: { code: string; name: string }[];
+    voice_model: { name: string; size_mb: number; ready: boolean; downloading: number | null };
     keep_in_tray: boolean;
     ask_where_to_save: boolean;
     launch_at_login: boolean;
@@ -19,9 +24,9 @@ interface Prefs {
     shortcut_problem: string | null;
 }
 
-type Toggle = 'keep_in_tray' | 'ask_where_to_save' | 'launch_at_login' | 'start_hidden';
+type Toggle = 'keep_in_tray' | 'ask_where_to_save' | 'launch_at_login' | 'start_hidden' | 'voice_enabled';
 
-type Which = 'capture' | 'switcher';
+type Which = 'capture' | 'switcher' | 'voice';
 type Choice = { mode: 'off' } | { mode: 'default' } | { mode: 'keys'; keys: string };
 
 let recording: { which: Which; button: HTMLButtonElement } | null = null;
@@ -44,10 +49,34 @@ function render(p: Prefs): void {
     ($('open-account') as HTMLButtonElement).disabled = !p.signed_in;
     document.querySelectorAll<HTMLElement>('[data-shortcut]').forEach((row) => {
         const which = row.dataset.shortcut as Which;
-        const label = which === 'capture' ? p.capture_shortcut : p.switcher_shortcut;
+        const label = { capture: p.capture_shortcut, switcher: p.switcher_shortcut, voice: p.voice_shortcut }[which];
         const current = row.querySelector<HTMLElement>('.current');
         if (current) current.textContent = label || 'Off';
     });
+    renderVoice(p);
+}
+
+function renderVoice(p: Prefs): void {
+    const select = $<HTMLSelectElement>('voice_language');
+    if (select.options.length !== p.voice_languages.length) {
+        select.replaceChildren(
+            ...p.voice_languages.map((l) => {
+                const option = document.createElement('option');
+                option.value = l.code;
+                option.textContent = l.name;
+                return option;
+            }),
+        );
+    }
+    select.value = p.voice_language;
+    const m = p.voice_model;
+    $('voice-model').textContent =
+        m.downloading !== null
+            ? `${m.name}: downloading, ${m.downloading} %`
+            : m.ready
+              ? `${m.name}: on this computer.`
+              : `${m.name}: not downloaded. It is downloaded the first time you use voice capture.`;
+    ($('voice-remove') as HTMLButtonElement).disabled = !m.ready && m.downloading === null;
 }
 
 function shortcutError(which: Which, message: string | null): void {
@@ -125,6 +154,25 @@ document.querySelectorAll<HTMLInputElement>('[data-toggle]').forEach((input) => 
 
 async function refresh(): Promise<void> {
     render(await invoke<Prefs>('settings_get'));
+}
+
+$('voice_language').addEventListener('change', (e) => {
+    const language = (e.target as HTMLSelectElement).value;
+    invoke<Prefs>('settings_set_voice_language', { language })
+        .then(render)
+        .catch((err) => voiceError(errorMessage(err)));
+});
+$('voice-remove').addEventListener('click', () => {
+    voiceError(null);
+    invoke<Prefs>('settings_remove_voice_model')
+        .then(render)
+        .catch((err) => voiceError(errorMessage(err)));
+});
+
+function voiceError(message: string | null): void {
+    const el = $('voice-error');
+    el.textContent = message ?? '';
+    el.hidden = !message;
 }
 
 $('zoom-reset').addEventListener('click', () => void invoke<Prefs>('settings_reset_zoom').then(render));

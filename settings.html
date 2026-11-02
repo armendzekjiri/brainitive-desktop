@@ -57,6 +57,35 @@
       </section>
 
       <section>
+        <h2>Voice capture</h2>
+        <div class="setting">
+          <label for="voice_enabled">Voice capture
+            <small>Hold the shortcut, speak, let go: the text opens in quick capture. Turned into text on this
+              computer; the audio is never saved or sent anywhere.</small></label>
+          <input id="voice_enabled" data-toggle="voice_enabled" type="checkbox" />
+        </div>
+        <div class="setting" data-shortcut="voice">
+          <span class="text">Shortcut <small>Hold to talk, or tap to start and tap again to finish.</small></span>
+          <span class="controls">
+            <kbd class="current"></kbd>
+            <button class="record" type="button">Change</button>
+            <button class="reset" type="button" title="Back to the default">Default</button>
+            <button class="off" type="button">Off</button>
+          </span>
+        </div>
+        <p class="error shortcut-error" data-for="voice" hidden></p>
+        <div class="setting">
+          <label for="voice_language">Language <small>Detect it each time, or choose the one you speak.</small></label>
+          <select id="voice_language"></select>
+        </div>
+        <div class="setting">
+          <span class="text">Speech model <small id="voice-model"></small></span>
+          <span class="controls"><button id="voice-remove" type="button">Remove voice model</button></span>
+        </div>
+        <p id="voice-error" class="error" hidden></p>
+      </section>
+
+      <section>
         <h2>Downloads</h2>
         <div class="setting">
           <label for="ask_where_to_save">Ask where to save each download
