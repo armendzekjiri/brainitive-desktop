@@ -3,7 +3,7 @@
 Brainitive Desktop is a **Tauri 2** shell: a main window that shows either a few bundled
 screens (connect a server, sign in) or the user's Brainitive server — the full web app, loaded
 remotely — plus extra app windows with pages of that server, and small **bundled native windows**
-(quick capture, quick switcher, settings, the offline view) that talk to the server only through Rust. The native
+(quick capture, quick switcher, settings, the offline view, the voice-capture indicator) that talk to the server only through Rust. The native
 layer adds what a browser tab can't: system-browser sign-in with keychain storage, deep links,
 native menus, global shortcuts, a tray / menu-bar icon, native notifications and the badge, a
 Save dialog for downloads and launch at login. Server contract:
@@ -17,14 +17,17 @@ desktop/
 │   ├── switcher.ts             quick switcher (switcher.html, window "switcher")
 │   ├── settings.ts             Settings (settings.html, window "settings")
 │   ├── offline.ts, offline.css the offline view (offline.html, window "offline", BRAI-366)
+│   ├── voice.ts                the voice-capture indicator (voice.html, window "voice", BRAI-439)
 │   └── native.ts/.css, popup.css   shared by the native windows
 ├── public/logo.png
 └── src-tauri/
     ├── tauri.conf.json         id app.brainitive.desktop, CSP, deep-link scheme, macOS ≥ 14
+    ├── Info.plist              merged by Tauri: NSMicrophoneUsageDescription (voice capture)
+    ├── .cargo/config.toml      GGML_NATIVE=OFF: a portable whisper.cpp build
     ├── build.rs                app ACL manifest (every command needs a permission)
     ├── capabilities/           one file per bundled window, local origin + its own window only:
     │                           local.json (main), settings.json, capture.json, switcher.json,
-    │                           offline.json
+    │                           offline.json, voice.json
     ├── src/
     │   ├── lib.rs              plugins, commands, menu, deep-link + notification wiring, run loop
     │   ├── server.rs           ServerOrigin: typed address → origin, TLS rule, store ids   (pure)
@@ -57,6 +60,10 @@ desktop/
     │   ├── capture.rs          quick-capture commands, queue flush, open_quick_capture(prefill)
     │   ├── offline.rs          offline mode: files per server, sync, the offline window's commands
     │   ├── switcher.rs         quick-switcher commands (search, open, copy snippet, timer)
+    │   ├── voice/              voice capture (BRAI-439): mod.rs glue + indicator commands,
+    │   │                       recorder.rs (state machine, pure), model.rs (download / verify /
+    │   │                       remove), audio.rs (cpal microphone, resampling), whisper.rs
+    │   │                       (whisper-rs), permission.rs (macOS AVCaptureDevice)
     │   ├── tray.rs             tray menu model + icon, the poller, My Day / timer actions
     │   ├── downloads.rs        staging + Save As dialog, unique names
     │   ├── prefs.rs            Settings window commands, launch at login
@@ -151,12 +158,15 @@ the main frame on the bundled screens and the current origin. The user agent end
 | `switcher` | `switcher.html` | default | `capabilities/switcher.json` |
 | `settings` | `settings.html` | default | `capabilities/settings.json` |
 | `offline` | `offline.html` (BRAI-366) | default | `capabilities/offline.json` |
+| `voice` | `voice.html` (BRAI-439) | default | `capabilities/voice.json` |
 
 App windows share one navigation / page-load guard, downloads handler, user agent and zoom level;
 switching server, signing out or forgetting closes the `app-<n>` windows. The bundled windows are
 built on first use (from the async runtime: never inside a main-thread handler, which can deadlock
 on Windows), hidden instead of closed, centred, and the floating ones (capture, switcher) hide when
-they lose focus. Dismissing one with Esc gives the focus back to the app the user came from (macOS:
+they lose focus (the voice indicator floats too but stays: a recording goes on while the user
+clicks elsewhere). A bundled window opened from another one that has the focus (voice → quick
+capture) inherits where the focus goes back to. Dismissing one with Esc gives the focus back to the app the user came from (macOS:
 `app.hide()` when another app was in front). The window-state plugin keeps app windows only.
 
 ## Logs and diagnostics (BRAI-368)
@@ -186,7 +196,8 @@ nothing claims it, the web app's own ⌘. (palette, commands) / ⌘K (search) ha
 
 `tauri-plugin-global-shortcut`, Rust side only. Each shortcut is a `hotkeys::HotkeyAction`
 (registry: shortcut id → action) with an accelerator in the preferences: quick capture ⇧⌘Space /
-Ctrl+Shift+Space, quick switcher ⌥⌘K / Ctrl+Alt+K. Settings records new keys (the current
+Ctrl+Shift+Space, quick switcher ⌥⌘K / Ctrl+Alt+K, voice capture ⇧⌘V / Ctrl+Shift+V (the only one
+that also gets the key-up). Settings records new keys (the current
 shortcuts are paused while recording); `shortcuts.rs` refuses one-modifier shortcuts (except
 F-keys), system combinations and duplicates; the OS refusing a shortcut keeps the previous ones
 and the reason shows in Settings.
@@ -196,12 +207,62 @@ and the reason shows in Settings.
   dir, per origin, ≤ 500), sent oldest first by the poller, after sign-in and after the next
   successful capture, with the same `request_id` (the server answers 200 for a repeat). 4xx →
   dropped with a notification. Sign out / forget deletes the origin's queue.
-  `capture::open_quick_capture(app, prefill)` opens the window with text (for other native
-  sources such as a future voice-capture shortcut).
+  `capture::open_quick_capture(app, prefill)` opens the window with text (voice capture's result,
+  added to what is already typed).
 - **Quick switcher**: `GET /api/v1/search?q=&limit=12[&type=issues|docs|plans|snippets]`; Enter →
   `shell::navigate_to` (the app window, or after the stored sign-in is restored); ⌘C on a snippet →
   `GET /snippets/{id}` → clipboard (`tauri-plugin-clipboard-manager`, Rust side); ⌘T on an issue →
   `POST /me/timer/start`.
+
+## Voice capture (BRAI-439)
+
+Hold a global shortcut (default ⇧⌘V / Ctrl+Shift+V, `HotkeyAction::Voice`, rebindable or off;
+**not final**: it may move under a "Brainitive key" chord), speak, let go: the speech becomes text
+on this computer and opens in quick capture (`capture::open_quick_capture(app, Some(text))`, added to
+what is already typed) to check and save as usual. Also **Voice Capture…** in the File menu, the
+tray and a microphone button in quick capture (those start a recording that runs until Enter /
+Done / the shortcut again).
+
+- **Hold vs. tap**: `tauri-plugin-global-shortcut` (`global-hotkey` 0.8) reports the key-up on
+  macOS (Carbon `kEventHotKeyReleased`), Windows (the key is polled every 50 ms after `WM_HOTKEY`)
+  and X11 (detectable auto-repeat). `HotkeyAction::wants_release` passes it to `voice::on_hotkey`
+  only. Held ≥ 0.5 s → the release finishes; a shorter tap latches toggle mode.
+- **State machine** (`voice/recorder.rs`, pure): idle → recording → transcribing → done /
+  cancelled / error; Esc cancels (also while transcribing: the late result is dropped by session
+  id); the recording is cut off and transcribed at 2 minutes.
+- **Audio** (`voice/audio.rs`): `cpal` default input on its own thread (the stream is not `Send`),
+  mixed to mono f32 **in memory only** (≤ 2 min), wiped after use; a meter level per block;
+  `resample_16k` (two box filters as a low-pass, then linear interpolation).
+- **Transcription** (`voice/whisper.rs`): `whisper-rs =0.16.0` (whisper.cpp built from source by
+  CMake; Metal on macOS, CPU elsewhere). The model is loaded on a background thread as soon as the
+  microphone opens, so after the release only the transcription runs (another background thread);
+  greedy decoding, the language from Settings or auto-detect. Clips < 0.3 s or without any sound
+  above −40 dBFS are not transcribed (whisper invents text on silence); segments that are only a
+  marker ("[BLANK_AUDIO]", "(music)") are dropped. The model is dropped after each recording.
+  Timing is logged (`voice: 4.8 s recorded, model load 140 ms, resample 1 ms, transcription 210 ms
+  (metal)`), never audio or text. whisper.cpp / ggml output goes to the `log` crate (warn+ only).
+- **Model** (`voice/model.rs`): whisper.cpp's multilingual **small q5_1** (190 MB), downloaded on
+  first use from a pinned commit of `huggingface.co/ggerganov/whisper.cpp` into
+  `<app local data>/voice/ggml-small-q5_1.bin`, via `.part` with a running SHA-256; only the exact
+  size + checksum is renamed into place. Redirects only to Hugging Face hosts over https (the
+  file is served by their CDN). Partial files and old models are deleted at start; **Remove voice
+  model** in Settings deletes the folder (and stops a download).
+- **Permission** (`voice/permission.rs`): macOS `AVCaptureDevice` status / request (objc2), the
+  prompt text is `NSMicrophoneUsageDescription` in `src-tauri/Info.plist`; Windows reports a
+  blocked microphone as the stream's `PermissionDenied`; denied → the indicator says how to allow
+  it and opens the OS privacy page (fixed URLs).
+- **Off by default** (`Preferences.voice_enabled`); the shortcut is registered anyway so the first
+  press shows what it does and **Turn on** (asks for the microphone, downloads the model with
+  progress). Settings: on / off, the shortcut, the language (auto, English, German, Albanian, …),
+  the model and Remove.
+- **Indicator** (`voice.html`, window `voice`, always on top, frameless): intro, permission,
+  denied, downloading, ready, recording (level meter, timer up to 2:00, Done / Cancel), transcribing,
+  errors. Rust sends it `voice://view` (the screen) and `voice://level` (level + elapsed, every
+  80 ms), to that window only; it calls `voice_view`, `voice_start`, `voice_stop`, `voice_cancel`,
+  `voice_turn_on`, `voice_download`, `voice_open_privacy`, `voice_close`.
+- **Build**: whisper.cpp needs CMake and a C++ compiler (and libclang for bindgen, with a bundled
+  fallback); `GGML_NATIVE=OFF` (`src-tauri/.cargo/config.toml`) keeps release builds portable
+  (Apple Silicon baseline M1; x86-64 AVX2 + FMA + F16C).
 
 ## Tray / menu bar (BRAI-360) and badge (BRAI-361)
 
@@ -280,7 +341,11 @@ default; the OS login item is read back as the truth. The login item passes `--a
 `cargo test` runs the pure logic (server URL rules, PKCE incl. the RFC 7636 vector, deep links,
 navigation decisions incl. the bundled windows', versions, settings / preferences / zoom, token /
 error parsing, API request paths, call-error classification, shortcut rules and labels, the capture
-queue, polling backoff / wake / plan, tray menu model and API parsing, switcher result parsing,
+queue, the voice recorder state machine, model download verification / removal, resampling and the
+meter, transcript clean-up, polling backoff / wake / plan, tray menu model and API parsing, switcher result parsing,
 download names / moves, the overlay badge, menu ids / accelerators) and `tests/capabilities.rs`
 (capability scoping). `cargo test --test live_network -- --ignored`
 checks discovery against real hosts (badssl.com certificate errors, Cloud 404 detection).
+`BRAINITIVE_VOICE_MODEL_DIR=<dir> cargo test --lib real_transcription -- --ignored --nocapture`
+downloads the real model once into `<dir>` and transcribes clips spoken by macOS `say` (Metal and
+CPU timings).

@@ -5,6 +5,23 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Voice capture (BRAI-439):
+
+- **Speak instead of typing**: hold ⇧⌘V (macOS) / Ctrl+Shift+V (Windows, Linux), talk, let go — the
+  text opens in quick capture to check and save. A short tap starts a recording that runs until you
+  press the shortcut again or ↩. Also **Voice Capture…** in the File menu, the menu bar / tray and a
+  microphone button in quick capture. A small indicator shows the level and the time (max 2
+  minutes); Esc cancels.
+- **On this computer**: the speech is turned into text locally with Whisper (whisper.cpp; Metal on
+  Apple Silicon). The audio is kept in memory only — never saved, never sent anywhere — so it works
+  the same for Cloud and self-hosted, offline too.
+- **Off by default.** The first press explains it and offers **Turn on**; the speech model (190 MB)
+  is downloaded once, with progress and a checksum check. Settings → Voice capture: on / off, the
+  shortcut, the language (detect automatically, English, German, Albanian, …) and **Remove voice
+  model**.
+- macOS asks for the microphone once; if it is blocked, the indicator says how to allow it and
+  opens the privacy settings.
+
 Offline mode (BRAI-366):
 
 - **Work offline**: when the server can't be reached, **Open offline** (it also opens by itself once)

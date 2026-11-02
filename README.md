@@ -26,19 +26,26 @@ app. The window title shows where you are: "Brainitive — Cloud", "Brainitive �
 
 - **Quick capture** — ⇧⌘Space (macOS) / Ctrl+Shift+Space from any app: type, ⌘↩ / Ctrl+↩ to save
   to your inbox. Works offline (sent when you're back).
+- **Voice capture** — hold ⇧⌘V / Ctrl+Shift+V, speak, let go: the text opens in quick capture to
+  check and save (a tap starts it, ↩ or the shortcut again finishes; Esc cancels; max 2 minutes).
+  Turn it on in Settings or with the first press; the speech model (190 MB) is downloaded once.
+  Speech is turned into text **on your computer** (Whisper); the audio is never saved or sent.
+  Pick the language (or auto-detect) and remove the model in Settings → Voice capture.
 - **Quick switcher** — ⌥⌘K / Ctrl+Alt+K: search everything, ↩ opens, ⌘C copies a snippet, ⌘T starts
   the timer on an issue.
 - **Menu bar / tray** — My Day (tick work done), the running timer, unread notifications.
 - **Menus** — ⌘N new issue, ⌥⌘N new doc, ⇧⌘N new window, ⌘K search, ⌘[ / ⌘] back / forward,
   ⌘= / ⌘- / ⌘0 zoom, ⌘, settings (Ctrl on Windows / Linux).
 - **Settings** (⌘,) — change or turn off the global shortcuts, keep running in the tray, open at
-  login, ask where to save downloads.
+  login, ask where to save downloads, voice capture.
 
 ## Development
 
-Requirements: Rust (stable, ≥ 1.85), Node 20+, and the
+Requirements: Rust (stable, ≥ 1.85), Node 20+, the
 [Tauri prerequisites](https://tauri.app/start/prerequisites/) of your OS (Xcode command line tools
-on macOS; WebView2 on Windows; `libwebkit2gtk-4.1-dev` etc. on Linux).
+on macOS; WebView2 on Windows; `libwebkit2gtk-4.1-dev` etc. on Linux) and, for voice capture's
+whisper.cpp, **CMake** (`brew install cmake`; Visual Studio's C++ tools include it on Windows;
+`cmake libasound2-dev` on Linux). The first build compiles whisper.cpp (≈ 20–30 s).
 
 ```bash
 npm install
@@ -47,6 +54,8 @@ npm run build              # type-check + build the bundled screens
 cd src-tauri
 cargo test                 # unit tests (URL rules, PKCE, deep links, guard, versions, settings)
 cargo test --test live_network -- --ignored   # live TLS / discovery checks (network)
+BRAINITIVE_VOICE_MODEL_DIR=/tmp/voice cargo test --lib real_transcription -- --ignored --nocapture
+                           # macOS: downloads the speech model once, transcribes `say` clips
 cargo clippy --all-targets -- -D warnings
 npx tauri build --debug --bundles app          # macOS: a .app with the brainitive:// scheme
 ```

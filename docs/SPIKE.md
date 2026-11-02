@@ -45,6 +45,7 @@ Date: 2026-11-01 · Tauri 2.12.5 / wry 0.57.1 · tested on macOS 26 (Darwin 25.2
 | Badge (BRAI-361) | 🟡 dock badge + count next to the menu-bar icon | 🟡 overlay icon (written, not run) | 🟡 Unity launcher only |
 | Save dialog for downloads (BRAI-363) | 🟡 staging + dialog | ⏳ | ⏳ (xdg portal / GTK dialog) |
 | Launch at login (BRAI-364) | 🟡 LaunchAgent | ⏳ Run registry key | ⏳ autostart `.desktop` file |
+| Voice capture (BRAI-439): whisper.cpp build, model download, transcription | ✅ builds (cmake), real model download + checksum, transcription with Metal (M4 Pro: 13.7 s clip in 0.35 s; CPU 0.5 s); 🟡 microphone, permission prompt, indicator and hold-to-talk not run in the app | ⏳ MSVC build of whisper.cpp, WASAPI capture, "denied" error mapping, key-up by polling | ⏳ needs `libasound2-dev`; key-up via X11 detectable auto-repeat; ⚠️ no global shortcuts on Wayland (tray / menu still work) |
 
 ## Preliminary go / no-go
 

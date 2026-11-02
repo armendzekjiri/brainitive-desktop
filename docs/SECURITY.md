@@ -4,7 +4,8 @@ Brainitive Desktop shows a **remote** web app (the user's Brainitive server) ins
 shell that can touch the OS. The main risk is remote content getting native powers it should
 not have. Cards: BRAI-351 (remote IPC, CSP, navigation guard), BRAI-428 (app API security),
 phase 05: BRAI-359 / 360 / 361 / 362 / 363 / 364 / 401 (native windows, global shortcuts, tray,
-downloads, autostart), BRAI-366 (offline copy and outbox).
+downloads, autostart), BRAI-366 (offline copy and outbox), BRAI-439 (voice capture: microphone,
+model download, no audio retention).
 
 ## Assets
 
@@ -19,6 +20,9 @@ downloads, autostart), BRAI-366 (offline copy and outbox).
 | Offline copy of the user's own data (BRAI-366): open work assigned to them, today's My Day, the kept task lists with their tasks, the private capture inbox, the account id and name, the sync cursor | `offline/<store id>/cache.json` in the app's local data dir, **plain JSON**, mode 0600, per server; no token, no cookie. Deleted on sign-out, forget and when another account signs in on that server. |
 | Offline changes waiting to be sent, and changes the server refused (with the user's text) | `offline/<store id>/outbox.json` next to it, same rules; refused ones until the user dismisses them. |
 | Downloads waiting for the Save dialog | `<app cache>/downloads/<uuid>/`, deleted on cancel and at start. |
+| Voice capture audio (BRAI-439) | **Process memory only**, while recording and transcribing (≤ 2 min, mono f32), zeroed and freed afterwards. Never written to disk, never sent anywhere. |
+| Voice transcript | Memory, then the quick-capture window's text field (like typed text); saved / queued only when the user saves the capture. Never logged. |
+| Speech model (`ggml-small-q5_1.bin`, 190 MB) | `<app local data>/voice/`, a public file (no user data); removed with "Remove voice model". |
 | Login item (launch at login) | macOS LaunchAgent plist / Windows Run registry key / Linux autostart `.desktop` file, written only when the user turns it on. |
 
 ## Who can do what
@@ -122,10 +126,56 @@ Threat: a global shortcut steals keys from other apps, or something else changes
   validated by `shortcuts.rs`: at least two modifiers incl. Ctrl / Alt / Cmd (F-keys: one), no
   system combination (Spotlight, screenshots, input sources, lock, force quit, Ctrl+Alt+Del, Alt+F4
   …), no duplicates. If the OS refuses one (taken by another app) the previous ones stay.
-- A shortcut only **opens a bundled window**; it never sends anything by itself. Nothing is read
+- A shortcut only **opens a bundled window** (voice capture: also starts the microphone, see
+  below); it never sends anything by itself. Nothing is read
   from other apps (no key logging: the OS delivers only the registered combination).
 - While Settings records new keys the current shortcuts are unregistered and restored when the
   recording ends or the window closes.
+
+## Voice capture (BRAI-439)
+
+Threats: the microphone records when the user doesn't expect it; audio or transcripts leak (disk,
+network, logs, another webview); a tampered speech model is loaded; the model download is
+redirected somewhere else.
+
+- **Microphone only on purpose**: opened when the user holds / presses the voice shortcut, picks
+  Voice Capture in the menu or tray, or clicks the microphone in quick capture — and only after
+  voice capture was turned on (off by default; the first press only explains and offers "Turn on").
+  The always-on-top indicator shows a red dot, the level and the timer for the whole recording;
+  the stream is closed on release / Done / Esc / the 2-minute cut-off / an error. Nothing listens
+  in the background (no wake word, no buffering before the press).
+- **OS permission**: macOS asks once with `NSMicrophoneUsageDescription` (`src-tauri/Info.plist`);
+  denied / restricted → nothing is opened, the indicator explains how to allow it and opens the
+  privacy page (a **fixed** OS URL, not one a page can choose). Windows: the per-app microphone
+  switch (an error when opening). Linux: no per-app permission.
+- **Audio stays in this process's memory**: `cpal` → a `Vec<f32>` → resampled copy → whisper.cpp,
+  all in Rust / C++ in-process; the buffers are zeroed after use and on cancel. No file, no network
+  call, no webview ever sees audio (the indicator gets a level 0–1 and the elapsed time only).
+  The OS could still page memory to the swap file (encrypted on macOS; FileVault / BitLocker / LUKS
+  protect it at rest), like any app memory.
+- **Transcripts**: handed only to the bundled quick-capture window (`capture_context.prefill`,
+  taken once), where the user edits and saves them like typed text (the usual capture path, its
+  queue rules). Logs contain durations only (`voice: 4.8 s recorded, … transcription 210 ms`),
+  never audio or text; whisper.cpp's own log lines go through the redacting logger at warn+.
+- **Indicator window**: `voice.html`, label `voice`, its own `capabilities/voice.json`
+  (`local: true`, no `remote`, `windows: ["voice"]`, only `allow-voice-*` + listening to events
+  sent to it); every command checks the caller (`popup::ensure_caller`). It cannot start a
+  recording by itself without the user (Start / Try again are buttons in that bundled window; no
+  remote page or other window can call them). Quick capture's microphone button is its own
+  command `capture_voice` (capture capability); Settings' language and "Remove voice model" are
+  Settings commands.
+- **Model download** — new network host, used for this file only: `https://huggingface.co`
+  (`ggerganov/whisper.cpp`, whisper.cpp's official model repository), URL **pinned to a commit**
+  in code (`voice::model::MODEL`), redirected by Hugging Face to its CDN (`*.hf.co` /
+  `*.huggingface.co`). Rust only: https only, ≤ 5 redirects and each one must be a Hugging Face
+  host over https (`model::allowed_url`), no cookies or tokens sent (a plain client, not the API
+  client), OS trust store. The file is written to `.part` and accepted only with the exact size and
+  the **pinned SHA-256**; anything else is deleted. It is downloaded only after the user turned
+  voice capture on (and again only after "Remove voice model"). The request carries the app's user
+  agent; no account or server data.
+- **Loading the model**: only the verified file is ever renamed into place; its size is checked
+  again before each recording. A same-user process could swap the file afterwards — it could
+  equally change the app itself (accepted).
 
 ## Tray, polling, clipboard
 
@@ -246,6 +296,14 @@ store is deleted and it leaves the recent list.
 - A captured text queued under a server is sent to whoever is signed in to that server when the
   connection is back (sign-out deletes the queue, so this is only the same user after a session
   expiry).
+- **Voice capture shortcut ⇧⌘V / Ctrl+Shift+V** (BRAI-439) is registered even while voice capture
+  is off (so the first press can explain it), which takes the combination from other apps: "paste
+  as plain text" in browsers, Slack, VS Code, and **paste in most Linux terminals**. The key is
+  not final (a "Brainitive key" chord is planned); until then users can change or turn it off in
+  Settings.
+- **Signed macOS builds** with the hardened runtime will need the
+  `com.apple.security.device.audio-input` entitlement for the microphone (not set yet: signing is
+  not configured; part of the beta checklist).
 - **The offline copy is plain JSON on disk** (BRAI-366, see above): accepted like the webview cache;
   it lives until sign-out / forget / an account switch. Offline changes are only sent after `GET /me`
   confirmed the account they were made as (or, for changes made before the first sync, the account

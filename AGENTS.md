@@ -26,7 +26,8 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
   `shell::BRIDGE_PERMISSIONS`, SECURITY.md, and the web side in the app repo.
 - New local commands: `build.rs` manifest + the capability file of **the one bundled window** that
   uses it (`capabilities/local.json` = main window screens, `settings.json`, `capture.json`,
-  `switcher.json`, `offline.json`), a `popup::ensure_caller` check in the command, and SECURITY.md.
+  `switcher.json`, `offline.json`, `voice.json`), a `popup::ensure_caller` check in the command,
+  and SECURITY.md.
   `tests/capabilities.rs` fails when a file grants a remote origin, another window, a plugin or a
   bridge permission, or a command missing from `build.rs`.
 - Native windows (`popup.rs`) are bundled pages: they reach the server only through Rust commands
@@ -35,10 +36,14 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
   grant their JS permissions to a webview.
 - Don't build webviews inside main-thread handlers (menu, tray, global shortcut, sync commands):
   spawn on the async runtime (Windows deadlock).
-- A new global shortcut = a `hotkeys::HotkeyAction` variant + its preference + `hotkeys::wanted`.
+- A new global shortcut = a `hotkeys::HotkeyAction` variant + its preference + `hotkeys::wanted`
+  (`wants_release` if it needs the key-up, like voice capture's hold to talk).
+- Voice capture (`voice/`): audio stays in memory (never a file, never the network, never a
+  webview); log durations only, never audio or transcript text. The only extra network host is
+  the pinned model download (`voice::model::MODEL`, size + SHA-256 checked).
 - Pure logic goes in the pure modules (`server`, `links`, `pkce`, `version`, `settings`,
-  `shortcuts`, `queue`, `offline_cache`, `outbox`, `poll`, `badge`, and the pure parts of `tray` / `switcher` / `downloads`)
-  with unit tests.
+  `shortcuts`, `queue`, `offline_cache`, `outbox`, `poll`, `badge`, `voice::recorder`, and the pure
+  parts of `tray` / `switcher` / `downloads` / `voice::model` / `voice::audio`) with unit tests.
 - Offline data (`offline/<store id>/`) belongs to one server and one account: delete it wherever a
   sign-in ends (`offline::wipe`), never put a token in it.
 - Pin exact dependency versions.
