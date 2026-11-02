@@ -199,3 +199,29 @@ pub async fn forget_server(app: AppHandle, origin: String) -> Result<(), UiError
 pub fn dismiss_notice(app: AppHandle) {
     state(&app).lock().notice = None;
 }
+
+static CLIENT_ERRORS: std::sync::Mutex<crate::logging::RateLimit> =
+    std::sync::Mutex::new(crate::logging::RateLimit::new(std::time::Duration::from_secs(60), 20));
+
+/// A script error in a bundled screen (`window.onerror` of `src/main.ts`), into the log file.
+/// Local content only (`capabilities/local.json`); the main window only, ≤ 20 per minute,
+/// clipped and redacted like every other log line. Pages of the server can't call it.
+#[tauri::command]
+pub fn log_client_error(webview: tauri::Webview, message: String, source: Option<String>) {
+    if webview.label() != crate::shell::MAIN {
+        return;
+    }
+    let allowed = CLIENT_ERRORS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .allow(std::time::Instant::now());
+    if allowed {
+        let clip = |s: &str, n: usize| s.chars().take(n).collect::<String>();
+        log::error!(
+            target: "brainitive_desktop_lib::webview",
+            "{} ({})",
+            clip(&message, 500),
+            clip(source.as_deref().unwrap_or("unknown source"), 200)
+        );
+    }
+}

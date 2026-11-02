@@ -350,6 +350,13 @@ function wire(): void {
     $('notice-close').addEventListener('click', () => void invoke('dismiss_notice').then(refresh));
 }
 
+// script errors of the bundled screens go to the local log file (never to a server)
+function reportError(message: string, source: string): void {
+    invoke('log_client_error', { message, source }).catch(() => undefined);
+}
+window.addEventListener('error', (ev) => reportError(ev.message, `${ev.filename}:${ev.lineno}`));
+window.addEventListener('unhandledrejection', (ev) => reportError(`unhandled rejection: ${errorMessage(ev.reason)}`, 'promise'));
+
 wire();
 void listen('desktop://changed', () => void refresh());
 void refresh();

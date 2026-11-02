@@ -6,10 +6,12 @@ pub mod badge;
 pub mod bridge;
 pub mod capture;
 pub mod commands;
+pub mod diagnostics;
 pub mod downloads;
 pub mod flows;
 pub mod hotkeys;
 pub mod links;
+pub mod logging;
 pub mod menu;
 pub mod pkce;
 pub mod poll;
@@ -17,6 +19,7 @@ pub mod popup;
 pub mod problem;
 pub mod prefs;
 pub mod queue;
+pub mod redact;
 pub mod reconnect;
 pub mod secrets;
 pub mod server;
@@ -71,6 +74,7 @@ pub fn run() {
             commands::cancel_sign_in,
             commands::retry_connect,
             commands::open_download_page,
+            commands::log_client_error,
             commands::open_offline,
             commands::switch_server,
             commands::sign_out,
@@ -98,6 +102,21 @@ pub fn run() {
             switcher::switcher_close,
         ])
         .setup(|app| {
+            // first: everything after this is logged, and a panic leaves a trace
+            match app.path().app_log_dir() {
+                Ok(dir) => {
+                    if let Err(e) = logging::init(&dir) {
+                        eprintln!("could not open the log file in {}: {e}", dir.display());
+                    }
+                }
+                Err(e) => eprintln!("no log directory: {e}"),
+            }
+            log::info!(
+                "Brainitive Desktop {} starting ({}, {})",
+                version::APP_VERSION,
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let queue_path = app.path().app_local_data_dir()?.join("capture-queue.json");
             app.manage(AppState::new(settings_path, queue_path));

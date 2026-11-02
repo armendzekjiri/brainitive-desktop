@@ -166,6 +166,22 @@ store is deleted and it leaves the recent list.
   web-session requests as a manual retry (≥ 5 s apart, ≤ 1 per minute at the cap); the "is the
   network back?" probe is a local name lookup of the user's own server host, nothing else.
 
+## Logs, redaction and diagnostics (BRAI-368)
+
+- **No telemetry, no network sending.** Logs stay in the app log dir (files 0600 on Unix, rotation
+  5 × 2 MB). Copy Diagnostics only writes to the user's clipboard, on their click.
+- **Redaction (`redact.rs`) runs on every line before it is written**, and again on diagnostics:
+  URLs lose userinfo, query, fragment and opaque path segments; `bra_`/`brr_` tokens, JWTs,
+  `Bearer …` values, `token/password/secret/cookie/authorization/…=` pairs and opaque
+  `code/state/session=` values are masked; the home directory becomes `~`. It is best-effort
+  defence in depth: code still must not log secrets in the first place (tokens never leave `session`).
+- Panic messages and backtraces are redacted the same way. Lines are flattened and length-bounded
+  (no log injection through newlines).
+- New local command `log_client_error` (main window only, `capabilities/local.json`): message ≤ 500
+  and source ≤ 200 characters, ≤ 20 per minute, redacted. Remote pages cannot call it; errors in
+  remote pages or popup windows are not logged.
+- Diagnostics contain the server origin only, never user data or paths with query strings.
+
 ## TLS policy
 
 - `https` only; `http` only for `localhost`, `127.0.0.1`, `[::1]` (local development). Enforced

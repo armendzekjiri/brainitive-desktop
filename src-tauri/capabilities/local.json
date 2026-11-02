@@ -14,6 +14,7 @@
     "allow-cancel-sign-in",
     "allow-retry-connect",
     "allow-open-download-page",
+    "allow-log-client-error",
     "allow-open-offline",
     "allow-switch-server",
     "allow-sign-out",

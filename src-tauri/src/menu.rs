@@ -32,10 +32,12 @@ pub enum MenuAction {
     ServerSwitch,
     ServerSignOut,
     HelpDocs,
+    HelpCopyDiagnostics,
+    HelpOpenLogs,
 }
 
 impl MenuAction {
-    pub const ALL: [MenuAction; 21] = [
+    pub const ALL: [MenuAction; 23] = [
         Self::Settings,
         Self::NewIssue,
         Self::NewDoc,
@@ -57,6 +59,8 @@ impl MenuAction {
         Self::ServerSwitch,
         Self::ServerSignOut,
         Self::HelpDocs,
+        Self::HelpCopyDiagnostics,
+        Self::HelpOpenLogs,
     ];
 
     pub fn id(self) -> &'static str {
@@ -82,6 +86,8 @@ impl MenuAction {
             Self::ServerSwitch => "server-switch",
             Self::ServerSignOut => "server-sign-out",
             Self::HelpDocs => "help-docs",
+            Self::HelpCopyDiagnostics => "help-copy-diagnostics",
+            Self::HelpOpenLogs => "help-open-logs",
         }
     }
 
@@ -277,7 +283,17 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         ],
     )?)?;
 
-    let help = Submenu::with_items(app, "Help", true, &[&item(app, MenuAction::HelpDocs, "Brainitive Help")?])?;
+    let help = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[
+            &item(app, MenuAction::HelpDocs, "Brainitive Help")?,
+            &sep()?,
+            &item(app, MenuAction::HelpCopyDiagnostics, "Copy Diagnostics")?,
+            &item(app, MenuAction::HelpOpenLogs, "Open Logs Folder")?,
+        ],
+    )?;
     if !mac {
         help.append(&sep()?)?;
         help.append(&PredefinedMenuItem::about(app, Some("About Brainitive"), None)?)?;
@@ -386,6 +402,11 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
             let h = app.clone();
             tauri::async_runtime::spawn(async move { crate::flows::sign_out(&h).await });
         }
+        MenuAction::HelpCopyDiagnostics => {
+            let h = app.clone();
+            tauri::async_runtime::spawn(async move { crate::diagnostics::copy(&h).await });
+        }
+        MenuAction::HelpOpenLogs => crate::diagnostics::open_logs_folder(app),
         MenuAction::HelpDocs => {
             if let Ok(url) = url::Url::parse("https://docs.brainitive.app/") {
                 shell::open_external(app, &url);

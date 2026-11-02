@@ -7,6 +7,10 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 Phase 09, reliability and diagnostics:
 
+- **Logs and diagnostics** (BRAI-368): Rust panics, app log output and script errors of the bundled
+  screens go to a rotating local file (5 × 2 MB) with tokens, cookies, codes and query strings
+  removed. Help → **Copy Diagnostics** (versions, OS, webview, server, signed in yes/no, last 50 log
+  lines) and **Open Logs Folder**. No telemetry; nothing is sent.
 - **Unreachable screen and version gate** (BRAI-367): "can't reach the server" now says why — no
   network, address not found, connection refused, no answer, self-signed / expired / wrong-host
   certificate (never bypassed), server error (HTTP 5xx), not a Brainitive server — with a suggested

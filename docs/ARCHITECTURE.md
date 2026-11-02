@@ -30,6 +30,9 @@ desktop/
     │   ├── pkce.rs             PKCE S256 + state                                             (pure)
     │   ├── version.rs          min_versions.desktop check, download link                     (pure)
     │   ├── problem.rs          why a server can't be used: kind, message, fix, retryable      (pure)
+    │   ├── redact.rs           removes tokens, cookies, codes, query strings from log text   (pure)
+    │   ├── logging.rs          rotating log file (5 × 2 MB), `log` backend, panic hook       (rotation pure)
+    │   ├── diagnostics.rs      Help → Copy Diagnostics text + Open Logs Folder
     │   ├── reconnect.rs        backoff 5 s → 60 s, lookup target for the "network is back" probe (pure)
     │   ├── settings.rs         settings.json: servers, pending wipes, Preferences, zoom steps (pure)
     │   ├── shortcuts.rs        global shortcut defaults, parsing, rules, labels              (pure)
@@ -148,6 +151,18 @@ built on first use (from the async runtime: never inside a main-thread handler, 
 on Windows), hidden instead of closed, centred, and the floating ones (capture, switcher) hide when
 they lose focus. Dismissing one with Esc gives the focus back to the app the user came from (macOS:
 `app.hide()` when another app was in front). The window-state plugin keeps app windows only.
+
+## Logs and diagnostics (BRAI-368)
+
+`logging::init` runs first in `setup()`: a `log` backend writes to `brainitive.log` in the app log
+dir (macOS `~/Library/Logs/<identifier>/`, Windows/Linux the platform log/data dir), rotated at 2 MB
+into `.1`–`.4` (5 files, mode 0600). Our own modules log at info (debug in debug builds), other
+crates at warn. A panic hook logs the message, location and up to 40 backtrace lines before the
+`panic = "abort"` of the release profile ends the process. Script errors of the bundled screens
+arrive through `log_client_error` (main window, ≤ 20/min). Every line passes `redact.rs` first.
+Help → **Copy Diagnostics** puts version, OS, webview version, the server **origin**, signed in
+yes/no, the screen and the last 50 redacted lines on the clipboard (Rust side); **Open Logs Folder**
+opens the directory. Nothing is ever sent anywhere.
 
 ## Menus and shortcuts (BRAI-362)
 

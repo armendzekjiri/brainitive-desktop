@@ -11,6 +11,7 @@ fn main() {
             "cancel_sign_in",
             "retry_connect",
             "open_download_page",
+            "log_client_error",
             "open_offline",
             "switch_server",
             "sign_out",
