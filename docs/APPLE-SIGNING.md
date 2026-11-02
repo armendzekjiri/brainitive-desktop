@@ -6,6 +6,61 @@ Background and the Windows / updater parts are in [`RELEASING.md`](RELEASING.md)
 
 Time needed: about 30 minutes, plus Apple's wait for a new membership.
 
+## Status and handover (2026-11-02)
+
+**The team.** Brainitive is signed with Burim Bilali's Apple Developer team (Team ID
+`65NCF3DHKS`). It is an **individual** membership. That has three consequences:
+- **Only Burim can use developer.apple.com** (certificates, App IDs, profiles). Other people,
+  including Admins in App Store Connect, see no team there. Team members on the developer site
+  exist only for organization memberships.
+- **Users see "Burim Bilali"** as the developer: Gatekeeper's "Open?" dialog, the signature, and
+  later the App Store seller. To show a company name instead, enroll an **organization**
+  (it needs a D-U-N-S number) and sign with that team. Updates keep working after such a switch;
+  macOS asks once more for microphone access.
+- A certificate belongs to the team, not to one app, so the same one can sign other apps of the
+  team. Whoever holds the `.p12` can sign in Burim's name: share it only through a password manager.
+
+**What exists.** A **Developer ID Application** certificate (created 2026-05-09) has been
+exported. It was issued under Apple's previous intermediate (G1), so it **expires on
+2027-02-01** instead of after 5 years. It is fine for the first test builds, but before the
+public launch create a new one with **G2 Sub-CA** (step 2), valid for 5 years. Apps already
+downloaded keep working after a certificate expires (the signature is timestamped).
+
+An **Apple Development** certificate was exported too. It is only for testing on registered
+devices and **can't** be used for distribution: signed with it, the app is blocked on other Macs
+and isn't accepted by the App Store.
+
+**Done in this repo:**
+- the CI workflow with signing and notarization;
+- the entitlements and hardened runtime;
+- the actions pinned to commit SHAs;
+- this checklist.
+
+**Burim's steps, in order:**
+1. **Developer ID Application certificate, G2 Sub-CA** (step 2). Export it as a `.p12` with a
+   **new** password. The earlier export's password was shared in a chat, so don't reuse it.
+2. **Notarization credentials** (step 3): an App Store Connect **team** API key (B), or an
+   app-specific password for his Apple ID (A).
+3. **GitHub secrets** (step 4). The repo `armendzekjiri/brainitive-desktop` is a personal repo, and
+   on a personal repo only the owner (Armend) can set secrets. So, one of these:
+   - Burim shares the values with Armend through a password manager, and Armend runs the
+     `gh secret set` commands;
+   - or the repo moves to a GitHub organization where Burim gets the admin role.
+4. **Test run:** Actions → **Build** → Run workflow on `main`. Check the result (step 6).
+5. **Later, for the Mac App Store** (optional; see "Mac App Store" below).
+
+## Mac App Store (later)
+
+The App Store needs its own items from developer.apple.com, so again only Burim can create them:
+- an **App ID** `app.brainitive.desktop`;
+- an **Apple Distribution** certificate and a **Mac Installer Distribution** certificate (1 year each);
+- a **Mac App Store provisioning profile** for the App ID.
+
+In App Store Connect, an Admin can do the rest: create the app record, write the metadata, add
+screenshots, manage TestFlight, upload builds and submit them for review. The App Store build
+itself (sandbox entitlements, no self-updater, review risks such as hiding billing and Sign in
+with Apple) is not built yet. It will be its own task.
+
 ## What you hand back
 
 You return five values: either the five secrets from step 4, or a signed build (step 5). Never

@@ -10,7 +10,7 @@ and the auto-updater (BRAI-373) stays **off** in every build until its key exist
 | --- | --- |
 | CI matrix (macOS universal, Windows x64 NSIS, Linux AppImage + .deb), tests, clippy, draft release | ready; runs once the repo is on GitHub |
 | macOS entitlements, hardened runtime, min. macOS 14 | ready (`src-tauri/entitlements.plist`, `bundle.macOS`) |
-| macOS signing + notarization | **waits for an Apple Developer account** and 5 secrets |
+| macOS signing + notarization | **waits for the certificate + notarization secrets** from the team holder (Burim Bilali, individual team `65NCF3DHKS`); handover in [`APPLE-SIGNING.md`](APPLE-SIGNING.md) |
 | Windows signing | **waits for Azure Trusted Signing (or a certificate)** and 6 secrets |
 | NSIS per-user install, Start menu, `brainitive://`, WebView2 bootstrapper; Linux `.desktop` MimeType, `.deb` deps | ready (`bundle.*` in `tauri.conf.json`) |
 | Download buttons on the website | **waits for the first published release** (3 env values) |
