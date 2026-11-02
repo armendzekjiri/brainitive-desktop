@@ -21,7 +21,7 @@ jobs:
         os: [macos-latest, windows-latest, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2 # TODO pin SHA (docs/RELEASING.md)
 
       # libasound2-dev: the microphone (cpal / ALSA, voice capture). whisper.cpp needs cmake + a C++
       # compiler, which all three runners have.
@@ -31,16 +31,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config libasound2-dev
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4.4.0 # TODO pin SHA (docs/RELEASING.md)
         with:
           node-version: 20
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.90.0 # TODO pin SHA (docs/RELEASING.md)
         with:
           components: clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.8.0 # TODO pin SHA (docs/RELEASING.md)
         with:
           workspaces: src-tauri
 

@@ -353,17 +353,22 @@ default; the OS login item is read back as the truth. The login item passes `--a
 `.github/workflows/build.yml`: matrix macOS-14 (`--target universal-apple-darwin`, app + dmg),
 Windows 2022 (NSIS), Ubuntu 22.04 (deb + AppImage); each job runs `npm run build`, `cargo test`,
 `cargo clippy -D warnings`, then `tauri build` (not on pull requests). Tags `v*` add a draft GitHub
-release with `SHA256SUMS`. Signing is conditional: a detect step checks for the secrets, then steps
-export `APPLE_*` (Tauri signs + notarizes; `signingIdentity` is null in the config) or write a
-`signCommand` overlay for Azure Trusted Signing (`trusted-signing-cli`) passed with `--config`.
+release with `SHA256SUMS`. Signing is conditional: only for a `v*` tag push or a manual run on the
+default branch (`SIGNING_ALLOWED`), and a detect step checks for the secrets (booleans only).
+Secrets go through step `env:` only, never `$GITHUB_ENV` (BRAI-377): `tauri build` gets `APPLE_*`
+on macOS (Tauri signs + notarizes; `signingIdentity` is null in the config; an API-key `.p8` is a
+temp file deleted after the build) or `AZURE_*` on Windows, where a step writes the `signCommand`
+overlay for Azure Trusted Signing (`trusted-signing-cli` 0.11.0, pinned) passed with `--config`.
+Actions use exact tags marked `# TODO pin SHA` until pinned (release blocker, `docs/RELEASING.md`).
 `bundle` config: `entitlements.plist` (audio-input, network client; no JIT), min macOS 14, NSIS
 `currentUser` + WebView2 download bootstrapper, `.deb` depends `libasound2`. The `brainitive://`
 scheme is registered by the installers / `.desktop` file from `plugins.deep-link`, and by
 `register_all()` in debug builds. Owner steps: `docs/RELEASING.md`.
 
-Updater bundles (BRAI-373): tag builds with the `TAURI_SIGNING_PRIVATE_KEY` secret (and a real
-public key in the config) add a `bundle.createUpdaterArtifacts: true` overlay; the signing key is in
-the env of the `tauri build` step only. The ignored test `ci_signed_bundle_verifies_with_the_committed_key`
+Updater bundles (BRAI-373): signing builds with the `TAURI_SIGNING_PRIVATE_KEY` secret (and a real
+public key in the config) build without the key; the step "Updater signing" after `tauri build` (the
+only one with the key, BRAI-377) packs the macOS `.app` into `Brainitive.app.tar.gz` and signs it /
+the NSIS `-setup.exe` / the `.AppImage` and `.deb` with `tauri signer sign --app-version`. The ignored test `ci_signed_bundle_verifies_with_the_committed_key`
 then checks one signed bundle with the plugin against the committed key. The release job writes
 `latest.json` (`scripts/updater-manifest.mjs`: `darwin-{aarch64,x86_64}[-app]` → the universal
 `.app.tar.gz`, `windows-x86_64[-nsis]`, `linux-x86_64[-appimage]`, `linux-x86_64-deb`) and makes

@@ -7,8 +7,13 @@ name: Build
 #   - a pre-release published by hand: its latest.json becomes the beta channel's manifest
 # Signing is optional: every signing step only runs when its secrets exist, so the workflow
 # produces unsigned installers until they are added. See docs/RELEASING.md.
-# Auto-updates (BRAI-373): with TAURI_SIGNING_PRIVATE_KEY, tag builds also make signed updater
-# bundles and the draft release gets latest.json; without it they are skipped, nothing fails.
+# Signing runs only for a v* tag push or a manual run on the default branch (SIGNING_ALLOWED);
+# pull requests and other refs never see a signing secret. Secrets are passed per step through
+# `env:` to the steps that use them, never written to $GITHUB_ENV (BRAI-377).
+# Auto-updates (BRAI-373): with TAURI_SIGNING_PRIVATE_KEY, signing builds also make signed
+# updater bundles and the draft release gets latest.json; without it they are skipped, nothing
+# fails. The bundles are built WITHOUT the key; a separate step after the build signs them with
+# `tauri signer sign`, and only that step gets the key.
 
 on:
   push:
@@ -34,6 +39,8 @@ jobs:
     name: ${{ matrix.name }}
     if: github.event_name != 'release'
     runs-on: ${{ matrix.os }}
+    env:
+      SIGNING_ALLOWED: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
     strategy:
       fail-fast: false
       matrix:
@@ -69,7 +76,7 @@ jobs:
               src-tauri/target/release/bundle/appimage/*.AppImage.sig
             updater-glob: src-tauri/target/release/bundle/appimage/*.AppImage
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v4.2.2 # TODO pin SHA (docs/RELEASING.md)
 
       # webkit2gtk-4.1 + ayatana appindicator (tray), librsvg, patchelf (AppImage), libasound2-dev
       # (cpal / ALSA, voice capture), libdbus-1-dev (keyring). cmake and a C++ compiler are on all runners.
@@ -80,17 +87,17 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libdbus-1-dev pkg-config libasound2-dev libssl-dev xdg-utils
 
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/setup-node@v4.4.0 # TODO pin SHA (docs/RELEASING.md)
         with:
           node-version: 20
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@1.90.0
+      - uses: dtolnay/rust-toolchain@1.90.0 # TODO pin SHA (docs/RELEASING.md)
         with:
           components: clippy
           targets: ${{ matrix.rust-targets }}
 
-      - uses: Swatinem/rust-cache@v2.8.0
+      - uses: Swatinem/rust-cache@v2.8.0 # TODO pin SHA (docs/RELEASING.md)
         with:
           workspaces: src-tauri
 
@@ -105,9 +112,11 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --locked --all-targets -- -D warnings
 
-      # ---- signing: each block runs only when its secrets exist --------------------------------
+      # ---- signing: each block runs only when signing is allowed and its secrets exist ---------
+      # Booleans only: no secret value leaves this step.
       - name: Detect signing secrets
         id: signing
+        if: env.SIGNING_ALLOWED == 'true'
         shell: bash
         env:
           HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
@@ -124,116 +133,123 @@ jobs:
             echo "updater=$HAS_UPDATER_KEY"
           } >> "$GITHUB_OUTPUT"
 
-      # Tauri imports the .p12 into a temporary keychain itself when APPLE_CERTIFICATE is set.
-      - name: macOS signing
-        if: runner.os == 'macOS' && steps.signing.outputs.apple == 'true'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          {
-            echo "APPLE_CERTIFICATE<<EOF_CERT"
-            echo "$APPLE_CERTIFICATE"
-            echo "EOF_CERT"
-            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
-            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
-          } >> "$GITHUB_ENV"
-
-      # Notarization (needs the signing above). Option A: Apple ID + app-specific password.
-      - name: macOS notarization (Apple ID)
-        if: runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id == 'true'
-        shell: bash
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          {
-            echo "APPLE_ID=$APPLE_ID"
-            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
-            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
-          } >> "$GITHUB_ENV"
-
-      # Option B: App Store Connect API key (preferred for CI; used when Option A is absent).
-      - name: macOS notarization (API key)
+      # Notarization with an App Store Connect API key (used when the Apple ID option is absent):
+      # notarytool needs the .p8 as a file. It goes to the runner's temp folder, mode 0600, and is
+      # deleted after the build; only its path is an output.
+      - name: macOS notarization key file
+        id: notary_key
         if: runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id != 'true' && steps.signing.outputs.apple_notary_key == 'true'
         shell: bash
         env:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
           mkdir -p "$RUNNER_TEMP/private_keys"
+          umask 077
           printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8"
-          chmod 600 "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8"
-          {
-            echo "APPLE_API_KEY=$APPLE_API_KEY"
-            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
-            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8"
-          } >> "$GITHUB_ENV"
+          echo "path=$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8" >> "$GITHUB_OUTPUT"
 
-      # Windows: Azure Trusted Signing through trusted-signing-cli, wired up with a config overlay
-      # written here (tauri.conf.json stays unsigned so local builds never need Azure).
+      # Windows: Azure Trusted Signing through trusted-signing-cli (pinned), wired up with a config
+      # overlay written here (tauri.conf.json stays unsigned so local builds never need Azure). The
+      # Azure credentials go to the tauri build step only (its signCommand runs the CLI).
       - name: Windows signing (Azure Trusted Signing)
         id: winsign
         if: runner.os == 'Windows' && steps.signing.outputs.azure == 'true'
         shell: bash
         env:
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
           PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
         run: |
-          cargo install trusted-signing-cli --locked
+          cargo install trusted-signing-cli --version 0.11.0 --locked
           printf '{"bundle":{"windows":{"signCommand":"trusted-signing-cli -e %s -a %s -c %s -d Brainitive %%1"}}}' \
             "$ENDPOINT" "$ACCOUNT" "$PROFILE" > "$RUNNER_TEMP/sign.conf.json"
-          {
-            echo "AZURE_TENANT_ID=$AZURE_TENANT_ID"
-            echo "AZURE_CLIENT_ID=$AZURE_CLIENT_ID"
-            echo "AZURE_CLIENT_SECRET=$AZURE_CLIENT_SECRET"
-          } >> "$GITHUB_ENV"
           echo "config=$RUNNER_TEMP/sign.conf.json" >> "$GITHUB_OUTPUT"
 
-      # Updater bundles (BRAI-373), tag builds only: a config overlay switches them on
-      # (tauri.conf.json keeps createUpdaterArtifacts off, so builds without the secret never fail
-      # on a missing key). Skipped while tauri.conf.json still has the placeholder public key: such
-      # an app never updates, signed bundles would be useless.
-      - name: Updater signing
-        id: updater
-        if: github.ref_type == 'tag' && github.event_name == 'push' && steps.signing.outputs.updater == 'true'
-        shell: bash
-        run: |
-          if grep -q '"pubkey": "PLACEHOLDER' src-tauri/tauri.conf.json; then
-            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is set but tauri.conf.json still has the placeholder updater key: no updater bundles"
-            exit 0
-          fi
-          printf '{"bundle":{"createUpdaterArtifacts":true}}' > "$RUNNER_TEMP/updater.conf.json"
-          echo "config=$RUNNER_TEMP/updater.conf.json" >> "$GITHUB_OUTPUT"
-
-      # Bundles are not built for pull requests. Config overlays merge in order (signing, updater).
-      # The updater key reaches this step only, and only when the overlay above was written.
+      # Bundles are not built for pull requests. No updater key here: tauri.conf.json keeps
+      # createUpdaterArtifacts off, the updater bundles are signed in the next step. Each Apple /
+      # Azure variable is empty unless this runner signs (signing allowed, secret present, right
+      # OS); empty ones are unset, because Tauri treats a set-but-empty variable as set.
       - name: tauri build
         if: github.event_name != 'pull_request'
         shell: bash
         env:
           SIGN_CONFIG: ${{ steps.winsign.outputs.config }}
-          UPDATER_CONFIG: ${{ steps.updater.outputs.config }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ steps.updater.outputs.config != '' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ steps.updater.outputs.config != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          # notarization option A: Apple ID + app-specific password
+          APPLE_ID: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id == 'true' && secrets.APPLE_TEAM_ID || '' }}
+          # option B: App Store Connect API key (the file from the step above)
+          APPLE_API_KEY: ${{ steps.notary_key.outputs.path != '' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_ISSUER: ${{ steps.notary_key.outputs.path != '' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY_PATH: ${{ steps.notary_key.outputs.path }}
+          AZURE_TENANT_ID: ${{ steps.winsign.outputs.config != '' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ steps.winsign.outputs.config != '' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ steps.winsign.outputs.config != '' && secrets.AZURE_CLIENT_SECRET || '' }}
         run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID \
+            APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH \
+            AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
+            [ -n "${!name}" ] || unset "$name"
+          done
           configs=()
           [ -n "$SIGN_CONFIG" ] && configs+=(--config "$SIGN_CONFIG")
-          [ -n "$UPDATER_CONFIG" ] && configs+=(--config "$UPDATER_CONFIG")
           npx tauri build ${{ matrix.args }} "${configs[@]}"
 
+      - name: Remove the notarization key file
+        if: always() && steps.notary_key.outputs.path != ''
+        shell: bash
+        env:
+          KEY_FILE: ${{ steps.notary_key.outputs.path }}
+        run: rm -f "$KEY_FILE"
+
+      # Updater bundles (BRAI-373), signed AFTER the build so the updater key never reaches the
+      # build (npm scripts, build.rs of every crate). Only this step gets the key. The bundle is
+      # bound to the app version (`--app-version`, the signed trusted comment that
+      # requireSignedVersion checks), like `tauri build` does. Skipped while tauri.conf.json still
+      # has the placeholder public key: such an app never updates, signed bundles would be useless.
+      #   macOS:   Brainitive.app → Brainitive.app.tar.gz (the app at the archive's top level, the
+      #            layout the updater unpacks), then signed
+      #   Windows: the NSIS *-setup.exe itself; Linux: the .AppImage and the .deb themselves
+      - name: Updater signing
+        id: updater
+        if: env.SIGNING_ALLOWED == 'true' && github.event_name != 'pull_request' && steps.signing.outputs.updater == 'true'
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if grep -q '"pubkey": "PLACEHOLDER' src-tauri/tauri.conf.json; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is set but tauri.conf.json still has the placeholder updater key: no updater bundles"
+            exit 0
+          fi
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          shopt -s nullglob
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            apps=(src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app)
+            [ ${#apps[@]} -eq 1 ] || { echo "::error::expected one .app, found ${#apps[@]}"; exit 1; }
+            # COPYFILE_DISABLE: no AppleDouble ._ files in the archive
+            COPYFILE_DISABLE=1 tar -czf "${apps[0]}.tar.gz" -C "$(dirname "${apps[0]}")" "$(basename "${apps[0]}")"
+          fi
+          bundles=(${{ matrix.updater-glob }})
+          [ ${#bundles[@]} -eq 1 ] || { echo "::error::expected one updater bundle, found ${#bundles[@]}"; exit 1; }
+          # Linux: the .deb is an updater bundle too (latest.json's linux-x86_64-deb)
+          extra=()
+          [ "$RUNNER_OS" = "Linux" ] && extra=(src-tauri/target/release/bundle/deb/*.deb)
+          for file in "${bundles[0]}" "${extra[@]}"; do
+            npx tauri signer sign --app-version "$version" "$file"
+            [ -s "$file.sig" ] || { echo "::error::no signature written for $file"; exit 1; }
+          done
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
       # The bundle CI just signed must verify with the public key in tauri.conf.json, the way the
-      # shipped app checks it; a mismatched key pair would ship a release nobody can update to.
+      # shipped app checks it (signature and signed version); a mismatched key pair would ship a
+      # release nobody can update to.
       - name: Check the updater signature
-        if: steps.updater.outputs.config != ''
+        if: steps.updater.outputs.signed == 'true'
         shell: bash
         run: |
           shopt -s nullglob
@@ -245,7 +261,7 @@ jobs:
 
       - name: Upload installers
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v4.6.2 # TODO pin SHA (docs/RELEASING.md)
         with:
           name: installers-${{ matrix.artifact }}
           path: ${{ matrix.bundle-glob }}
@@ -260,9 +276,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@v4.2.2 # TODO pin SHA (docs/RELEASING.md)
 
-      - uses: actions/download-artifact@v4.3.0
+      - uses: actions/download-artifact@v4.3.0 # TODO pin SHA (docs/RELEASING.md)
         with:
           path: installers
           pattern: installers-*

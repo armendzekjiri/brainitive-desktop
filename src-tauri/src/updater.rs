@@ -997,7 +997,7 @@ mod tests {
         ] {
             assert!(updater.get(flag).is_none_or(|v| v == false), "{flag}");
         }
-        // updater artifacts are switched on by CI only when the signing secret exists
+        // never on: CI builds without the updater key and signs the bundles afterwards (BRAI-377)
         assert!(config["bundle"]
             .get("createUpdaterArtifacts")
             .is_none_or(|v| v == false));

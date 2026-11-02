@@ -44,8 +44,10 @@ GitHub secrets (Settings → Secrets and variables → Actions):
 | A: `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Apple ID e-mail, app-specific password, Team ID |
 | B: `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_KEY_P8` | Key ID, Issuer ID, full text of the `.p8` |
 
-`tauri.conf.json` keeps `signingIdentity: null`; Tauri reads the `APPLE_*` variables the workflow
-exports. Hardened runtime is on; the only entitlements are `audio-input` (voice capture, without it
+`tauri.conf.json` keeps `signingIdentity: null`; Tauri reads the `APPLE_*` variables, which the
+workflow passes **only to the `tauri build` step** of the macOS runner (step `env:`, never
+`$GITHUB_ENV`; BRAI-377). Option B's `.p8` is written to the runner's temp folder (0600) by its own
+step and deleted right after the build. Hardened runtime is on; the only entitlements are `audio-input` (voice capture, without it
 a signed build never gets the microphone) and `network.client`. No JIT entitlement: WKWebView runs
 JavaScript in WebKit's own processes. If a signed build ever crashes on launch with a code-signing
 or JIT error, add the entitlement named in the crash log, not before.
@@ -67,10 +69,13 @@ reputation; identity validation needed, individuals in some regions only, check 
    `AZURE_TRUSTED_SIGNING_ENDPOINT` (e.g. `https://weu.codesigning.azure.net`, the region's
    endpoint), `AZURE_TRUSTED_SIGNING_ACCOUNT`, `AZURE_TRUSTED_SIGNING_PROFILE`.
 
-CI then installs `trusted-signing-cli` and passes a config overlay with
+CI then installs `trusted-signing-cli` **0.11.0** (pinned: `cargo install --version 0.11.0
+--locked`; check that `trusted-signing-cli --help` still has `-e -a -c -d` before bumping) and
+passes a config overlay with
 `bundle.windows.signCommand = "trusted-signing-cli -e … -a … -c … -d Brainitive %1"`
 (Tauri calls it for every binary and the installer). The overlay is written at build time, so
-`tauri.conf.json` itself never needs Azure.
+`tauri.conf.json` itself never needs Azure. `AZURE_TENANT_ID` / `_CLIENT_ID` / `_CLIENT_SECRET` go
+to the Windows `tauri build` step only (step `env:`).
 
 **Alternative: a `.pfx` (OV/EV) certificate.** Not wired in CI. EV certificates live on hardware
 tokens / cloud HSMs and usually need the vendor's signing tool; with an exportable OV `.pfx`:
@@ -129,9 +134,15 @@ npx tauri signer generate -w ~/.tauri/brainitive-desktop-updater.key
    them without any token. While the repo is private the updater finds nothing (it treats that as
    a failed check and tries again in an hour).
 
-Then tag builds add `bundle.createUpdaterArtifacts: true` as a config overlay (the committed config
-keeps it off so local and untagged builds never need the key), sign the updater bundles
-(`Brainitive.app.tar.gz` for macOS, the NSIS `-setup.exe`, the `.AppImage` and `.deb`), **check the
+Then signing builds (see "Who gets the secrets" below) build **without** the key (the committed
+config keeps `createUpdaterArtifacts` off and nothing switches it on), and a separate **Updater
+signing** step after `tauri build` — the only step that gets `TAURI_SIGNING_PRIVATE_KEY` — packs
+`Brainitive.app.tar.gz` from the signed, notarized `.app` (`COPYFILE_DISABLE=1 tar -czf … -C
+bundle/macos Brainitive.app`: the app at the archive's top level, the layout the updater unpacks)
+and signs the updater bundles with `npx tauri signer sign --app-version <tauri.conf.json version>`
+(`Brainitive.app.tar.gz` for macOS, the NSIS `-setup.exe`, the `.AppImage` and `.deb`;
+`--app-version` puts the version into the signed trusted comment that `requireSignedVersion`
+checks, as `tauri build` would). CI then **checks the
 signature against the committed public key** with the updater plugin itself (a mismatched pair fails
 the build instead of shipping a release nobody can update to), and the draft release gets a
 `latest.json` (`scripts/updater-manifest.mjs`; the `.sig` files go into it, not into the release).
@@ -157,6 +168,40 @@ The app checks 30 s after start and every 6 hours (1 hour after a failure; "Chec
 the app menu / Help menu / tray / Settings any time), downloads in the background, shows "Update
 ready — restart to install" and installs only when the user clicks **Restart to Update**.
 
+### Who gets the secrets (BRAI-377)
+
+- **Signing only runs for a `v*` tag push, or a manual run (Actions → Build → Run workflow) on the
+  default branch** (`SIGNING_ALLOWED` in `build.yml`). Pull requests, other branches and
+  `release` events never reach a signing step.
+- Every secret is passed through `env:` of the one step that uses it; nothing is written to
+  `$GITHUB_ENV` (which would hand it to every later step, `npm`, `cargo` and their build scripts
+  included). `tauri build` gets the Apple / Azure credentials of its own OS only; the updater key
+  never reaches `tauri build` at all.
+
+### Release blocker: pin the actions to commit SHAs
+
+`build.yml` and `ci.yml` should reference every action by a full commit SHA
+(`uses: owner/action@<40 hex> # vX.Y.Z`), so a moved tag can't change what runs next to the
+signing secrets. The SHAs could not be verified offline when BRAI-377 was fixed (no GitHub calls
+from that session), so the actions use exact tags marked `# TODO pin SHA`. **Before the first
+signed release**, for each one:
+
+```bash
+git ls-remote https://github.com/<owner>/<action> "refs/tags/<tag>*"   # annotated: use the ^{} line
+```
+
+replace `@<tag> # TODO pin SHA …` with `@<commit sha> # <tag>`, and push to a branch to see CI run.
+
+- [ ] `actions/checkout@v4.2.2` (build.yml twice, ci.yml)
+- [ ] `actions/setup-node@v4.4.0` (build.yml, ci.yml)
+- [ ] `dtolnay/rust-toolchain@1.90.0` (build.yml, ci.yml; a branch in that repo: pin the commit it
+      points to now)
+- [ ] `Swatinem/rust-cache@v2.8.0` (build.yml, ci.yml)
+- [ ] `actions/upload-artifact@v4.6.2` (build.yml)
+- [ ] `actions/download-artifact@v4.3.0` (build.yml)
+
+Dependabot (`package-ecosystem: github-actions`) can keep SHA pins and their comments current.
+
 ## 5. Cut a release
 
 1. Pick the version `X.Y.Z` (Desktop has its own numbers; CHANGELOG "Unreleased" → `## X.Y.Z`).
@@ -166,7 +211,8 @@ ready — restart to install" and installs only when the user clicks **Restart t
 4. The **Build** workflow runs on the tag: tests, three installers, a **draft** release with
    `SHA256SUMS` (and `latest.json` + updater bundles once the update key exists). Check each
    installer on a clean machine (install, open, `brainitive://` link, microphone), then publish the
-   draft. Manual runs (Actions → Build → Run workflow) only upload workflow artifacts.
+   draft. Manual runs (Actions → Build → Run workflow) only upload workflow artifacts; they are
+   signed only when started on the default branch.
 
 **Stable vs. beta.** A plain tag `vX.Y.Z` makes a normal release: publishing it moves GitHub's
 "latest", so every stable user gets it (and beta users too, when it is newer than their beta). A tag
