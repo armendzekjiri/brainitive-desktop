@@ -48,8 +48,13 @@ test("the rendered manifest has the app's version and no placeholder left", () =
   assert.match(xml, /<Identity\b[^>]*\bVersion="1\.2\.3\.0"/s);
   assert.doesNotMatch(xml, /\{\{/);
   assert.throws(() => render(`${template}{{OTHER}}`, { version: "1.2.3" }), /OTHER/);
-  // the default is tauri.conf.json's version, which must have an MSIX form
-  assert.equal(msixVersion(appVersion()), `${appVersion()}.0`);
+  // the default is tauri.conf.json's version: a plain X.Y.Z has an MSIX form; a pre-release
+  // (1.0.0-beta.2) has none, and the msstore job skips such tags
+  if (appVersion().includes("-")) {
+    assert.throws(() => msixVersion(appVersion()), /no MSIX form/);
+  } else {
+    assert.equal(msixVersion(appVersion()), `${appVersion()}.0`);
+  }
 });
 
 test("the identity is exactly the one in MICROSOFT-STORE-LISTING.md and msstore/mod.rs", () => {
