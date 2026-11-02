@@ -437,6 +437,14 @@ jobs:
           fi
           rm -f installers/*.sig
 
+      # the artifacts keep their bundle folders (dmg/, nsis/, deb/, appimage/): flat files for the release
+      - name: Flatten
+        working-directory: installers
+        run: |
+          find . -mindepth 2 -type f -exec mv -n {} . \;
+          find . -mindepth 1 -type d -empty -delete
+          ls -la
+
       - name: Checksums
         working-directory: installers
         run: sha256sum * > SHA256SUMS
