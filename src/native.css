@@ -186,3 +186,31 @@ kbd {
     font-size: 12px;
     text-align: center;
 }
+
+/* Settings → Shortcuts: the Brainitive key's letters (BRAI-440) */
+.settings h3 {
+    font-size: 13px;
+    font-weight: 600;
+    margin: 14px 0 2px;
+}
+
+.settings .small {
+    font-size: 12px;
+    margin: 0 0 4px;
+}
+
+.letter-row {
+    padding: 6px 0 6px 14px;
+}
+
+.letter-row .then {
+    font-size: 12px;
+}
+
+input.letter {
+    width: 2.4em;
+    padding: 4px 0;
+    text-align: center;
+    text-transform: uppercase;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

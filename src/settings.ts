@@ -1,5 +1,6 @@
 // The Settings window (menu → Settings…, ⌘, / Ctrl+,). Desktop preferences only; the account's
-// own settings stay in the web app ("Account & notifications…").
+// own settings stay in the web app ("Account & notifications…"). Shortcuts: the Brainitive key and
+// its letters (BRAI-440), then the optional direct shortcuts.
 
 import { invoke } from '@tauri-apps/api/core';
 import { $, errorMessage, onShown } from './native';
@@ -10,6 +11,8 @@ interface Prefs {
     server: string | null;
     signed_in: boolean;
     zoom_percent: number;
+    leader_shortcut: string;
+    leader_letters: Letter[];
     capture_shortcut: string;
     switcher_shortcut: string;
     voice_shortcut: string;
@@ -23,6 +26,16 @@ interface Prefs {
     start_hidden: boolean;
     shortcut_problem: string | null;
     updates: Updates;
+}
+
+// the Brainitive key's letters (BRAI-440)
+type LetterId = 'capture' | 'switcher' | 'voice' | 'main';
+
+interface Letter {
+    id: LetterId;
+    name: string;
+    letter: string;
+    default: string;
 }
 
 // auto-updates (BRAI-373)
@@ -44,7 +57,7 @@ interface Updates {
 
 type Toggle = 'keep_in_tray' | 'ask_where_to_save' | 'launch_at_login' | 'start_hidden' | 'voice_enabled';
 
-type Which = 'capture' | 'switcher' | 'voice';
+type Which = 'leader' | 'capture' | 'switcher' | 'voice';
 type Choice = { mode: 'off' } | { mode: 'default' } | { mode: 'keys'; keys: string };
 
 let recording: { which: Which; button: HTMLButtonElement } | null = null;
@@ -67,13 +80,67 @@ function render(p: Prefs): void {
     ($('open-account') as HTMLButtonElement).disabled = !p.signed_in;
     document.querySelectorAll<HTMLElement>('[data-shortcut]').forEach((row) => {
         const which = row.dataset.shortcut as Which;
-        const label = { capture: p.capture_shortcut, switcher: p.switcher_shortcut, voice: p.voice_shortcut }[which];
+        const label = {
+            leader: p.leader_shortcut,
+            capture: p.capture_shortcut,
+            switcher: p.switcher_shortcut,
+            voice: p.voice_shortcut,
+        }[which];
         const current = row.querySelector<HTMLElement>('.current');
         if (current) current.textContent = label || 'Off';
     });
+    renderLetters(p);
     renderVoice(p);
     renderUpdates(p.updates);
 }
+
+function renderLetters(p: Prefs): void {
+    document.querySelectorAll('.leader-label').forEach((el) => (el.textContent = p.leader_shortcut || 'Brainitive key'));
+    for (const l of p.leader_letters) {
+        const input = document.querySelector<HTMLInputElement>(`[data-letter="${l.id}"] input.letter`);
+        // a field being typed in keeps what the user typed (its error says why it was not taken)
+        if (input && document.activeElement !== input) input.value = l.letter;
+        const reset = document.querySelector<HTMLButtonElement>(`[data-letter="${l.id}"] .reset`);
+        if (reset) reset.disabled = l.letter === l.default;
+        if (l.id === 'voice') document.querySelectorAll('.voice-letter').forEach((el) => (el.textContent = l.letter));
+    }
+    // without the Brainitive key the letters do nothing
+    document.querySelectorAll<HTMLElement>('.letter-row').forEach((row) => row.classList.toggle('muted', !p.leader_shortcut));
+}
+
+function letterError(id: LetterId, message: string | null): void {
+    const el = document.querySelector<HTMLElement>(`.letter-error[data-for="${id}"]`);
+    if (!el) return;
+    el.textContent = message ?? '';
+    el.hidden = !message;
+}
+
+async function setLetter(id: LetterId, letter: string | null): Promise<boolean> {
+    letterError(id, null);
+    try {
+        render(await invoke<Prefs>('settings_set_leader_letter', { action: id, letter }));
+        return true;
+    } catch (e) {
+        letterError(id, errorMessage(e));
+        return false;
+    }
+}
+
+document.querySelectorAll<HTMLElement>('[data-letter]').forEach((row) => {
+    const id = row.dataset.letter as LetterId;
+    const input = row.querySelector<HTMLInputElement>('input.letter');
+    if (!input) return;
+    input.addEventListener('focus', () => input.select());
+    input.addEventListener('input', () => {
+        const value = input.value.trim();
+        if (!value) return;
+        // taken or not, the next key replaces it
+        void setLetter(id, value).then(() => input.select());
+    });
+    // a letter that was not taken goes back to the one in use (the error stays to say why)
+    input.addEventListener('blur', () => void refresh());
+    row.querySelector('.reset')?.addEventListener('click', () => void setLetter(id, null));
+});
 
 let updatePoll: number | undefined;
 let updateReady = false;

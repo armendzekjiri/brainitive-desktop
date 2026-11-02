@@ -32,8 +32,56 @@
       </section>
 
       <section>
-        <h2>Global shortcuts</h2>
+        <h2>Shortcuts</h2>
         <p id="shortcut-problem" class="error" hidden></p>
+        <div class="setting" data-shortcut="leader">
+          <span class="text">Brainitive key <small>Press it in any app, then one letter (A–Z).</small></span>
+          <span class="controls">
+            <kbd class="current"></kbd>
+            <button class="record" type="button">Change</button>
+            <button class="reset" type="button" title="Back to the default">Default</button>
+            <button class="off" type="button">Off</button>
+          </span>
+        </div>
+        <p class="error shortcut-error" data-for="leader" hidden></p>
+        <div class="setting letter-row" data-letter="capture">
+          <label class="text" for="letter-capture">Quick capture <small>Save an idea to your inbox.</small></label>
+          <span class="controls">
+            <span class="muted then"><span class="leader-label"></span>, then</span>
+            <input id="letter-capture" class="letter" type="text" maxlength="1" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+            <button class="reset" type="button" title="Back to the default letter">Default</button>
+          </span>
+        </div>
+        <p class="error letter-error" data-for="capture" hidden></p>
+        <div class="setting letter-row" data-letter="switcher">
+          <label class="text" for="letter-switcher">Quick switcher <small>Jump to an issue, doc or plan, copy a snippet, start a timer.</small></label>
+          <span class="controls">
+            <span class="muted then"><span class="leader-label"></span>, then</span>
+            <input id="letter-switcher" class="letter" type="text" maxlength="1" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+            <button class="reset" type="button" title="Back to the default letter">Default</button>
+          </span>
+        </div>
+        <p class="error letter-error" data-for="switcher" hidden></p>
+        <div class="setting letter-row" data-letter="voice">
+          <label class="text" for="letter-voice">Voice capture <small>Hold the letter and speak; let go to finish. Turn voice capture on below.</small></label>
+          <span class="controls">
+            <span class="muted then"><span class="leader-label"></span>, then</span>
+            <input id="letter-voice" class="letter" type="text" maxlength="1" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+            <button class="reset" type="button" title="Back to the default letter">Default</button>
+          </span>
+        </div>
+        <p class="error letter-error" data-for="voice" hidden></p>
+        <div class="setting letter-row" data-letter="main">
+          <label class="text" for="letter-main">Open Brainitive <small>Bring the main window to the front.</small></label>
+          <span class="controls">
+            <span class="muted then"><span class="leader-label"></span>, then</span>
+            <input id="letter-main" class="letter" type="text" maxlength="1" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+            <button class="reset" type="button" title="Back to the default letter">Default</button>
+          </span>
+        </div>
+        <p class="error letter-error" data-for="main" hidden></p>
+        <h3>Direct shortcuts (optional)</h3>
+        <p class="muted small">One shortcut straight to an action, without the letter. Quick switcher and voice capture are off unless you set them.</p>
         <div class="setting" data-shortcut="capture">
           <span class="text">Quick capture <small>Save an idea to your inbox from any app.</small></span>
           <span class="controls">
@@ -54,18 +102,8 @@
           </span>
         </div>
         <p class="error shortcut-error" data-for="switcher" hidden></p>
-      </section>
-
-      <section>
-        <h2>Voice capture</h2>
-        <div class="setting">
-          <label for="voice_enabled">Voice capture
-            <small>Hold the shortcut, speak, let go: the text opens in quick capture. Turned into text on this
-              computer; the audio is never saved or sent anywhere.</small></label>
-          <input id="voice_enabled" data-toggle="voice_enabled" type="checkbox" />
-        </div>
         <div class="setting" data-shortcut="voice">
-          <span class="text">Shortcut <small>Hold to talk, or tap to start and tap again to finish.</small></span>
+          <span class="text">Voice capture <small>Hold to talk, or tap to start and tap again to finish.</small></span>
           <span class="controls">
             <kbd class="current"></kbd>
             <button class="record" type="button">Change</button>
@@ -74,6 +112,16 @@
           </span>
         </div>
         <p class="error shortcut-error" data-for="voice" hidden></p>
+      </section>
+
+      <section>
+        <h2>Voice capture</h2>
+        <div class="setting">
+          <label for="voice_enabled">Voice capture
+            <small>Brainitive key, then hold <span class="voice-letter">V</span>, speak, let go: the text opens in quick capture. Turned into text on this
+              computer; the audio is never saved or sent anywhere.</small></label>
+          <input id="voice_enabled" data-toggle="voice_enabled" type="checkbox" />
+        </div>
         <div class="setting">
           <label for="voice_language">Language <small>Detect it each time, or choose the one you speak.</small></label>
           <select id="voice_language"></select>
