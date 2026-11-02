@@ -63,7 +63,7 @@ webview version for each run.
 | 1.15 Connect to a self-hosted host. | Window title reads "Brainitive — <host>" (no scheme, no path). | [ ] | [ ] | [ ] |
 | 1.16 Debug build: look at the connect screen. | **Local (localhost:8000)** and **Pre-release (dev.brainitive.app)** buttons are shown. | [ ] | [ ] | [ ] |
 | 1.17 Release build: look at the connect screen. | The Local and Pre-release buttons are not shown. | [ ] | [ ] | [ ] |
-| 1.18 Add a sixth server. | Recent list keeps the last 5 servers; the sixth replaces the oldest. | [ ] | [ ] | [ ] |
+| 1.18 Add a sixth server. | All six are listed, in the order they were added (up to 20; the 21st is refused with "Forget one … first"). | [ ] | [ ] | [ ] |
 | 1.19 Restart the app. | The last server is remembered and its check runs again on start. | [ ] | [ ] | [ ] |
 
 ## 2. Sign-in, sign-out, account switch, forget server
@@ -77,12 +77,37 @@ webview version for each run.
 | 2.5 Restart the app while signed in. | Opens straight into the web app, no sign-in again. | [ ] | [ ] | [ ] |
 | 2.6 Sign out from the web app's account menu. | Back on the sign-in screen. Keychain entry for that server is gone. Quick capture, switcher and offline windows are closed or empty when reopened. | [ ] | [ ] | [ ] |
 | 2.7 Sign in as account A, sign out, sign in as account B. | Account B sees its own My Day and captures; A's offline copy (section 12) is deleted. | [ ] | [ ] | [ ] |
-| 2.8 Signed in on server 1. Server → **Switch Server…** → server 2 → sign in there. Switch back to server 1 from the recent list. | Server 1 comes back signed in without a sign-in prompt. Each server keeps its own sign-in. | [ ] | [ ] | [ ] |
+| 2.8 Signed in on server 1. Server → **Switch Server…** → server 2 → sign in there. Switch back to server 1 from "Your servers". | Server 1 comes back signed in without a sign-in prompt. Each server keeps its own sign-in. | [ ] | [ ] | [ ] |
 | 2.9 Switch Server while extra app windows are open (section 5). | Extra windows close when the server changes. | [ ] | [ ] | [ ] |
 | 2.10 Click **Forget** next to a recent server that is not current. | That server disappears from the list; its keychain entry is removed; re-adding it asks for sign-in. | [ ] | [ ] | [ ] |
 | 2.11 Forget the server you are signed in to. | Signed out there, data deleted, back on the connect screen. | [ ] | [ ] | [ ] |
 | 2.12 Revoke the app's session on the server (log the session out from the web's session list), then wait or reload. | App returns to the sign-in screen. No blank page, no endless refresh spinner. | [ ] | [ ] | [ ] |
 | 2.13 Cancel the sign-in in the browser before it completes, or wait past the code's lifetime and sign in again. | The app recovers and signs in on the next attempt. | [ ] | [ ] | [ ] |
+
+## 2A. Switching servers (work / private)
+
+Two servers signed in (e.g. a self-hosted "Work" and Brainitive Cloud), a third saved but signed out.
+
+| Step | Expected | macOS | Windows | Linux |
+|---|---|---|---|---|
+| 2A.1 Brainitive (macOS) / File → **Servers**. | One line per server in the saved order, the current one checked, ⌃⌘1… / Alt+1… next to the first nine; then Add Server…, Manage Servers…. | [ ] | [ ] | [ ] |
+| 2A.2 Press ⌃⌘2 / Alt+2 in the main window (also while typing in a web editor). | Switches to server 2 without a sign-in; the title says its name; the menu check moves. No character is typed, no editor heading / list is toggled. | [ ] | [ ] | [ ] |
+| 2A.3 Windows (German layout): type `{ [ ] } @ \ ~` with AltGr in the web app. | All characters type; nothing switches servers. | n/a | [ ] | n/a |
+| 2A.4 Press ⌃⌘1 / Alt+1 while another app is in front. | Nothing happens there (menu shortcut only, not global). | [ ] | [ ] | [ ] |
+| 2A.5 Switch to the signed-out server (menu, tray, panel). | Its sign-in screen ("Sign in to <name>"); signing in opens it. The other servers stay signed in. | [ ] | [ ] | [ ] |
+| 2A.6 Tray right-click → **Servers** ▸ pick another server. | Switches; no shortcuts shown in the tray. | [ ] | [ ] | [ ] |
+| 2A.7 Menu-bar panel: click the name in the header ("Work ▾"), ↑ / ↓, ↩; Esc closes the list. | Switches; the panel reopens with the new server's data only (no old My Day / notifications / timer). | [ ] | [ ] | [ ] |
+| 2A.8 After a switch: badge, tray My Day / timer / unread, quick capture's "Saving to …", New task's projects. | All belong to the new server; the badge of the old one is gone. | [ ] | [ ] | [ ] |
+| 2A.9 Settings → Servers: rename "brain.acme.com" to "Work", empty the field again. | Title, menu, tray, panel follow at once; empty = back to the default (server name / host; Cloud = "Brainitive Cloud"). | [ ] | [ ] | [ ] |
+| 2A.10 ↑ / ↓ in Settings → Servers. | The menu order and ⌃⌘1…9 / Alt+1…9 follow. | [ ] | [ ] | [ ] |
+| 2A.11 **Sign out** of a server that is not current. | It stays in the list as "Signed out"; the current server is not touched; switching to it asks for sign-in. | [ ] | [ ] | [ ] |
+| 2A.12 **Forget** (twice) a server that is not current. | It leaves the list; the current server stays open. | [ ] | [ ] | [ ] |
+| 2A.13 Servers ▸ **Add Server…** while in a server; then **Back to <name>**. | Connect screen; back returns into the server without a sign-in. | [ ] | [ ] | [ ] |
+| 2A.14 Offline on server 1: tick a My Day item in the offline view, go online, switch to server 2 right away. | The tick is on server 1 (sent before the switch, or the next time server 1 is current) — never on server 2. | [ ] | [ ] | [ ] |
+| 2A.15 Quick capture offline on server 1, switch to server 2, go online. | The capture is not sent to server 2; it is sent after switching back to server 1. | [ ] | [ ] | [ ] |
+| 2A.16 Extra app windows (File → New Window) open, then switch. | They close (each window belongs to the current server). | [ ] | [ ] | [ ] |
+| 2A.17 Settings → Shortcuts: record ⌃⌘3 for quick capture (macOS). | Refused: "These keys switch servers …". | [ ] | n/a | n/a |
+| 2A.18 Switch quickly twice (⌃⌘2 then ⌃⌘1 before the first finished). | Ends on server 1; no flash of server 2's app. | [ ] | [ ] | [ ] |
 
 ## 3. Deep links (`brainitive://`)
 

@@ -16,11 +16,26 @@ dropped; `http://` only for `localhost` / `127.0.0.1`). The app asks the server
 (`GET /api/v1/instance`) and shows its name and version before you continue; certificate problems,
 "not a Brainitive server", a too-old server and a too-old app are shown as clear errors.
 
-You can change the server any time: **Server → Switch Server…** in the menu (or "Switch server" on
-the sign-in screen). The last 5 servers are listed for one-click switching. Each server keeps its
-own sign-in (keychain entry) and its own webview data, so switching does not sign you out.
-**Forget** next to a recent server signs this computer out there and deletes its data in the
-app. The window title shows where you are: "Brainitive — Cloud", "Brainitive — brainitive.example.com".
+## Several servers (work and private)
+
+Add as many servers as you use (up to 20) — for example your company's Brainitive for work and
+Brainitive Cloud for private — and switch between them in a second:
+
+- **Menu**: Brainitive (macOS) / File (Windows, Linux) → **Servers** ▸ one line per server, the
+  current one checked. **⌃⌘1…⌃⌘9** (macOS) / **Alt+1…Alt+9** (Windows, Linux) switch to the first
+  nine. **Add Server…** opens the connect screen without signing you out (**Back to …** returns),
+  **Manage Servers…** opens Settings → Servers. The same list is in the tray menu.
+- **Menu-bar panel**: click the server name in its header ("Work ▾") and pick another one.
+- **Settings → Servers**: rename a server (the default is "Brainitive Cloud", the server's own
+  name, or its address), see whether you are signed in and when you last used it, **Switch to**,
+  **Sign out** (it stays in the list), **Forget** (signs out and deletes its data on this
+  computer), and ↑ / ↓ to set the order of the shortcuts.
+
+Each server keeps its own sign-in (keychain entry), webview data, offline copy, waiting captures
+and New task choices, so switching never signs you out and never mixes data. Offline changes that
+are still waiting get a quick try before you leave a server; the rest is sent the next time you
+are on it. Only the current server is checked for notifications. The window title shows where you
+are: "Brainitive — Work".
 
 ## Native features
 

@@ -5,6 +5,24 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Several servers:
+
+- **Switch servers in a second**: Brainitive (macOS) / File → **Servers** lists every server you
+  added, the current one checked; **⌃⌘1…⌃⌘9** (macOS) / **Alt+1…Alt+9** (Windows, Linux) switch to
+  the first nine. The same list is in the tray menu, and the menu-bar panel's header is a switcher
+  ("Work ▾"). Switching keeps you signed in everywhere: going back needs no new sign-in.
+- **Names**: every server has a name — "Brainitive Cloud", the server's own name, or its address —
+  that you can change in **Settings → Servers**. It shows in the window title, menus, the panel
+  and the connect screen.
+- **Settings → Servers**: name, address, signed in or not, last used; **Switch to**, **Sign out**
+  (keeps the server in the list), **Forget**, **Add Server…**, and ↑ / ↓ to order them (the order
+  of the shortcuts).
+- **Add Server…** opens the connect screen without signing you out; **Back to …** returns.
+- Up to 20 servers (was the last 5): a server is no longer dropped from the list by itself.
+- Offline changes still waiting get a quick try before you leave a server, the rest is sent when
+  you are back on it; they can never go to another server (fixed: a sync running during a switch
+  could pick up the other server's waiting changes).
+
 New task:
 
 - **Create a task from any app**: press **⌃⌘T** (macOS) / **Ctrl+Alt+T** (Windows), or the

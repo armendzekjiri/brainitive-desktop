@@ -15,7 +15,7 @@ model download, no audio retention), BRAI-373 (auto-updates: signed bundles, cha
 | Access token `bra_…` (15 min) | Rust process memory only (`session.rs`). Never on disk, never in the webview. |
 | PKCE verifier + `state` of a sign-in in progress | Rust memory only, 15 min, consumed by the first matching callback. |
 | Web session cookie of the server | The webview's data store **for that server** (macOS 14+: `WKWebsiteDataStore(forIdentifier:)`; Windows / Linux: a data directory per server). |
-| Settings (current server, ≤ 5 recent servers, preferences: shortcuts, tray, downloads, zoom) | `settings.json` in the app config dir. No secrets. |
+| Settings (current server, ≤ 20 saved servers with their names / order / last use, preferences: shortcuts, tray, downloads, zoom) | `settings.json` in the app config dir. No secrets. |
 | Quick captures waiting to be sent (text, link, type, server origin, request id) | `capture-queue.json` in the app's local data dir, **plain text** (like the webview's own cache), mode 0600 in a 0700 folder on macOS / Linux (`private_fs`, BRAI-377), only while offline; deleted per server on sign-out / forget. |
 | Offline copy of the user's own data (BRAI-366): open work assigned to them, today's My Day, the kept task lists with their tasks, the private capture inbox, the account id and name, the sync cursor | `offline/<store id>/cache.json` in the app's local data dir, **plain JSON**, mode 0600, per server; no token, no cookie. Deleted on sign-out, forget and when another account signs in on that server. |
 | Offline changes waiting to be sent, and changes the server refused (with the user's text) | `offline/<store id>/outbox.json` next to it, same rules; refused ones until the user dismisses them. |
@@ -407,7 +407,46 @@ Sign out (menu, or the web app's own "Log out"): `POST /api/v1/auth/logout`, del
 entry, clear that server's webview data, and (BRAI-377) cancel a running voice recording, drop a
 transcript waiting for quick capture and destroy the quick-capture, switcher and offline windows (their
 text and last results). "Forget this server": the same, plus its webview data
-store is deleted and it leaves the recent list.
+store is deleted and it leaves the saved list. Settings → Servers → Sign out of a server that is
+not current: its device, keychain entry, queue and offline files, and its store (scheduled); it
+stays in the list.
+
+## Switching servers (several accounts)
+
+Threats: a page (or another server's page) switches the app to a server the user never added, a
+switch sends one server's data to another (outbox, captures, panel / New task answers, a late
+poll), or the old server's account stays readable after the switch.
+
+- **Ids, not URLs**: every switch command takes a saved server's **id** (`servers::server_id`, 16
+  hex characters of its store id) and looks it up in `settings.json`; an unknown id is refused.
+  Adding a server is only the connect flow (`check_server` → confirm → `use_server`, with its TLS /
+  redirect / version checks). The switch's restore asks `/api/v1/instance` again and refuses a
+  server that now redirects.
+- **Who may switch**: `switch_to_server` (main window's bundled screens, `capabilities/local.json`,
+  `ensure_main_screen`), `panel_switch_server` (`panel.json`, `ensure_caller(Panel)`), the
+  `settings_*_server(s)` commands (`settings.json`, `ensure_caller(Settings)` first — tested), the
+  native app menu and tray (Rust). No remote page can call any of them; the bridge still has its
+  four commands only.
+- **Menu shortcuts are local**: ⌃⌘1…9 / Alt+1…9 are menu accelerators of the app (only while it is
+  in front), never registered globally; Settings refuses a global shortcut on those keys.
+- **No data across servers**: tokens stay per origin in the keychain (a switch keeps them, so going
+  back needs no sign-in); the capture queue, offline files and New-task memory are per origin;
+  in memory the switch bumps `account_epoch` (every poll, panel load, New-task call answering for
+  the old server is dropped by its ticket), clears the panel / New-task / tray answers and the
+  ETags (now keyed by origin + path, so a 304 can't hand one server's body to another), unloads
+  the offline data and destroys the windows that hold account data. The old server's outbox is
+  sent to **that** origin only (bounded, before the switch); a sync still running stops at its
+  next step because loading / unloading the offline data bumps its epoch (before, it could take
+  the newly loaded server's outbox to the old origin). Captures queued for a server are only sent
+  while it is current.
+- `app-<n>` windows close on a switch: they share the main window's store and the guard / bridge
+  check of the current origin.
+- **Sign out** in Settings for a server that is not current revokes that device on the server,
+  deletes its keychain entry, queue and offline files, and schedules its webview store for
+  deletion; **Forget** does the same and removes it from the list.
+- Names are the user's or the server's (`/api/v1/instance`), cleaned (no control or bidi
+  characters, ≤ 60) and rendered with `textContent` / as native menu text only (`&` escaped for
+  Windows / GTK mnemonics).
 
 ## Unreachable and "update required" screens (BRAI-367)
 

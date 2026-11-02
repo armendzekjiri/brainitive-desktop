@@ -101,3 +101,86 @@ files (the new commands only in their window's file, every one checks its caller
   menu / panel switcher, a badge sum), at a lower rate and with its own `PollTicket` per origin.
 - Keep the old server's main webview alive (one hidden main window per server) for an instant
   switch back, at the cost of memory.
+
+## Result
+
+**Built**
+
+- `servers.rs` (pure): ids, default names (Brainitive Cloud / the instance's own name, the stock
+  "Brainitive" counts as none / the host), name cleaning (control + bidi characters, ≤ 60), up /
+  down, ⌃⌘1…9 (macOS) / Alt+1…9 (Windows, Linux) accelerators, choices, `takes_server_keys`.
+- `settings.rs`: `custom_name`, the user's order (`remember` keeps a saved server's place, appends
+  a new one), `touch`, `update_instance`, `rename`, `schedule_wipe`, `label_of`, limit 20
+  (`is_full_for`; `use_server` refuses a 21st).
+- `flows.rs`: `switch_to`, `leave_server` (bounded outbox try, voice cancelled, account windows
+  destroyed, `drop_account_state`), `servers_changed`, `sign_out_server` (not current: stays in the
+  list), `use_server` leaves the old server too, a restore of a server that is no longer current
+  shows nothing, the instance check refreshes the saved name, Forget of a server that is not
+  current leaves the app where it is.
+- `offline.rs`: `ensure` bumps `epoch` / `load` when the server changes, `unload`,
+  `send_before_leaving` (≤ 3 s, outbox only); a sync of a previous load no longer touches the
+  current one's state. **Bug fixed**: a sync running during a switch could take the newly loaded
+  server's outbox and post it to the old origin. ETag cache keyed by origin + path.
+- Menu: Brainitive (macOS) / File → **Servers ▸** (check items, accelerators, Add Server…, Manage
+  Servers…), rebuilt by `menu::refresh_servers`. Tray: **Servers ▸** under the server line (no
+  shortcuts). Names in the title, the Server menu line, tray, panel, quick capture, switcher, New
+  task and offline view.
+- Commands (ids only, caller checked first): `switch_to_server` (local.json),
+  `panel_switch_server` (panel.json), `settings_servers` / `_rename_server` / `_move_server` /
+  `_switch_server` / `_sign_out_server` / `_forget_server` / `_add_server` (settings.json); Settings
+  refuses a global shortcut on a server key.
+- Pages: Settings → Servers (name field, host, signed in, last used, shortcut, Switch to / Sign out
+  / Forget, ↑ / ↓, Add Server…; Manage Servers… scrolls there); the panel header's switcher
+  ("Work ▾", ↑↓ / Esc) and "Switch to …" links when signed out; the connect screen's "Your servers"
+  (by name, switched by id) and "Back to <current>".
+
+**Choices**
+
+- Windows / Linux shortcuts are **Alt+1…9**, not Ctrl+Alt+1…9: Ctrl+Alt is AltGr on Windows
+  (AltGr+7/8/9/0 type `{ [ ] }` on German layouts: a menu accelerator would swallow them) and the
+  web editor (TipTap) uses Ctrl+Alt+1–6 / Ctrl+Shift+7–9. macOS keeps ⌃⌘1…9 (free: menus use ⌘,
+  TipTap ⌥⌘ / ⇧⌘, Spaces ⌃1–9).
+- **app-<n> windows close** on a switch: the navigation guard, the bridge's caller check and the
+  store bookkeeping follow the current origin, so a window left on the old server would see its
+  own links treated as foreign, its bridge calls refused, and its store could be wiped by a Forget.
+- Outbox: **before** the switch, bounded (3 s, only when there is something and the app is in the
+  old server online); the rest when that server is current again. From the connect screen (not
+  in the app) nothing is tried before; the changes wait on disk for that server.
+
+**Tests**: `cargo test`: 303 unit tests (16 new: default names, name cleaning, ids, moves, the
+nine accelerators, no clash with any menu / global / editor shortcut on both patterns, a global
+shortcut on a server key, choices, the saved order + touch, the limit, rename / reconnect / old
+files, the switch dropping every in-memory account answer while queue / New-task memory / the
+saved entry stay per origin, an old poll ticket dropped after a switch and back, sign-out vs.
+forget, a running sync stopped by another server / unload, per-server ETags, tray Servers ▸;
+updated: tray ids, menu ids) + 14 capability tests (2 new: the switch commands only in their
+window's file, every one checks its caller first and none takes an origin / URL). `cargo clippy
+--all-targets -D warnings`, `cargo fmt --check`, `npm run build`, `npx tauri build --debug
+--bundles app` green (`src-tauri/target/debug/bundle/macos/Brainitive.app`).
+
+**Checked visually**: the built Settings and panel pages in headless Chrome with mocked commands
+(dark): Settings → Servers scrolled into view, the open header switcher, the signed-out links.
+
+**Commits**: `47c896d` plan · `ac853ef` Rust (servers, settings, flows, offline, menu, tray,
+commands, capabilities) · `623f5d1` pages · docs (this one).
+
+**Not tested**
+
+- The running app was not launched (as asked): a real switch (main window rebuild on the other
+  store, no new sign-in), ⌃⌘1…9 reaching the menu while the web page has the focus (WKWebView
+  passes ⌃⌘ key equivalents to the menu as far as known; WebView2 / WebKitGTK Alt+digit
+  unverified), the check marks after a click, the tray submenu, the bounded outbox send — QA 2A.
+- Settings reads the keychain once per saved server to show "Signed in": unsigned debug builds
+  may ask for keychain access per server (signed builds don't).
+- Windows / Linux not built or run here.
+
+## Open questions
+
+- **Signed in** means "a refresh token is in the keychain", not "the server still accepts it"
+  (a device revoked on the web shows as signed in until the next switch / restore). Checking each
+  would cost a refresh per server.
+- **Unread per server** for the switcher (a dot next to "Private") needs polling every signed-in
+  server (follow-up idea above); there is no cross-server endpoint, and none is needed in the API.
+- The stock instance name "Brainitive" is treated as "no name". A self-hosted admin can set
+  `APP_NAME`; if the server had a separate "instance display name" setting, `/api/v1/instance`
+  could carry it — not needed now (no API change made).

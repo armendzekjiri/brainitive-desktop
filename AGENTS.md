@@ -46,7 +46,7 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
   you made: the owner does (docs/RELEASING.md). Tests make throwaway keys in the test. Updater
   requests stay https on GitHub hosts (`updater::allowed_url`); nothing installs without the user's
   "Restart to Update" click.
-- Pure logic goes in the pure modules (`server`, `links`, `pkce`, `version`, `settings`,
+- Pure logic goes in the pure modules (`server`, `servers`, `links`, `pkce`, `version`, `settings`,
   `shortcuts`, `queue`, `offline_cache`, `outbox`, `poll`, `badge`, `voice::recorder`, and the pure
   parts of `tray` / `switcher` / `downloads` / `voice::model` / `voice::audio` / `updater`) with
   unit tests.

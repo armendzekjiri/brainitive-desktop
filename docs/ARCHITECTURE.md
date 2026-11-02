@@ -33,6 +33,7 @@ desktop/
     ├── src/
     │   ├── lib.rs              plugins, commands, menu, deep-link + notification wiring, run loop
     │   ├── server.rs           ServerOrigin: typed address → origin, TLS rule, store ids   (pure)
+    │   ├── servers.rs          saved servers: ids, default names, order, ⌃⌘1…9 / Alt+1…9  (pure)
     │   ├── links.rs            navigation + page-load decisions, deep-link parsing and target
     │   │                       guard (no auth pages), bundled origin per OS, URL validation (pure)
     │   ├── private_fs.rs       0600 files / 0700 folders, atomic writes (queue, offline, update)
@@ -105,13 +106,49 @@ never auto-trusted), **server too old** (404 on `/api/v1/instance` but `/site.we
 Brainitive's theme colour), **app too old** (`min_versions.desktop`). Debug builds also offer
 the pre-release (`dev.brainitive.app`) and local (`localhost:8000`) servers.
 
-The host can be changed any time: **Server → Switch Server…** in the menu (and a "Switch server"
-button on the sign-in / unreachable screens) returns to the choice. Up to **5 recent servers**
-(name + URL) are remembered for one-click switching. Each server has **its own keychain entry**
-(account = origin) and **its own webview data store**, so switching does not sign you out of the
-other one. **Forget** (two clicks, recent list) signs that device out on the server, deletes its
-keychain entry and its webview data, and removes it from the list. The window title and the
-Server menu show the current server ("Brainitive — Cloud", "Brainitive — brainitive.example.com").
+The host can be changed any time: **Server → Switch Server…** / **Servers ▸ Add Server…** (and a
+"Switch server" button on the sign-in / unreachable screens) returns to the choice, whose "Back to
+…" goes back without a new sign-in. Each server has **its own keychain entry** (account = origin)
+and **its own webview data store**, so switching does not sign you out of the other one.
+**Forget** (two clicks) signs that device out on the server, deletes its keychain entry and its
+webview data, and removes it from the list.
+
+### Saved servers and fast switching
+
+- **List** (`settings.recent`, the JSON key from when it was a recent list): the user's order,
+  up to `servers::MAX_SERVERS` = 20 (a 21st is refused, nothing is dropped silently). `remember`
+  keeps a saved server's place and appends a new one; `touch` (a switch) only sets current + last
+  used.
+- **Names** (`RecentServer::label`): `custom_name` (Settings, `servers::clean_name`: no control /
+  bidi characters, ≤ 60) else `servers::default_name`: "Brainitive Cloud" for the cloud, the
+  instance's own name (`/api/v1/instance`, refreshed by every instance check; the stock
+  "Brainitive" counts as none), else the host. Shown in the window title ("Brainitive — Work"),
+  the Server menu line, Servers ▸, the tray, the panel header, the Choose screen, quick capture,
+  the switcher, New task and the offline view.
+- **Ids**: commands name a server by `servers::server_id` (16 hex characters of its store id),
+  looked up in the list; menu ids `server-pick:<id>`, tray ids `tray-server:<id>`.
+- **Switch** (`flows::switch_to`, from Servers ▸ / ⌃⌘1…9, the tray, the panel's switcher,
+  Settings, the Choose screen): already current → nothing (or a restore from a bundled screen);
+  else `leave_server(old)` → `Settings::touch(new)` → `servers_changed` (title, Servers menu, tray,
+  panel) → `restore(new)` (instance gate, web session from the stored sign-in, `enter_app` →
+  `open_main` rebuilds the main window on the new server's store; no / refused token → its
+  sign-in screen). `use_server` (Choose screen) runs `leave_server` too.
+- **`leave_server`**: the old server's outbox gets one bounded try (`offline::send_before_leaving`,
+  ≤ 3 s, only while in the app there, online and with waiting changes, outbox only, to the old
+  origin); then the voice recording is cancelled, the account windows (capture, switcher, offline,
+  panel, New task) destroyed, and `drop_account_state`: `account_epoch` + 1, panel and New-task
+  answers, tray data, ETags, capture prefill, instance, last page, and `OfflineData::unload`.
+  Kept: keychain entry, webview store, offline files, capture queue (per origin) and New-task
+  memory (per origin). The `app-<n>` windows close (`show_local` / `open_main`): guard, bridge
+  check and store all follow the current origin.
+- A restore whose server is no longer current when its answers arrive shows nothing
+  (`restore_inner`), so two quick switches end on the last one.
+- **Sign out** of a server that is not current (Settings): device signed out on the server,
+  keychain entry, capture queue, offline files; its store is scheduled like Forget's
+  (`Settings::schedule_wipe`) — it stays in the list. Forgetting a server that is not current
+  leaves the app where it is.
+- Only the current server is polled (tray, badge, panel); see the follow-up ideas in
+  `docs/tasks/server-switching.md`.
 
 ## Webview data per server
 
@@ -211,7 +248,12 @@ opens the directory. Nothing is ever sent anywhere.
 
 ## Menus and shortcuts (BRAI-362)
 
-`menu.rs`: Brainitive (macOS) / File: Settings… ⌘, · New Issue ⌘N · New Doc ⌥⌘N · New Window ⇧⌘N
+`menu.rs`: Brainitive (macOS) / File: Settings… ⌘, · **Servers ▸** (the saved servers as check
+items, current checked, ⌃⌘1…⌃⌘9 on macOS / Alt+1…Alt+9 on Windows / Linux for the first nine —
+menu accelerators only, never global; Ctrl+Alt+digit would be AltGr+digit on Windows, which types
+`{ [ ] }` on many layouts, and the web editor uses Ctrl+Alt+1–6 / Ctrl+Shift+7–9; then Add
+Server…, Manage Servers…; rebuilt by `menu::refresh_servers`; Settings refuses a global shortcut on
+those keys) · New Issue ⌘N · New Doc ⌥⌘N · New Window ⇧⌘N
 · Brainitive Key… / Quick Capture / Quick Switcher / Voice Capture (their global shortcut shown; New task is in the tray and the panel, not the File menu, whose ⌘N is the web's New Issue) · Close Window ⌘W · Quit; Edit;
 View: Back ⌘[ · Forward ⌘] · Reload ⌘R · Actual Size ⌘0 · Zoom In ⌘= · Zoom Out ⌘-; Go: Search… ⌘K ·
 Dashboard ⇧⌘H · My Work ⇧⌘M · Captures · Notifications · Account Settings; Server; Window (macOS);
@@ -421,11 +463,15 @@ mouse-up; a click within 0.4 s after the panel hid on blur is the click that blu
   assigned work, Today = due work without events). Done ticks → the outbox (`work.done`,
   `offline::queue_work_done`); a tick whose request finds no server goes there too. Timer and
   mark-read have no sync type: disabled with a hint. Header dot: `view::sync_status`.
-- **Signed out / no server**: "Sign in to Brainitive" / "Connect to Brainitive" + Open Brainitive.
+- **Signed out / no server**: "Sign in to Brainitive" / "Connect to Brainitive" + Open Brainitive,
+  and "Switch to <name>" for the other saved servers.
+- **Server switcher**: the header's name is a button ("Work ▾") with the saved servers
+  (`Head.servers`: ids, names, hosts, shortcuts) and Manage Servers…; a pick calls
+  `panel_switch_server {id}` → `menu::pick_server` (the panel hides and is destroyed by the switch).
 
 ## Tray / menu bar (BRAI-360) and badge (BRAI-361)
 
-A native menu (right click on the icon; left click opens the menu-bar panel above; `tray.rs`, no webview): server line, Brainitive Key… (while the key is on), Quick
+A native menu (right click on the icon; left click opens the menu-bar panel above; `tray.rs`, no webview): server line, **Servers ▸** (the saved servers as check items, Add Server…, Manage Servers…; no shortcuts), Brainitive Key… (while the key is on), Quick
 Capture, New Task…, Quick Switcher, Voice Capture, My Day (check
 items → `PATCH /me/my-day/items/{id}`), the running timer (Stop and Log Time → `POST /me/timer/stop`
 with the default activity when one is required; Discard), unread notifications (→ `/notifications`),
@@ -484,7 +530,10 @@ bundled `offline` window shows it:
   Offline View…** and **Sync Now**; a notification says when queued changes were sent and when some
   could not be applied (click → the offline window).
 - **Deleted** on sign-out, forget, and when another account signs in on the same server. Switching
-  servers keeps each server's files.
+  servers keeps each server's files; the old server's data is unloaded (`OfflineData::unload`) and
+  loading another server (`ensure`) bumps `epoch` and `load`, so a sync of the old server that is
+  still running stops at its next step (it can never take the new server's outbox to the old
+  origin) and leaves `syncing` / `last_error` / `online` of the new one alone.
 
 ## Downloads and files (BRAI-363)
 
@@ -565,7 +614,10 @@ error parsing, API request paths, call-error classification, shortcut rules and 
 Brainitive key (letters, conflicts, migration of old defaults, labels per OS), the capture
 queue, the voice recorder state machine, model download verification / removal, resampling and the
 meter, transcript clean-up, polling backoff / wake / plan, tray menu model and API parsing, the menu-bar panel (placement per bar edge / monitor / clamping,
-tray clicks, each tab's mapping, ids it may act on, offline decisions), New task (defaults per OS,
+tray clicks, each tab's mapping, ids it may act on, offline decisions), saved servers (default
+names, name cleaning, order / moves, the limit, ⌃⌘1…9 / Alt+1…9 vs. every menu, global and editor
+shortcut, the switch dropping every in-memory account answer while queue / memory stay per origin,
+sign-out vs. forget, a running sync stopped by a switch, per-server ETags, tray Servers ▸), New task (defaults per OS,
 migration, letter T, memory per server, destinations / config parsing, payload, request id reuse,
 error mapping, window height), switcher result parsing,
 download names / moves, the overlay badge, menu ids / accelerators, updater channels / URLs /
