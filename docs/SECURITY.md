@@ -5,7 +5,7 @@ shell that can touch the OS. The main risk is remote content getting native powe
 not have. Cards: BRAI-351 (remote IPC, CSP, navigation guard), BRAI-428 (app API security),
 phase 05: BRAI-359 / 360 / 361 / 362 / 363 / 364 / 401 (native windows, global shortcuts, tray,
 downloads, autostart), BRAI-366 (offline copy and outbox), BRAI-439 (voice capture: microphone,
-model download, no audio retention).
+model download, no audio retention), BRAI-373 (auto-updates: signed bundles, channels).
 
 ## Assets
 
@@ -23,6 +23,9 @@ model download, no audio retention).
 | Voice capture audio (BRAI-439) | **Process memory only**, while recording and transcribing (≤ 2 min, mono f32), zeroed and freed afterwards. Never written to disk, never sent anywhere. |
 | Voice transcript | Memory, then the quick-capture window's text field (like typed text); saved / queued only when the user saves the capture. Never logged. |
 | Speech model (`ggml-small-q5_1.bin`, 190 MB) | `<app local data>/voice/`, a public file (no user data); removed with "Remove voice model". |
+| Update signing key (minisign / Ed25519, BRAI-373) | **Private key**: offline with the owner (backed up) and in the GitHub secrets `TAURI_SIGNING_PRIVATE_KEY` / `_PASSWORD`, used only by the tag build's `tauri build` step. **Public key**: compiled into the app (`tauri.conf.json` → `plugins.updater.pubkey`). |
+| A downloaded update waiting for "Restart to Update" | `<app cache>/update/pending.update`, mode 0600, deleted at start, on a channel change and after a failed install. |
+| Update preferences (automatic checks, channel, last check time) | `settings.json`. No secrets. |
 | Login item (launch at login) | macOS LaunchAgent plist / Windows Run registry key / Linux autostart `.desktop` file, written only when the user turns it on. |
 
 ## Who can do what
@@ -177,6 +180,55 @@ redirected somewhere else.
 - **Loading the model**: only the verified file is ever renamed into place; its size is checked
   again before each recording. A same-user process could swap the file afterwards — it could
   equally change the app itself (accepted).
+
+## Auto-updates (BRAI-373)
+
+Threats: someone ships code to every user through the updater — a tampered bundle, a manifest
+on a host we don't control, a downgrade to an old vulnerable release, a mix-up between channels —
+or an update replaces the app while the user works.
+
+- **Only signed bundles install.** `tauri-plugin-updater` (`=2.14.0`) verifies the bundle's minisign
+  (Ed25519) signature against the public key **compiled into the app** before it returns the
+  download, and again on install (the staged file is re-read and re-verified, so swapping it on disk
+  does not help). Neither the manifest nor the server can supply another key.
+- **Signature bound to the version.** `requireSignedVersion: true`: the signed trusted comment
+  carries the version the bundle was built as (Tauri CLI ≥ 2.12), and it must equal the version the
+  manifest announces. The manifest itself is not signed; this is what stops a tampered manifest from
+  pairing "9.9.9" with a validly signed **old** bundle.
+- **No downgrades.** Only a strictly higher version is an update (our comparator, semver:
+  `1.0.0-beta.2 < 1.0.0`); `allowDowngrades` stays off (`cargo test` checks the config).
+- **Placeholder guard.** While `plugins.updater.pubkey` is the repo's placeholder or anything that is
+  not a minisign Ed25519 public key, and in every development build, the updater does not run at
+  all: no request, nothing downloaded or installed, "Check for Updates…" greyed out, Settings and the
+  log say why (`updater::availability`). CI makes no updater bundles while the placeholder is in.
+- **Network.** New hosts, used for updates only: `github.com` (manifests and release assets of
+  `armendzekjiri/brainitive-desktop`) and GitHub's asset CDN `objects.githubusercontent.com` /
+  `release-assets.githubusercontent.com`. The client is https only (`https_only`), follows ≤ 5
+  redirects and **each hop must be https on one of those hosts** (`updater::allowed_url`, standard
+  port, no user info); the bundle URL from the manifest must be on them too. OS trust store (rustls),
+  a plain client: no cookies, no tokens, no account or server data; the request carries the plugin's
+  user agent only (our manifest URLs are fixed: no version / OS / arch placeholders in them). Manifest request timeout 30 s.
+- **Channels.** Stable = GitHub's "latest" release, which is never a pre-release or draft; beta =
+  `beta.json` of the rolling `updater-beta` pre-release **plus** stable, the higher version wins.
+  Switching channel never downgrades; a waiting update of the other channel is dropped.
+- **The user decides when.** Checks and downloads run in the background; installing happens only on
+  a click on "Restart to Update" (app menu, tray, Settings, the "Please update" screen). Nothing
+  restarts by itself. Windows runs the NSIS installer in passive mode (progress bar) and restarts the
+  app; macOS may ask for an admin password when the app lives in a folder the user can't write.
+- **Who can trigger it.** The commands are local only: `check_for_update` / `restart_to_update` (main
+  window's bundled screens, `capabilities/local.json`, plus a check that the caller is the main
+  window on a bundled origin) and `settings_set_update_channel` / `settings_check_for_updates` /
+  `settings_restart_to_update` (Settings window). The plugin's own JavaScript commands are granted
+  to no webview (`tests/capabilities.rs`); remote pages can neither check nor install.
+- **Logs** name versions and failure reasons, never more than a URL on GitHub.
+
+Accepted risks: the manifest is not signed, so whoever controls the GitHub repo (or TLS to
+github.com) can **withhold** updates (freeze users on the current version) or offer a version that
+doesn't exist (the download then fails verification) — but cannot install anything without the
+private key. **A stolen private key plus control of the releases is a full compromise** of every
+installed app: the key is kept offline, only GitHub Actions has a copy, and only the tag build's
+`tauri build` step sees it. Rotating it needs one release signed with the old key that carries the
+new public key (docs/RELEASING.md). The repo must publish its releases publicly for updates to work.
 
 ## Tray, polling, clipboard
 

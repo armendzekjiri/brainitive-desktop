@@ -5,6 +5,22 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Auto-updates (BRAI-373, ready; switched on once the owner adds the update signing key):
+
+- **Updates install themselves — when you say so**: the app checks 30 seconds after it starts and
+  every 6 hours, downloads a new version in the background and tells you "Update ready — restart to
+  install". It installs only when you choose **Restart to Update** (app menu, tray, Settings).
+  "Check for Updates…" is in the app menu (macOS) / Help menu (Windows, Linux) and the tray.
+- **Signed updates only**: every update is checked against the signing key built into the app and
+  must be signed for exactly the version it claims; older or equal versions are never installed.
+  Downloads come from GitHub over https only.
+- **Beta channel**: Settings → Updates → "Get beta updates" for pre-release versions; stable is the
+  default. Settings also shows the version, the last check and lets you turn automatic checks off.
+- **"Please update" screen**: when your server needs a newer app, "Check for update now" fetches it
+  right there.
+- Builds without the signing key (and development builds) never check or install updates; the menu
+  item is greyed out and Settings says why.
+
 Build and distribution (phase 10, prepared; needs the owner's accounts to sign):
 
 - **CI build** (`.github/workflows/build.yml`): macOS universal `.dmg`, Windows x64 NSIS installer,

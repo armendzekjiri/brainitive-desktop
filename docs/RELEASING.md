@@ -1,8 +1,8 @@
 # Releasing Brainitive Desktop (phase 10)
 
 Everything in the repo is ready; what is missing are **accounts and secrets**. Until they exist the
-CI (`.github/workflows/build.yml`) builds **unsigned** installers (Gatekeeper / SmartScreen warn).
-Nothing here is wired to the auto-updater yet (BRAI-373).
+CI (`.github/workflows/build.yml`) builds **unsigned** installers (Gatekeeper / SmartScreen warn),
+and the auto-updater (BRAI-373) stays **off** in every build until its key exists (section 4).
 
 ## What is ready vs. what waits for you
 
@@ -14,6 +14,7 @@ Nothing here is wired to the auto-updater yet (BRAI-373).
 | Windows signing | **waits for Azure Trusted Signing (or a certificate)** and 6 secrets |
 | NSIS per-user install, Start menu, `brainitive://`, WebView2 bootstrapper; Linux `.desktop` MimeType, `.deb` deps | ready (`bundle.*` in `tauri.conf.json`) |
 | Download buttons on the website | **waits for the first published release** (3 env values) |
+| Auto-updater: plugin, stable / beta channels, signed updater bundles, `latest.json`, beta manifest | code + CI ready; **waits for the update key pair** (public key in `tauri.conf.json`, 2 secrets) and **public release assets** |
 
 The local token needs the `workflow` scope to push workflow files: `gh auth refresh -s workflow`.
 
@@ -90,18 +91,103 @@ for the microphone) and **AppImage** (built on Ubuntu 22.04 so it runs on glibc 
 Both get the `.desktop` entry with `MimeType=x-scheme-handler/brainitive` from the deep-link
 config, and the icons from `src-tauri/icons`. Not signed. Wayland has no global shortcuts (known).
 
-## 4. Cut a release
+## 4. Auto-updates: the update signing key (BRAI-373)
+
+The app installs an update only when the bundle's **minisign (Ed25519) signature** matches the
+public key compiled into it (`src-tauri/tauri.conf.json` → `plugins.updater.pubkey`) and the
+signature names the version the manifest announces (`requireSignedVersion`). That key is
+independent of the Apple / Azure code signing. The repo carries a **placeholder**: while it is
+there, the app logs `updater: off (PlaceholderKey)`, greys out "Check for Updates…" and never asks
+the network for an update, and CI makes no updater bundles.
+
+### Create the key pair (once, on your own machine)
+
+```bash
+npx tauri signer generate -w ~/.tauri/brainitive-desktop-updater.key
+```
+
+- Set a **password** when asked (it protects the key file; CI needs it too).
+- It writes `~/.tauri/brainitive-desktop-updater.key` (**private**) and `….key.pub` (public).
+- Keep the private key **offline and backed up** (password manager entry or an encrypted USB stick,
+  plus a second copy). Never commit it, never paste it into an issue or chat.
+- **Losing the private key or its password means installed apps can never update again**: every
+  user would have to download a new build (with a new key) by hand. There is no recovery.
+
+### Put it in place
+
+1. Public key → `src-tauri/tauri.conf.json`, `plugins.updater.pubkey`: replace the whole
+   `PLACEHOLDER-…` string with the **content** of `….key.pub` (one base64 line, as printed). Commit
+   it — it is public. `cargo test` checks it is a real minisign key (or still the placeholder).
+2. GitHub secrets (Settings → Secrets and variables → Actions):
+
+   | Secret | Value |
+   | --- | --- |
+   | `TAURI_SIGNING_PRIVATE_KEY` | the **content** of `~/.tauri/brainitive-desktop-updater.key` |
+   | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password |
+
+3. The release assets must be **public** (public repo, or at least public releases): the app reads
+   them without any token. While the repo is private the updater finds nothing (it treats that as
+   a failed check and tries again in an hour).
+
+Then tag builds add `bundle.createUpdaterArtifacts: true` as a config overlay (the committed config
+keeps it off so local and untagged builds never need the key), sign the updater bundles
+(`Brainitive.app.tar.gz` for macOS, the NSIS `-setup.exe`, the `.AppImage` and `.deb`), **check the
+signature against the committed public key** with the updater plugin itself (a mismatched pair fails
+the build instead of shipping a release nobody can update to), and the draft release gets a
+`latest.json` (`scripts/updater-manifest.mjs`; the `.sig` files go into it, not into the release).
+Without the secret (or with the placeholder still in the config) the updater bundles are skipped
+and nothing fails.
+
+Rotating the key (only if it leaked): ship one last release signed with the **old** key whose
+config contains the **new** public key; after users have it, sign with the new key only. Revoke by
+deleting the old secrets.
+
+### Channels
+
+| Channel | Who | The app reads |
+| --- | --- | --- |
+| **stable** (default) | everyone | `https://github.com/armendzekjiri/brainitive-desktop/releases/latest/download/latest.json` — GitHub's "latest" = the newest **published, non-pre-release** release |
+| **beta** (Settings → "Get beta updates") | testers | `…/releases/download/updater-beta/beta.json` **and** the stable `latest.json`; the higher version wins |
+
+`updater-beta` is a rolling **pre-release** that only holds `beta.json`. CI creates it the first time a
+pre-release is published and replaces `beta.json` each time; it stays marked pre-release so it never
+becomes "latest". Don't delete it (beta users would fall back to stable updates only, which is safe).
+
+The app checks 30 s after start and every 6 hours (1 hour after a failure; "Check for Updates…" in
+the app menu / Help menu / tray / Settings any time), downloads in the background, shows "Update
+ready — restart to install" and installs only when the user clicks **Restart to Update**.
+
+## 5. Cut a release
 
 1. Pick the version `X.Y.Z` (Desktop has its own numbers; CHANGELOG "Unreleased" → `## X.Y.Z`).
 2. Set it in **all three**: `package.json` (and `package-lock.json`: `npm install --package-lock-only`),
    `src-tauri/Cargo.toml` (then `cargo check` to refresh `Cargo.lock`), `src-tauri/tauri.conf.json`.
 3. Commit "chore(release): vX.Y.Z", `git tag vX.Y.Z`, push both.
 4. The **Build** workflow runs on the tag: tests, three installers, a **draft** release with
-   `SHA256SUMS`. Check each installer on a clean machine (install, open, `brainitive://` link,
-   microphone), then publish the draft. Manual runs (Actions → Build → Run workflow) only upload
-   workflow artifacts.
+   `SHA256SUMS` (and `latest.json` + updater bundles once the update key exists). Check each
+   installer on a clean machine (install, open, `brainitive://` link, microphone), then publish the
+   draft. Manual runs (Actions → Build → Run workflow) only upload workflow artifacts.
 
-## 5. Download buttons on the website
+**Stable vs. beta.** A plain tag `vX.Y.Z` makes a normal release: publishing it moves GitHub's
+"latest", so every stable user gets it (and beta users too, when it is newer than their beta). A tag
+with a pre-release part, **`vX.Y.Z-beta.N`** (semver: `1.2.0-beta.1 < 1.2.0-beta.2 < 1.2.0`), makes a
+**pre-release** draft; publishing it updates `updater-beta/beta.json` (the "Beta channel manifest" job),
+so only beta users get it. Stable users never see betas. A beta user who turns beta off keeps the beta
+until a stable version above it is out (no downgrade). Promote a beta by tagging the final `vX.Y.Z`.
+
+**Rollback = fix forward.** The updater only installs a **higher** version, and each signature is bound
+to its version, so republishing an older release (or pointing a manifest at an old bundle) never
+downgrades anyone. To undo a bad release:
+1. Stop the spread: edit the bad release on GitHub — for stable mark an older good release as
+   "latest" (or turn the bad one back into a draft / pre-release), for beta re-publish (or re-run the
+   job of) the previous good pre-release so `beta.json` points at it again. Users who haven't
+   updated stop being offered the bad version; those who have keep it.
+2. Ship the fix as a **new, higher** version: revert the change, bump `X.Y.(Z+1)`, tag, publish.
+   Everyone on the bad version moves to it on their next check (within 6 hours).
+3. Only if the bad version can't update at all (broken updater): users need a manual download;
+   say so in the release notes and on the download page.
+
+## 6. Download buttons on the website
 
 The app repo reads `config/desktop.php` → env values; empty means "Coming soon". After publishing
 set on the server (`.env`, then reload PHP / clear config cache if one is used):

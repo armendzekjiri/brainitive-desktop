@@ -65,6 +65,9 @@ desktop/
     │   │                       remove), audio.rs (cpal microphone, resampling), whisper.rs
     │   │                       (whisper-rs), permission.rs (macOS AVCaptureDevice)
     │   ├── tray.rs             tray menu model + icon, the poller, My Day / timer actions
+    │   ├── updater.rs          auto-updates (BRAI-373): channels, manifest URLs, GitHub-only
+    │   │                       client, key guard, schedule, labels (pure) + check / download /
+    │   │                       Restart to Update with tauri-plugin-updater
     │   ├── downloads.rs        staging + Save As dialog, unique names
     │   ├── prefs.rs            Settings window commands, launch at login
     │   ├── flows.rs            startup, connect, sign-in, deep links, sign-out, switch, forget
@@ -358,6 +361,42 @@ export `APPLE_*` (Tauri signs + notarizes; `signingIdentity` is null in the conf
 scheme is registered by the installers / `.desktop` file from `plugins.deep-link`, and by
 `register_all()` in debug builds. Owner steps: `docs/RELEASING.md`.
 
+Updater bundles (BRAI-373): tag builds with the `TAURI_SIGNING_PRIVATE_KEY` secret (and a real
+public key in the config) add a `bundle.createUpdaterArtifacts: true` overlay; the signing key is in
+the env of the `tauri build` step only. The ignored test `ci_signed_bundle_verifies_with_the_committed_key`
+then checks one signed bundle with the plugin against the committed key. The release job writes
+`latest.json` (`scripts/updater-manifest.mjs`: `darwin-{aarch64,x86_64}[-app]` → the universal
+`.app.tar.gz`, `windows-x86_64[-nsis]`, `linux-x86_64[-appimage]`, `linux-x86_64-deb`) and makes
+`v*-*` tags pre-releases. The job `beta-manifest` runs when a pre-release is published and copies its
+`latest.json` to `beta.json` of the rolling `updater-beta` pre-release.
+
+## Auto-updates (BRAI-373)
+
+`updater.rs`, `tauri-plugin-updater` from Rust only (no JS permission anywhere).
+- **Guard** (`availability`): `plugins.updater.pubkey` must decode to a minisign Ed25519 public key
+  (the committed placeholder doesn't) and the build must not be a development build; otherwise
+  `init` logs why and nothing runs (menu item greyed, no tray line, Settings explains).
+- **Channels** (`Channel`, `settings.preferences.update_channel`, default stable): stable reads
+  `github.com/armendzekjiri/brainitive-desktop/releases/latest/download/latest.json`; beta reads
+  `…/releases/download/updater-beta/beta.json` and the stable one, `find_update` keeps the highest
+  offered version (an error only when no manifest answered).
+- **Client** (`github_only`, through `configure_client`): https only, ≤ 5 redirects, each on
+  `github.com` / `objects.githubusercontent.com` / `release-assets.githubusercontent.com`; the bundle
+  URL is checked against the same list. Comparator: strictly newer only. `requireSignedVersion`.
+- **Schedule** (`Schedule`, wall clock): 30 s after start, every 6 h, 1 h after a failure; a loop
+  ticks every 30 s; skipped while a check runs or an update waits, or with automatic checks off
+  (`auto_update_check`). The last answered check is `settings.last_update_check`.
+- **Flow / status** (`Status`): Checking → UpToDate / Failed, or Downloading (progress in 10 % steps)
+  → the plugin verifies → `<app cache>/update/pending.update` (0600) → Ready + notification "Update
+  ready — restart to install". `restart_to_update` (user click only) installs off the main thread
+  (signature checked again) and `request_restart()`s; Windows: the NSIS installer (passive) quits and
+  restarts the app.
+- **UI**: app menu item `check-for-updates` (macOS app menu under About, Help menu elsewhere) whose
+  text follows `menu_item` ("Restart to Update (x.y.z)" when ready); the tray line above "Open
+  Brainitive" (`tray::add_update_entry`); Settings → Updates (polls `settings_get` while busy); the
+  "Please update" screen (minimum version gate) shows "Check for update now" / "Restart to Update"
+  and follows `desktop://changed`. Notifications only for an automatic "ready" and for menu clicks.
+
 ## Tests
 
 `cargo test` runs the pure logic (server URL rules, PKCE incl. the RFC 7636 vector, deep links,
@@ -365,7 +404,10 @@ navigation decisions incl. the bundled windows', versions, settings / preference
 error parsing, API request paths, call-error classification, shortcut rules and labels, the capture
 queue, the voice recorder state machine, model download verification / removal, resampling and the
 meter, transcript clean-up, polling backoff / wake / plan, tray menu model and API parsing, switcher result parsing,
-download names / moves, the overlay badge, menu ids / accelerators) and `tests/capabilities.rs`
+download names / moves, the overlay badge, menu ids / accelerators, updater channels / URLs /
+redirects / key guard / schedule / labels, and the updater plugin with a throwaway minisign key:
+bad signature, foreign key, signed-version mismatch, equal / older versions, a loopback-served
+manifest + download) and `tests/capabilities.rs`
 (capability scoping). `cargo test --test live_network -- --ignored`
 checks discovery against real hosts (badssl.com certificate errors, Cloud 404 detection).
 `BRAINITIVE_VOICE_MODEL_DIR=<dir> cargo test --lib real_transcription -- --ignored --nocapture`

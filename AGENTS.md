@@ -41,9 +41,15 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
 - Voice capture (`voice/`): audio stays in memory (never a file, never the network, never a
   webview); log durations only, never audio or transcript text. The only extra network host is
   the pinned model download (`voice::model::MODEL`, size + SHA-256 checked).
+- Auto-updates (`updater.rs`, BRAI-373): `tauri-plugin-updater` from Rust only (never grant
+  `updater:*`). Never commit a private update key or replace the placeholder public key with a key
+  you made: the owner does (docs/RELEASING.md). Tests make throwaway keys in the test. Updater
+  requests stay https on GitHub hosts (`updater::allowed_url`); nothing installs without the user's
+  "Restart to Update" click.
 - Pure logic goes in the pure modules (`server`, `links`, `pkce`, `version`, `settings`,
   `shortcuts`, `queue`, `offline_cache`, `outbox`, `poll`, `badge`, `voice::recorder`, and the pure
-  parts of `tray` / `switcher` / `downloads` / `voice::model` / `voice::audio`) with unit tests.
+  parts of `tray` / `switcher` / `downloads` / `voice::model` / `voice::audio` / `updater`) with
+  unit tests.
 - Offline data (`offline/<store id>/`) belongs to one server and one account: delete it wherever a
   sign-in ends (`offline::wipe`), never put a token in it.
 - Pin exact dependency versions.

@@ -486,8 +486,8 @@ pub fn init(app: &AppHandle) {
                     now_secs(),
                 )
             };
-            if due {
-                run_check(&h, Trigger::Auto).await;
+            if let Some(channel) = due.then(|| begin_check(&h)).flatten() {
+                run_check(&h, channel, Trigger::Auto).await;
             }
         }
     });
@@ -518,26 +518,30 @@ pub fn check_now(app: &AppHandle, trigger: Trigger) -> Result<(), String> {
         if let Some(reason) = inner.updater.availability.reason() {
             return Err(reason.to_string());
         }
-        if inner.updater.status.busy() || inner.updater.status.is_ready() {
-            return Ok(());
-        }
     }
+    // marked as checking before the command returns, so the window that asked sees it at once
+    let Some(channel) = begin_check(app) else { return Ok(()) };
     let h = app.clone();
-    tauri::async_runtime::spawn(async move { run_check(&h, trigger).await });
+    tauri::async_runtime::spawn(async move { run_check(&h, channel, trigger).await });
     Ok(())
 }
 
-async fn run_check(app: &AppHandle, trigger: Trigger) {
+/// Marks a check as running, unless one runs or an update already waits. The channel to ask.
+fn begin_check(app: &AppHandle) -> Option<Channel> {
     let channel = {
         let s = state(app);
         let mut inner = s.lock();
         if inner.updater.status.busy() || inner.updater.status.is_ready() {
-            return;
+            return None;
         }
         inner.updater.status = Status::Checking;
         inner.settings.preferences.update_channel
     };
     ui_changed(app);
+    Some(channel)
+}
+
+async fn run_check(app: &AppHandle, channel: Channel, trigger: Trigger) {
     let result = find_update(app, channel.manifests(), github_only).await;
     let now = now_secs();
     {
@@ -683,7 +687,12 @@ pub fn restart_to_update(app: &AppHandle) -> Result<(), String> {
     let pending = {
         let s = state(app);
         let mut inner = s.lock();
-        let Some(pending) = inner.updater.pending.clone() else {
+        let Some(pending) = inner
+            .updater
+            .pending
+            .clone()
+            .filter(|_| inner.updater.status.is_ready())
+        else {
             return Err("No update is waiting.".into());
         };
         inner.updater.status = Status::Installing {
