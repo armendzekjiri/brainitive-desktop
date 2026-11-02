@@ -131,13 +131,13 @@ Use **File** on Windows and Linux where macOS shows the app menu (Settings, Quit
 ## 4A. Brainitive key (BRAI-440)
 
 One global shortcut, then one letter. Defaults: **⌃⌘K** (macOS), **Ctrl+Alt+K** (Windows, Linux);
-letters **C** quick capture, **K** quick switcher, **V** voice capture (hold), **O** open Brainitive.
+letters **C** quick capture, **T** new task (section 4C), **K** quick switcher, **V** voice capture (hold), **O** open Brainitive.
 Settings → Shortcuts holds the key, the letters and the optional direct shortcuts.
 
 | Step | Expected | macOS | Windows | Linux |
 |---|---|---|---|---|
-| 4A.1 Fresh install: open Settings → Shortcuts. | Brainitive key ⌃⌘K / Ctrl+Alt+K; letters C, K, V, O; Direct shortcuts: quick capture ⇧⌘Space / Ctrl+Shift+Space, quick switcher **Off**, voice capture **Off**. | [ ] | [ ] | [ ] |
-| 4A.2 In another app press the Brainitive key. | A small centred panel takes the focus and lists the four letters with their actions; the key is shown in its title. | [ ] | [ ] | [ ] |
+| 4A.1 Fresh install: open Settings → Shortcuts. | Brainitive key ⌃⌘K / Ctrl+Alt+K; letters C, T, K, V, O; Direct shortcuts: quick capture ⇧⌘Space / Ctrl+Shift+Space, New task ⌃⌘T / Ctrl+Alt+T (Linux **Off**), quick switcher **Off**, voice capture **Off**. | [ ] | [ ] | [ ] |
+| 4A.2 In another app press the Brainitive key. | A small centred panel takes the focus and lists the five letters with their actions (none cut off); the key is shown in its title. | [ ] | [ ] | [ ] |
 | 4A.3 Press the key, then **C**. | Quick capture opens with the text field focused; the panel is gone. Esc in quick capture returns to the app you came from. | [ ] | [ ] | [ ] |
 | 4A.4 Press the key, then **K**. Then press the key and **K** while still holding ⌃⌘ (Ctrl+Alt). | Both open the quick switcher (the key pressed again counts as its letter K). | [ ] | [ ] | [ ] |
 | 4A.5 Main window hidden or behind another app: press the key, then **O**. | The main Brainitive window comes to the front. | [ ] | [ ] | [ ] |
@@ -169,6 +169,36 @@ Settings → Shortcuts holds the key, the letters and the optional direct shortc
 | 4B.3 Switch light ↔ dark with Settings / Offline open. | The title bar strip follows the page. | [ ] | n/a | n/a |
 | 4B.4 Main window and New Window: scroll a long web page. | The page starts below the title bar; nothing shows behind the window title. Fullscreen still works. | [ ] | n/a | n/a |
 | 4B.5 Settings / Offline / main window on Windows and Linux. | Normal system title bars, unchanged. | n/a | [ ] | [ ] |
+
+## 4C. New task
+
+Defaults: **⌃⌘T** (macOS), **Ctrl+Alt+T** (Windows), **Off** (Linux); Brainitive key + **T**; tray
+**New Task…**; panel footer **New Task**. Use an account with two workspaces, a project with two
+boards and one with a single board.
+
+| Step | Expected | macOS | Windows | Linux |
+|---|---|---|---|---|
+| 4C.1 In another app press ⌃⌘T / Ctrl+Alt+T (Linux: set a key in Settings first). | A centred window "New task in <server>" opens with the title field focused; project and board are filled in. | [ ] | [ ] | [ ] |
+| 4C.2 Press the Brainitive key, then **T**; tray → **New Task…**; panel footer → **New Task**. | Each opens the same window. | [ ] | [ ] | [ ] |
+| 4C.3 With the window open and text typed, press the shortcut again; click another app, press it again. | The window comes to the front with the text still there (no toggle). | [ ] | [ ] | [ ] |
+| 4C.4 Project field: click it, type part of a name or a key, ↑/↓, ↩. | The list filters, grouped by workspace when there are several; ↩ picks; Esc closes only the list. Projects without boards are not listed. | [ ] | [ ] | [ ] |
+| 4C.5 Pick a project with one board, then one with two. | One board: no Board field; two: a Board select (the last-used board preselected). | [ ] | [ ] | [ ] |
+| 4C.6 Description: click **Description**, type Markdown (`- item`, `**bold**`). | The field opens and the window grows; the issue shows the formatting on the web. | [ ] | [ ] | [ ] |
+| 4C.7 Priority chips and Type. | None + the project's priorities (arrow keys move); Type only for projects with types, the last used (else the default) preselected. | [ ] | [ ] | [ ] |
+| 4C.8 Type a title, ⌘↩ / Ctrl+↩. | "WEB-12 created" with **Open** and **New another**; the issue is on the chosen board with the priority and type. | [ ] | [ ] | [ ] |
+| 4C.9 **Open**. | The issue opens in the main window; the New task window closes. | [ ] | [ ] | [ ] |
+| 4C.10 **New another**; close and reopen the window; restart the app and reopen. | A fresh form with the same project / board / type; after the restart still the last project of this server. Another server remembers its own. | [ ] | [ ] | [ ] |
+| 4C.11 Empty title, ⌘↩. | "Give the task a title." under the title; nothing is sent. | [ ] | [ ] | [ ] |
+| 4C.12 A board where you are a viewer; a board deleted on the web while the window is open; a workspace at its storage limit. | "You can't create issues on this board." / "This board is gone …" (the list reloads) / the server's limit message — inline. | [ ] | [ ] | [ ] |
+| 4C.13 Network off, title + description, ⌘↩. | "You're offline …" with **Save to Inbox instead**; clicking it says the capture is kept and sent later; it appears in the web inbox (title, blank line, description) when back online. | [ ] | [ ] | [ ] |
+| 4C.14 Slow network: ⌘↩ twice quickly; or turn the network off right after ⌘↩ and retry the same text when back. | One issue only (the retry reuses the request id). | [ ] | [ ] | [ ] |
+| 4C.15 Signed out / no server chosen. | "Sign in to Brainitive" / "Connect to Brainitive" with **Open Brainitive**. | [ ] | [ ] | [ ] |
+| 4C.16 Sign out while the window holds text; sign in as another account. | The window is gone; reopened it shows only the new account's projects. | [ ] | [ ] | [ ] |
+| 4C.17 Light and dark mode. | Fields, chips, list and the created state follow the system. | [ ] | [ ] | [ ] |
+| 4C.18 Settings → Shortcuts → New task: **Change** to another key, **Default**, **Off**; letter T → N. | The new key works, the tray shows it; Default gives ⌃⌘T / Ctrl+Alt+T (Linux: Off); Off frees the key; ⌃⌘K N opens New task. | [ ] | [ ] | [ ] |
+| 4C.19 Linux: record Ctrl+Alt+T. | Refused ("That shortcut belongs to the system."); the terminal still opens with Ctrl+Alt+T. | n/a | n/a | [ ] |
+| 4C.20 Update from a build without New task, where a shortcut of yours already used ⌃⌘T / Ctrl+Alt+T (or the letter T). | That shortcut keeps its keys, New task starts **Off**; your letter stays and New task gets **N**. Without a clash New task gets ⌃⌘T / Ctrl+Alt+T and T. | [ ] | [ ] | [ ] |
+| 4C.21 Windows, Polish / Romanian / Czech layouts: type the AltGr+T character (if the layout has one) in another app. | Record whether Ctrl+Alt+T takes it; if so, change New task's key in Settings. | n/a | [ ] | n/a |
 
 ## 5. Extra windows
 
@@ -256,7 +286,7 @@ Settings → Shortcuts holds the key, the letters and the optional direct shortc
 | 8A.11 **Timer** tab with a timer running. | The clock ticks every second from the real start time; **Stop & log** logs it ("Time logged."), or, where the workspace needs an activity and has no default, shows the activities inline; picking one logs it. **Discard** asks for a second click. | [ ] | [ ] | [ ] |
 | 8A.12 **Timer** tab without a timer. | "Start a timer" with a search over your My Day and assigned issues; Enter / click starts it; today's entries and the total below. | [ ] | [ ] | [ ] |
 | 8A.13 Keyboard. | ⌘1–⌘5 (Ctrl+1–5) switch tabs; ←/→ on the tab bar; ↓/↑ move through rows; Enter opens; Tab reaches the circles, Space ticks. | [ ] | [ ] | [ ] |
-| 8A.14 Footer. | **Quick Capture** opens quick capture, **Open Brainitive** the main window, **Settings** the Settings window; the panel closes. | [ ] | [ ] | [ ] |
+| 8A.14 Footer. | **New Task** opens New task, **Capture** quick capture, **Open Brainitive** the main window, **Settings** the Settings window; the panel closes; the four buttons fit on one line. | [ ] | [ ] | [ ] |
 | 8A.15 Close and reopen. | The last tab is open again (also after a restart). | [ ] | [ ] | [ ] |
 | 8A.16 Network off, open the panel. | Red dot, "Offline — showing what was loaded …"; ticks still work and show "Waiting to sync" (sent when back, see 12); Stop / Start / Discard / Mark all read are greyed with the offline hint. Today without events says they show when back online. | [ ] | [ ] | [ ] |
 | 8A.17 Network off right after a cold start (no answer yet). | My Day, Assigned and Today come from the offline copy. | [ ] | [ ] | [ ] |
@@ -470,7 +500,7 @@ Use a debug build for the devtools steps (19.1 and 19.5). Use a real signed-in s
 | 19.1 Debug build: on a server page, open devtools and run `window.__TAURI_INTERNALS__.invoke("brainitive_notify", {})` with empty arguments, then try a non-bridge command (for example a settings or sign-out command). | Only the three bridge commands (notify, badge, open external) are reachable from the server origin. Other native commands are refused. | [ ] | [ ] | [ ] |
 | 19.2 Foreign page in the main window: from a page, click a link to another website (not a new tab). | The main window does not stay on that site: it returns to the last server page at once; the site opens in the default browser. macOS and Linux: the page is reverted on start; Windows: blocked by the navigation guard before it loads. | [ ] | [ ] | [ ] |
 | 19.3 An embedded frame of another site on a server page (for example a video embed). | Loads inside the page. Frames are not reverted. | [ ] | [ ] | [ ] |
-| 19.4 Sign out with Quick Capture holding text, the switcher showing results, and a recording running. | All three are cleared or closed. | [ ] | [ ] | [ ] |
+| 19.4 Sign out with Quick Capture holding text, the switcher showing results, New task holding text, and a recording running. | All four are cleared or closed. | [ ] | [ ] | [ ] |
 | 19.5 Debug build: call `brainitive_open_external` from a server page more than 10 times within a minute. | The 11th call is refused (10 per minute). | [ ] | [ ] | [ ] |
 | 19.6 Link to another site opened inside the app window (macOS, Linux). | The browser opens the link; the app stays on its page. | [ ] | [ ] | [ ] |
 | 19.7 Refresh token and access token are not in `settings.json`, the offline files, the capture queue or the logs. | Search the app data folder and logs for `bra_` and `brr_`: none. | [ ] | [ ] | [ ] |
@@ -494,6 +524,8 @@ a row above or must be recorded as a result.
   a running app on macOS either; Albanian accuracy is untested (no Albanian voice to test with);
   Intel Macs untested.
 - Cold start and idle memory were not measured yet (section 18).
+- New task (4C): built and checked as a static page with mocked commands only; not run in the app
+  against a real server (create, Open, inbox fallback, shortcut registration on each OS).
 - Minimum-version check across restarts and the download URL are open questions in
   `docs/tasks/phase-09-copilot.md` (`https://www.brainitive.app/download` is a guess).
 - Errors from remote pages and popups are not written to the log (only the main bundled window).

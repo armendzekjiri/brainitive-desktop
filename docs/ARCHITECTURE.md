@@ -3,7 +3,7 @@
 Brainitive Desktop is a **Tauri 2** shell: a main window that shows either a few bundled
 screens (connect a server, sign in) or the user's Brainitive server — the full web app, loaded
 remotely — plus extra app windows with pages of that server, and small **bundled native windows**
-(quick capture, quick switcher, settings, the offline view, the voice-capture indicator) that talk to the server only through Rust. The native
+(quick capture, quick switcher, New task, settings, the offline view, the voice-capture indicator) that talk to the server only through Rust. The native
 layer adds what a browser tab can't: system-browser sign-in with keychain storage, deep links,
 native menus, global shortcuts, a tray / menu-bar icon, native notifications and the badge, a
 Save dialog for downloads and launch at login. Server contract:
@@ -19,6 +19,7 @@ desktop/
 │   ├── offline.ts, offline.css the offline view (offline.html, window "offline", BRAI-366)
 │   ├── voice.ts                the voice-capture indicator (voice.html, window "voice", BRAI-439)
 │   ├── panel.ts, panel.css     the menu-bar panel (panel.html, window "panel")
+│   ├── task.ts, task.css       the New task window (task.html, window "task")
 │   └── native.ts/.css, popup.css   shared by the native windows
 ├── public/logo.png
 └── src-tauri/
@@ -28,7 +29,7 @@ desktop/
     ├── build.rs                app ACL manifest (every command needs a permission)
     ├── capabilities/           one file per bundled window, local origin + its own window only:
     │                           local.json (main), settings.json, capture.json, switcher.json,
-    │                           offline.json, voice.json, leader.json, panel.json
+    │                           offline.json, voice.json, leader.json, panel.json, task.json
     ├── src/
     │   ├── lib.rs              plugins, commands, menu, deep-link + notification wiring, run loop
     │   ├── server.rs           ServerOrigin: typed address → origin, TLS rule, store ids   (pure)
@@ -69,6 +70,8 @@ desktop/
     │   │                       remove), audio.rs (cpal microphone, resampling), whisper.rs
     │   │                       (whisper-rs), permission.rs (macOS AVCaptureDevice)
     │   ├── tray.rs             tray menu model + icon, the poller, My Day / timer actions
+    │   ├── new_task/           the New task window: mod.rs (state, commands), model.rs (destinations,
+    │   │                       config, memory per server, payload, request id, errors, pure), tests.rs
     │   ├── panel/              the menu-bar panel: mod.rs (state, commands, tray clicks, window),
     │   │                       geometry.rs (where it opens, pure), view.rs (tabs' mapping, ids,
     │   │                       offline decisions, pure), tests.rs
@@ -183,11 +186,12 @@ the main frame on the bundled screens and the current origin. The user agent end
 | `voice` | `voice.html` (BRAI-439) | default | `capabilities/voice.json` |
 | `leader` | `leader.html` (BRAI-440, the Brainitive key overlay) | default | `capabilities/leader.json` |
 | `panel` | `panel.html` (the menu-bar panel) | default | `capabilities/panel.json` |
+| `task` | `task.html` (the New task window) | default | `capabilities/task.json` |
 
 App windows share one navigation / page-load guard, downloads handler, user agent and zoom level;
 switching server, signing out or forgetting closes the `app-<n>` windows. The bundled windows are
 built on first use (from the async runtime: never inside a main-thread handler, which can deadlock
-on Windows), hidden instead of closed, centred, and the floating ones (capture, switcher, the
+on Windows), hidden instead of closed, centred, and the floating ones (capture, switcher, New task, the
 Brainitive key overlay) hide when they lose focus (the voice indicator floats too but stays: a recording goes on while the user
 clicks elsewhere). A bundled window opened from another one that has the focus (voice → quick
 capture) inherits where the focus goes back to. Dismissing one with Esc gives the focus back to the app the user came from (macOS:
@@ -208,7 +212,7 @@ opens the directory. Nothing is ever sent anywhere.
 ## Menus and shortcuts (BRAI-362)
 
 `menu.rs`: Brainitive (macOS) / File: Settings… ⌘, · New Issue ⌘N · New Doc ⌥⌘N · New Window ⇧⌘N
-· Brainitive Key… / Quick Capture / Quick Switcher / Voice Capture (their global shortcut shown) · Close Window ⌘W · Quit; Edit;
+· Brainitive Key… / Quick Capture / Quick Switcher / Voice Capture (their global shortcut shown; New task is in the tray and the panel, not the File menu, whose ⌘N is the web's New Issue) · Close Window ⌘W · Quit; Edit;
 View: Back ⌘[ · Forward ⌘] · Reload ⌘R · Actual Size ⌘0 · Zoom In ⌘= · Zoom Out ⌘-; Go: Search… ⌘K ·
 Dashboard ⇧⌘H · My Work ⇧⌘M · Captures · Notifications · Account Settings; Server; Window (macOS);
 Help. `CmdOrCtrl` = Ctrl on Windows / Linux. Actions go to the app window focused last.
@@ -220,7 +224,9 @@ nothing claims it, the web app's own ⌘. (palette, commands) / ⌘K (search) ha
 
 `tauri-plugin-global-shortcut`, Rust side only. Each shortcut is a `hotkeys::HotkeyAction`
 (registry: shortcut id → action) with an accelerator in the preferences: the **Brainitive key**
-⌃⌘K / Ctrl+Alt+K (`Leader`, below), quick capture ⇧⌘Space / Ctrl+Shift+Space, and the optional
+⌃⌘K / Ctrl+Alt+K (`Leader`, below), quick capture ⇧⌘Space / Ctrl+Shift+Space, **New task**
+⌃⌘T / Ctrl+Alt+T (`Task`; off on Linux, where Ctrl+Alt+T opens the terminal: `shortcuts::DEFAULT_TASK`,
+and `shortcuts::parse` refuses Ctrl+Alt+T on Linux only), and the optional
 direct shortcuts quick switcher and voice capture (off by default since BRAI-440; **Default** sets
 ⌥⌘K / Ctrl+Alt+Shift+K and ⇧⌘V / Ctrl+Shift+V; voice is the only one that also gets the key-up).
 Settings records new keys (the current shortcuts are paused while recording); `shortcuts.rs`
@@ -234,8 +240,9 @@ shortcut was refused, and the reason shows in Settings.
 One global shortcut, then one letter. `HotkeyAction::Leader` opens the overlay (`leader.html`,
 window `leader`, floating, hides on blur, `capabilities/leader.json`); the overlay reads the next
 key **in its own window** (no letter is registered globally) and sends it to `leader_press`; Rust
-maps it (`Preferences.leader_letters`, default C / K / V / O, A–Z, unique, `leader.rs` pure) to
-quick capture, the quick switcher, voice capture or `shell::focus_main`. The new window is shown
+maps it (`Preferences.leader_letters`, default C / T / K / V / O, A–Z, unique, `leader.rs` pure) to
+quick capture, New task, the quick switcher, voice capture or `shell::focus_main`. A file written
+before New task gets T, or N / the first free letter when T is already another action's. The new window is shown
 while the overlay still has the focus, so it inherits where the focus returns. Esc / blur / 3 s
 without a key (a page timer → `leader_close`, which ignores a hidden overlay) close it. The key
 pressed again while the overlay is in front counts as its own letter (⌃⌘K K → switcher), else
@@ -254,6 +261,8 @@ closes it.
   at load, then saved) turns off only the **literal** old defaults (`CommandOrControl+Alt+K`,
   `CommandOrControl+Shift+KeyV`; recorded keys are stored canonical, e.g. `alt+super+KeyK`), keeps
   explicit Off, and starts the leader Off when a kept direct shortcut already uses its keys.
+  Scheme 1 → 2 (New task): a file without `task_shortcut` reads the default, which starts Off when
+  the Brainitive key or a direct shortcut already uses those keys.
 - **Settings → Shortcuts**: the key (Change / Default / Off), a letter field + Default per action
   (`settings_set_leader_letter`), then "Direct shortcuts (optional)". Menus: **Brainitive Key…** in
   File and the tray (`tray::add_leader_entry`, only while the key is on), the key as its
@@ -271,6 +280,42 @@ closes it.
   `shell::navigate_to` (the app window, or after the stored sign-in is restored); ⌘C on a snippet →
   `GET /snippets/{id}` → clipboard (`tauri-plugin-clipboard-manager`, Rust side); ⌘T on an issue →
   `POST /me/timer/start`.
+
+## New task window
+
+`HotkeyAction::Task` (⌃⌘T / Ctrl+Alt+T, Linux off), the Brainitive key's **T**, the tray's **New
+Task…** (under Quick Capture, `tray::add_task_entry`) and the panel footer open the `task` window
+(`task.html`, `new_task/`, floating, centred, hides on blur with the text kept, destroyed on
+sign-out). Pressed while it is open, the shortcut focuses it (no toggle). The height follows the
+page (`task_resize`, 180…620 pt, the top stays put).
+
+- **Where to**: `GET /api/v1/capture-destinations` — the projects with at least one board the user
+  may write to, every workspace in one call (`model::parse_destinations`). Kept per server +
+  `account_epoch` (`TaskState.kept`), shown at once on open and loaded again when older than 60 s.
+  The project field is a searchable select (name, key, workspace; grouped by workspace when there
+  are several). Board only when the project has more than one.
+- **Starting choice**: `Preferences.new_task` (origin → `{project_id, board_id, type_id, at}`, ≤ 10
+  servers, lenient load, removed on Forget) — the last project, its last board, the last type when
+  the project has it; else the first project / board and the project's default type. The server
+  keeps no "recent destinations" (`/me/navigation`'s recent list lives on the device).
+- **Project config**: `GET /api/v1/projects/{id}/config` → `types` (shown when there are any) and
+  `priorities` (chips: None + the project's), kept per project until the list is reloaded.
+- **Create**: `POST /api/v1/boards/{id}/items` `{title (trimmed), description? (Markdown, only when
+  not empty), priority_id?, type_id?, request_id}` with `ApiRequest::error_body()` so a 4xx comes
+  back with its body. `model::draft` takes only ids of the kept answers. **request_id**: one per
+  create; when the call got no answer (offline, 5xx) the same input reuses it
+  (`model::request_id_for`, `TaskState.pending`), so the server answers 200 with the issue it may
+  already have made; another input or any answer → a new one. 201/200 → the created state (key,
+  title, **Open** / **New another**), the memory is saved, the issue `url` stays in Rust
+  (`TaskState.created`) for `task_open` → `shell::open_page`.
+- **Errors** (`model::error_answer` / `call_error`): 422 per field (`title`, `description`,
+  `type_id` → type, `priority_id` → priority, others → the form), 402 the server's message, 403, 404
+  (the list is reloaded), 429 / offline / 5xx → "Save to Inbox instead" (`task_save_to_inbox` →
+  `capture::save`: the title and description as a capture with `intended_type: issue`, queued in
+  `capture-queue.json` when offline). Signed out / no server → "Sign in to Brainitive" / "Connect
+  to Brainitive" + Open Brainitive.
+- **Offline issues**: `POST /api/v1/sync`'s `issue.create` has no description and no type, so the
+  window doesn't queue issues (the inbox keeps everything the user typed).
 
 ## Voice capture (BRAI-439)
 
@@ -381,7 +426,7 @@ mouse-up; a click within 0.4 s after the panel hid on blur is the click that blu
 ## Tray / menu bar (BRAI-360) and badge (BRAI-361)
 
 A native menu (right click on the icon; left click opens the menu-bar panel above; `tray.rs`, no webview): server line, Brainitive Key… (while the key is on), Quick
-Capture, Quick Switcher, Voice Capture, My Day (check
+Capture, New Task…, Quick Switcher, Voice Capture, My Day (check
 items → `PATCH /me/my-day/items/{id}`), the running timer (Stop and Log Time → `POST /me/timer/stop`
 with the default activity when one is required; Discard), unread notifications (→ `/notifications`),
 Open Brainitive, Settings…, Quit. The menu is a pure model (`tray::model`) rebuilt only when it
@@ -520,7 +565,9 @@ error parsing, API request paths, call-error classification, shortcut rules and 
 Brainitive key (letters, conflicts, migration of old defaults, labels per OS), the capture
 queue, the voice recorder state machine, model download verification / removal, resampling and the
 meter, transcript clean-up, polling backoff / wake / plan, tray menu model and API parsing, the menu-bar panel (placement per bar edge / monitor / clamping,
-tray clicks, each tab's mapping, ids it may act on, offline decisions), switcher result parsing,
+tray clicks, each tab's mapping, ids it may act on, offline decisions), New task (defaults per OS,
+migration, letter T, memory per server, destinations / config parsing, payload, request id reuse,
+error mapping, window height), switcher result parsing,
 download names / moves, the overlay badge, menu ids / accelerators, updater channels / URLs /
 redirects / key guard / schedule / labels, and the updater plugin with a throwaway minisign key:
 bad signature, foreign key, signed-version mismatch, equal / older versions, a loopback-served

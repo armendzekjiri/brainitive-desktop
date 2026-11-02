@@ -5,6 +5,22 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+New task:
+
+- **Create a task from any app**: press **⌃⌘T** (macOS) / **Ctrl+Alt+T** (Windows), or the
+  Brainitive key and **T**. A small window asks for the project (type to search; it starts with the
+  last project you used on this server), the board (when the project has several), the title, an
+  optional description in Markdown, the priority and the type. **⌘↩ / Ctrl+↩** creates it; then
+  **Open** shows it in Brainitive, or **New another**. Problems show next to the field (a missing
+  title, a plan limit, a board you can no longer use).
+- **Offline** (or when the server has a problem) you can **Save to Inbox instead**: the title and
+  description go to your inbox (sent when you're back) and you turn them into a task later.
+- **Linux**: no shortcut by default, because Ctrl+Alt+T opens the terminal on Ubuntu; set one in
+  Settings → Shortcuts. **Updating** gives you the new shortcut only if none of your shortcuts
+  uses those keys already; otherwise it starts off. If you had given **T** to another letter, New
+  task gets **N** (or the first free letter).
+- Also in the tray menu (**New Task…**) and the menu-bar panel's footer (**New Task**).
+
 Menu-bar panel:
 
 - **Click the menu-bar / tray icon** for a panel like the macOS Weather extra: frosted glass right

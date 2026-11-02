@@ -155,6 +155,40 @@ URLs it should not act on, or showing another account's data.
 - The native tray menu stays on right click (and ⌃-click); ⌃ is read from `NSEvent.modifierFlags`
   at click time only.
 
+## The New task window
+
+Threat: a window that creates issues with the app token reachable from the wrong content, handed
+a board / project the user didn't pick from the server's list, leaking a token or URL to the page,
+duplicating issues on retries, or showing another account's projects.
+
+- **Window**: `task.html`, label `task`, its own `capabilities/task.json` (`local: true`, no
+  `remote`, `windows: ["task"]`, only the nine `allow-task-*` commands, no events). Every command
+  starts with `caller(&app, &webview)?` = `popup::ensure_caller(Task)` (`tests/capabilities.rs`
+  checks the file and the first line of each command). Same CSP and navigation guard as the
+  other bundled windows; server text via `textContent` only; colours only as `#rgb…` hex.
+- **No token, no URL in the page**: `GET /capture-destinations`, `GET /projects/{id}/config` and
+  `POST /boards/{id}/items` run in Rust with `Session::request` (`/api/v1/…` only, no redirects).
+  The page gets ids, names and the issue key; the created issue's `url` stays in Rust and
+  `task_open` opens it through `shell::open_page` → `links::resolve_deep_link_target` (this server,
+  never an auth page).
+- **Ids**: `task_config` / `task_create` accept only projects, boards, types and priorities of the
+  kept answers of the current origin + `account_epoch` (`model::draft`); the server checks
+  `BoardPolicy::createItems` anyway. Title ≤ 255 and description ≤ 100 000 characters are checked
+  before sending; the window height is clamped.
+- **Idempotency**: every create carries a `request_id` (uuid v4). It is reused only for the same
+  board + body after a call that got no answer, so a retry returns the first issue (200) and never
+  makes a second; any answer or other input gets a new one (the server would answer 409 for the
+  same id with other input).
+- **Error bodies**: `ApiRequest::error_body()` (opt-in, this window only) returns a 4xx answer's
+  JSON (field errors, the plan limit) instead of a bare error; 401 still refreshes / signs out.
+  Messages shown are the server's "safe to show" `message` / field errors, capped at 300 chars.
+- **Whose data**: the kept projects / configs / created URL belong to one origin + sign-in; another
+  one drops them, `flows::clear_account_traces` clears them, and the window is destroyed on
+  sign-out (`Popup::holds_account_data`). The last project / board / type per server in
+  `settings.json` are ids only (no names) and are removed on Forget.
+- **Inbox fallback**: `task_save_to_inbox` uses the quick-capture path (`capture::save`: the queue
+  is per origin, 0600, deleted on sign-out / forget).
+
 ## Global shortcuts
 
 Threat: a global shortcut steals keys from other apps, or something else changes / triggers it.
@@ -172,7 +206,12 @@ Threat: a global shortcut steals keys from other apps, or something else changes
   held letter.
 - Letters and the key are changed only through Settings' commands (`settings_set_shortcut`,
   `settings_set_leader_letter`: A–Z, unique); a broken letters entry in `settings.json` falls back
-  to the defaults.
+  to the defaults. The letter **T** (New task) only opens the New task window.
+- **New task** ⌃⌘T / Ctrl+Alt+T (`HotkeyAction::Task`) only opens (or focuses) its window; nothing is
+  sent without the user's Create. Ctrl+Alt+T is refused on **Linux only** (the terminal on
+  Ubuntu / GNOME; New task has no default there); on Windows it is free, but on a layout where
+  AltGr+T (= Ctrl+Alt+T) types a character, that character can't be typed while the shortcut is
+  on — QA 4C checks common layouts; Settings can change or turn it off.
 
 - Registered from Rust only; changed only through the Settings window's command (its capability),
   validated by `shortcuts.rs`: at least two modifiers incl. Ctrl / Alt / Cmd (F-keys: one), no

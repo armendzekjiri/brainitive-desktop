@@ -25,11 +25,16 @@ app. The window title shows where you are: "Brainitive — Cloud", "Brainitive �
 ## Native features
 
 - **Brainitive key** — ⌃⌘K (macOS) / Ctrl+Alt+K (Windows, Linux) from any app, then one letter:
-  **C** quick capture, **K** quick switcher, **V** voice capture (hold to talk), **O** open Brainitive.
+  **C** quick capture, **T** new task, **K** quick switcher, **V** voice capture (hold to talk), **O** open Brainitive.
   A small panel lists the letters; Esc, clicking elsewhere or 3 seconds without a key close it.
   Change the key and the letters in Settings → Shortcuts.
 - **Quick capture** — ⇧⌘Space (macOS) / Ctrl+Shift+Space from any app: type, ⌘↩ / Ctrl+↩ to save
   to your inbox. Works offline (sent when you're back).
+- **New task** — ⌃⌘T (macOS) / Ctrl+Alt+T (Windows) / ⌃⌘K T, off on Linux (Ctrl+Alt+T is the
+  terminal there; set your own key in Settings): a small window to create an issue — project
+  (searchable, the last one is remembered per server), board, title, description (Markdown),
+  priority, type. ⌘↩ / Ctrl+↩ creates, then **Open** shows it in the app. Offline: **Save to
+  Inbox instead**. Also in the tray menu and the menu-bar panel.
 - **Voice capture** — ⌃⌘K, then hold V (or a direct shortcut you set, e.g. ⇧⌘V), speak, let go: the text opens in quick capture to
   check and save (a tap starts it, ↩ or the shortcut again finishes; Esc cancels; max 2 minutes).
   Turn it on in Settings, or from File → Voice Capture… / the tray / quick capture's microphone button (a direct shortcut is only taken from other apps while it is on); the speech model (190 MB) is downloaded once.
@@ -43,7 +48,7 @@ app. The window title shows where you are: "Brainitive — Cloud", "Brainitive �
 - **Menus** — ⌘N new issue, ⌥⌘N new doc, ⇧⌘N new window, ⌘K search, ⌘[ / ⌘] back / forward,
   ⌘= / ⌘- / ⌘0 zoom, ⌘, settings (Ctrl on Windows / Linux).
 - **Settings** (⌘,) — Shortcuts: the Brainitive key and its letters, and optional direct shortcuts
-  (quick capture ⇧⌘Space is on, quick switcher and voice capture are off until you set them); keep running in the tray, open at
+  (quick capture ⇧⌘Space and New task ⌃⌘T / Ctrl+Alt+T are on — New task is off on Linux —, quick switcher and voice capture are off until you set them); keep running in the tray, open at
   login, ask where to save downloads, voice capture.
 
 ## Development
