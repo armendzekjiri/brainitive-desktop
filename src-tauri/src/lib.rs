@@ -30,6 +30,7 @@ pub mod reconnect;
 pub mod redact;
 pub mod secrets;
 pub mod server;
+pub mod servers;
 pub mod session;
 pub mod settings;
 pub mod shell;
@@ -92,6 +93,7 @@ pub fn run() {
             commands::open_offline,
             commands::open_web_offline,
             commands::switch_server,
+            commands::switch_to_server,
             commands::sign_out,
             commands::forget_server,
             commands::dismiss_notice,
@@ -114,6 +116,13 @@ pub fn run() {
             prefs::settings_set_update_channel,
             prefs::settings_check_for_updates,
             prefs::settings_restart_to_update,
+            prefs::settings_servers,
+            prefs::settings_rename_server,
+            prefs::settings_move_server,
+            prefs::settings_switch_server,
+            prefs::settings_sign_out_server,
+            prefs::settings_forget_server,
+            prefs::settings_add_server,
             capture::capture_context,
             capture::capture_submit,
             capture::capture_close,
@@ -158,6 +167,7 @@ pub fn run() {
             panel::panel_run,
             panel::panel_resize,
             panel::panel_close,
+            panel::panel_switch_server,
             new_task::task_view,
             new_task::task_load,
             new_task::task_config,

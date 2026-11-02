@@ -97,6 +97,11 @@ pub enum TrayAction {
     Panel,
     /// The New task window.
     Task,
+    /// Servers ▸ a saved server (`servers::server_id`).
+    Server(String),
+    /// Servers ▸ Add Server… / Manage Servers….
+    AddServer,
+    ManageServers,
 }
 
 impl TrayAction {
@@ -121,12 +126,19 @@ impl TrayAction {
             Self::RestartToUpdate => "tray-restart-update".into(),
             Self::Panel => "tray-panel".into(),
             Self::Task => "tray-task".into(),
+            Self::Server(id) => format!("tray-server:{id}"),
+            Self::AddServer => "tray-servers-add".into(),
+            Self::ManageServers => "tray-servers-manage".into(),
         }
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
         if let Some(work) = id.strip_prefix("tray-day:") {
             return is_work_id(work).then(|| Self::ToggleDay(work.to_string()));
+        }
+        if let Some(server) = id.strip_prefix("tray-server:") {
+            let valid = server.len() == 16 && server.bytes().all(|b| b.is_ascii_hexdigit());
+            return valid.then(|| Self::Server(server.to_string()));
         }
         Some(match id {
             "tray-leader" => Self::Leader,
@@ -147,6 +159,8 @@ impl TrayAction {
             "tray-restart-update" => Self::RestartToUpdate,
             "tray-panel" => Self::Panel,
             "tray-task" => Self::Task,
+            "tray-servers-add" => Self::AddServer,
+            "tray-servers-manage" => Self::ManageServers,
             _ => return None,
         })
     }
@@ -385,6 +399,31 @@ pub fn add_task_entry(entries: &mut Vec<Entry>, shortcut: Option<String>) {
     );
 }
 
+/// Adds a "Servers" submenu under the server line: the saved servers (the current one checked;
+/// no shortcuts here, they belong to the app menu), Add Server…, Manage Servers….
+pub fn add_servers_entry(entries: &mut Vec<Entry>, servers: &[crate::servers::Choice]) {
+    let mut sub: Vec<Entry> = servers
+        .iter()
+        .map(|c| Entry::Check {
+            action: TrayAction::Server(c.id.clone()),
+            text: short(&c.name),
+            checked: c.current,
+        })
+        .collect();
+    if !sub.is_empty() {
+        sub.push(Entry::Separator);
+    }
+    sub.push(item(TrayAction::AddServer, "Add Server…"));
+    sub.push(item(TrayAction::ManageServers, "Manage Servers…"));
+    entries.insert(
+        1.min(entries.len()),
+        Entry::Submenu {
+            text: "Servers".into(),
+            entries: sub,
+        },
+    );
+}
+
 /// Adds "Open Panel…" at the top (under the server line) where the icon itself can't open it
 /// (Linux: AppIndicator sends no click events).
 pub fn add_panel_entry(entries: &mut Vec<Entry>, needed: bool) {
@@ -503,7 +542,20 @@ fn tray(app: &AppHandle) -> Option<TrayIcon<Wry>> {
 /// Rebuilds the menu, tooltip and (macOS) the count next to the icon from the current data.
 pub fn refresh(app: &AppHandle) {
     let Some(tray) = tray(app) else { return };
-    let (server, signed_in, data, leader, capture, switcher, voice, task, offline, update_availability, update_status) = {
+    let (
+        server,
+        signed_in,
+        data,
+        leader,
+        capture,
+        switcher,
+        voice,
+        task,
+        offline,
+        update_availability,
+        update_status,
+        servers,
+    ) = {
         let s = state(app);
         let inner = s.lock();
         let accel = |a: Option<&str>| {
@@ -511,7 +563,7 @@ pub fn refresh(app: &AppHandle) {
                 .map(|s| crate::shortcuts::canonical(&s))
         };
         (
-            inner.current_origin().map(|o| o.display_name()),
+            inner.current_origin().map(|o| inner.settings.label_of(&o)),
             inner.phase == Phase::InApp,
             inner.tray_data.clone(),
             accel(inner.settings.preferences.leader_shortcut.as_deref()),
@@ -522,12 +574,14 @@ pub fn refresh(app: &AppHandle) {
             crate::offline::tray_status(&inner),
             inner.updater.availability,
             inner.updater.status.clone(),
+            crate::servers::choices(&inner.settings, cfg!(target_os = "macos")),
         )
     };
     let mut entries = model(server.as_deref(), signed_in, &data, capture, switcher, voice, &offline);
     add_leader_entry(&mut entries, leader);
     add_task_entry(&mut entries, task);
     add_update_entry(&mut entries, update_availability, &update_status);
+    add_servers_entry(&mut entries, &servers);
     add_panel_entry(&mut entries, cfg!(target_os = "linux"));
     // the panel reads its data, the unread count and the sync status again
     crate::panel::notify(app);
@@ -592,6 +646,9 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
         TrayAction::Offline => popup::show(app, Popup::Offline),
         TrayAction::Panel => crate::panel::toggle(app, None),
         TrayAction::Task => crate::new_task::show(app),
+        TrayAction::Server(id) => crate::menu::pick_server(app, &id),
+        TrayAction::AddServer => crate::menu::add_server(app),
+        TrayAction::ManageServers => crate::menu::manage_servers(app),
         TrayAction::CheckForUpdates | TrayAction::RestartToUpdate => crate::updater::on_menu_click(app),
         TrayAction::SyncNow => {
             let h = app.clone();
@@ -768,7 +825,9 @@ impl PollTicket {
 /// came after the ticket expired.
 pub(crate) async fn get_cached(app: &AppHandle, ticket: &PollTicket, path: &str) -> Result<Option<Value>, CallError> {
     let origin = &ticket.origin;
-    let cached = state(app).lock().etags.get(path).cloned();
+    // keyed by server too: a 304 of one server never gets another server's body
+    let key = etag_key(origin, path);
+    let cached = state(app).lock().etags.get(&key).cloned();
     let request = ApiRequest::get(path).etag(cached.as_ref().map(|(etag, _)| etag.clone()));
     let response = state(app).session.request(origin, &request).await?;
     if response.not_modified() {
@@ -785,7 +844,7 @@ pub(crate) async fn get_cached(app: &AppHandle, ticket: &PollTicket, path: &str)
         return Ok(None);
     }
     if let Some(etag) = response.etag.clone() {
-        inner.etags.insert(path.to_string(), (etag, response.body.clone()));
+        inner.etags.insert(key, (etag, response.body.clone()));
     }
     Ok(Some(response.body))
 }
@@ -919,8 +978,13 @@ pub fn start_poller(app: &AppHandle) {
     });
 }
 
-/// The last ETag + body per polled path.
+/// The last ETag + body per server and polled path ([`etag_key`]).
 pub type EtagCache = HashMap<String, (String, Value)>;
+
+/// `https://brain.example.com /api/v1/me/timer`: one entry per server and path.
+pub fn etag_key(origin: &ServerOrigin, path: &str) -> String {
+    format!("{} {path}", origin.as_str())
+}
 
 #[cfg(test)]
 mod tests {
@@ -966,8 +1030,20 @@ mod tests {
             TrayAction::CheckForUpdates,
             TrayAction::RestartToUpdate,
             TrayAction::Task,
+            TrayAction::Server("0123456789abcdef".into()),
+            TrayAction::AddServer,
+            TrayAction::ManageServers,
         ] {
             assert_eq!(TrayAction::from_id(&a.id()), Some(a));
+        }
+        // a server is picked by its id only (never an origin)
+        for bad in [
+            "tray-server:",
+            "tray-server:https://evil.example.com",
+            "tray-server:0123456789abcdeg",
+            "tray-server:0123456789abcdef0",
+        ] {
+            assert_eq!(TrayAction::from_id(bad), None, "{bad}");
         }
         assert_eq!(TrayAction::from_id("tray-label"), None);
         assert_eq!(TrayAction::from_id("settings"), None);
@@ -980,6 +1056,79 @@ mod tests {
         ] {
             assert_eq!(TrayAction::from_id(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn the_servers_submenu_sits_under_the_server_line_without_shortcuts() {
+        let mut s = crate::settings::Settings::default();
+        let work = ServerOrigin::parse("brain.acme.com").unwrap();
+        s.remember(&work, "Acme", None);
+        s.remember(&ServerOrigin::cloud(), "Brainitive", None);
+        let choices = crate::servers::choices(&s, true);
+        let data = TrayData::default();
+        let mut entries = model(
+            Some("Brainitive Cloud"),
+            true,
+            &data,
+            None,
+            None,
+            None,
+            &Default::default(),
+        );
+        add_servers_entry(&mut entries, &choices);
+        add_panel_entry(&mut entries, true);
+        assert!(matches!(
+            &entries[1],
+            Entry::Item {
+                action: Some(TrayAction::Panel),
+                ..
+            }
+        ));
+        let Entry::Submenu { text, entries: sub } = &entries[2] else {
+            panic!("{:?}", entries[2]);
+        };
+        assert_eq!(text, "Servers");
+        assert_eq!(
+            sub[0],
+            Entry::Check {
+                action: TrayAction::Server(crate::servers::server_id(&work)),
+                text: "Acme".into(),
+                checked: false,
+            }
+        );
+        assert!(matches!(&sub[1], Entry::Check { checked: true, .. }));
+        assert_eq!(sub[2], Entry::Separator);
+        assert!(matches!(
+            &sub[3],
+            Entry::Item {
+                action: Some(TrayAction::AddServer),
+                accelerator: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &sub[4],
+            Entry::Item {
+                action: Some(TrayAction::ManageServers),
+                accelerator: None,
+                ..
+            }
+        ));
+        // no saved server yet: Add / Manage only
+        let mut entries = model(None, false, &data, None, None, None, &Default::default());
+        add_servers_entry(&mut entries, &[]);
+        let Entry::Submenu { entries: sub, .. } = &entries[1] else {
+            panic!()
+        };
+        assert_eq!(sub.len(), 2);
+    }
+
+    #[test]
+    fn etags_are_kept_per_server() {
+        let a = ServerOrigin::parse("a.example.com").unwrap();
+        let b = ServerOrigin::parse("b.example.com").unwrap();
+        assert_ne!(etag_key(&a, "/api/v1/me/timer"), etag_key(&b, "/api/v1/me/timer"));
+        assert_ne!(etag_key(&a, "/api/v1/me/timer"), etag_key(&a, "/api/v1/me/my-day"));
     }
 
     #[test]

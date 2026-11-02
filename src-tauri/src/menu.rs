@@ -2,7 +2,7 @@
 //! macOS and Ctrl elsewhere (`CmdOrCtrl`). Menu actions go to the last focused **app window**
 //! (the main window or an `app-<n>` window), never to the bundled popups.
 
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Wry};
 
 use crate::shell;
@@ -39,10 +39,17 @@ pub enum MenuAction {
     HelpOpenLogs,
     /// "Check for Updates…", or "Restart to Update (x.y.z)" when one is ready (BRAI-373).
     CheckForUpdates,
+    /// Servers ▸ Add Server…: the Choose screen, without signing out of the current server.
+    AddServer,
+    /// Servers ▸ Manage Servers…: Settings → Servers.
+    ManageServers,
 }
 
+/// Servers ▸ one item per saved server: `server-pick:<id>` (`servers::server_id`).
+pub const SERVER_PICK: &str = "server-pick:";
+
 impl MenuAction {
-    pub const ALL: [MenuAction; 26] = [
+    pub const ALL: [MenuAction; 28] = [
         Self::Settings,
         Self::NewIssue,
         Self::NewDoc,
@@ -69,6 +76,8 @@ impl MenuAction {
         Self::HelpCopyDiagnostics,
         Self::HelpOpenLogs,
         Self::CheckForUpdates,
+        Self::AddServer,
+        Self::ManageServers,
     ];
 
     pub fn id(self) -> &'static str {
@@ -99,6 +108,8 @@ impl MenuAction {
             Self::HelpCopyDiagnostics => "help-copy-diagnostics",
             Self::HelpOpenLogs => "help-open-logs",
             Self::CheckForUpdates => "check-for-updates",
+            Self::AddServer => "servers-add",
+            Self::ManageServers => "servers-manage",
         }
     }
 
@@ -173,6 +184,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let switcher = item(app, MenuAction::QuickSwitcher, "Quick Switcher…")?;
     let voice = item(app, MenuAction::VoiceCapture, "Voice Capture…")?;
     let updates = item(app, MenuAction::CheckForUpdates, "Check for Updates…")?;
+    // the saved servers, filled by `refresh_servers`
+    let servers = Submenu::with_id(app, "servers", "Servers", true)?;
 
     let menu = Menu::new(app)?;
 
@@ -187,6 +200,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 &updates,
                 &sep()?,
                 &settings,
+                &servers,
                 &sep()?,
                 &PredefinedMenuItem::services(app, None)?,
                 &sep()?,
@@ -219,6 +233,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     )?;
     if !mac {
         file.append(&sep()?)?;
+        file.append(&servers)?;
         file.append(&settings)?;
         file.append(&sep()?)?;
         file.append(&PredefinedMenuItem::quit(app, Some("Quit Brainitive"))?)?;
@@ -323,6 +338,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         let s = state(app);
         let mut inner = s.lock();
         inner.server_menu_item = Some(current);
+        inner.servers_menu = Some(servers);
         inner.leader_menu_item = Some(leader);
         inner.capture_menu_item = Some(capture);
         inner.switcher_menu_item = Some(switcher);
@@ -331,7 +347,83 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     }
     refresh_shortcut_labels(app);
     refresh_update_item(app);
+    refresh_servers(app);
     Ok(())
+}
+
+/// Menu text of a server name: `&` is a mnemonic marker in Windows / GTK menus.
+fn menu_text(name: &str, mac: bool) -> String {
+    if mac {
+        name.to_string()
+    } else {
+        name.replace('&', "&&")
+    }
+}
+
+/// Fills Servers ▸ with the saved servers (the current one checked, ⌃⌘1…9 / Alt+1…9 on the
+/// first nine — menu accelerators only, never global), then Add Server… and Manage Servers….
+pub fn refresh_servers(app: &AppHandle) {
+    let mac = cfg!(target_os = "macos");
+    let (submenu, choices) = {
+        let s = state(app);
+        let inner = s.lock();
+        (
+            inner.servers_menu.clone(),
+            crate::servers::choices(&inner.settings, mac),
+        )
+    };
+    let Some(submenu) = submenu else { return };
+    let result = (|| -> tauri::Result<()> {
+        for old in submenu.items()? {
+            submenu.remove(&old)?;
+        }
+        for (i, c) in choices.iter().enumerate() {
+            let accelerator = crate::servers::accelerator(i, mac);
+            submenu.append(&CheckMenuItem::with_id(
+                app,
+                format!("{SERVER_PICK}{}", c.id),
+                menu_text(&c.name, mac),
+                true,
+                c.current,
+                accelerator.as_deref(),
+            )?)?;
+        }
+        if !choices.is_empty() {
+            submenu.append(&PredefinedMenuItem::separator(app)?)?;
+        }
+        submenu.append(&item(app, MenuAction::AddServer, "Add Server…")?)?;
+        submenu.append(&item(app, MenuAction::ManageServers, "Manage Servers…")?)?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        log::warn!("servers menu: {e}");
+    }
+}
+
+/// A click on a server (menu, tray, panel): switch in the background (not on the main thread).
+pub fn pick_server(app: &AppHandle, id: &str) {
+    let h = app.clone();
+    let id = id.to_string();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = crate::flows::switch_to(&h, &id).await {
+            log::info!("switch refused: {}", e.message);
+        }
+        // a check item flips itself on click: put the marks back to the truth
+        refresh_servers(&h);
+    });
+}
+
+/// Servers ▸ Manage Servers… (also the tray and the panel): Settings, scrolled to Servers.
+pub fn manage_servers(app: &AppHandle) {
+    state(app).lock().settings_focus = Some("servers");
+    crate::popup::show(app, crate::popup::Popup::Settings);
+}
+
+/// Servers ▸ Add Server…: the Choose screen in the main window; the current server stays signed
+/// in (and one click away).
+pub fn add_server(app: &AppHandle) {
+    shell::focus_main(app);
+    crate::flows::switch_server(app);
 }
 
 /// The update item follows the updater: disabled while updates are off for this build or a check /
@@ -383,6 +475,10 @@ pub fn refresh_shortcut_labels(app: &AppHandle) {
 
 /// Every menu event of the app menu (tray items are handled in `tray.rs`).
 pub fn on_menu_event(app: &AppHandle, id: &str) {
+    if let Some(server) = id.strip_prefix(SERVER_PICK) {
+        pick_server(app, server);
+        return;
+    }
     let Some(action) = MenuAction::from_id(id) else {
         return;
     };
@@ -457,6 +553,8 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
         }
         MenuAction::HelpOpenLogs => crate::diagnostics::open_logs_folder(app),
         MenuAction::CheckForUpdates => crate::updater::on_menu_click(app),
+        MenuAction::AddServer => add_server(app),
+        MenuAction::ManageServers => manage_servers(app),
         MenuAction::HelpDocs => {
             if let Ok(url) = url::Url::parse("https://docs.brainitive.app/") {
                 shell::open_external(app, &url);
@@ -480,6 +578,12 @@ mod tests {
         ids.dedup();
         assert_eq!(ids.len(), MenuAction::ALL.len());
         assert_eq!(MenuAction::from_id("nope"), None);
+        // a server pick is routed before the fixed ids
+        for a in MenuAction::ALL {
+            assert!(!a.id().starts_with(SERVER_PICK));
+        }
+        assert_eq!(MenuAction::AddServer.accelerator(), None);
+        assert_eq!(MenuAction::ManageServers.accelerator(), None);
     }
 
     #[test]

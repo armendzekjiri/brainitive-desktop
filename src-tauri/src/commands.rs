@@ -25,8 +25,14 @@ pub struct CurrentServer {
 pub struct RecentEntry {
     #[serde(flatten)]
     server: RecentServer,
+    /// The id the switch takes (`servers::server_id`).
+    id: String,
+    /// The server's name (`RecentServer::label`).
+    label: String,
     display_name: String,
     is_current: bool,
+    /// "⌃⌘1" / "Alt+1" for the first nine.
+    shortcut: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -64,7 +70,9 @@ pub fn get_state(app: AppHandle) -> UiState {
         let recent = inner.settings.recent.iter().find(|r| r.origin == origin);
         CurrentServer {
             display_name: origin.display_name(),
-            name: recent.map(|r| r.name.clone()).unwrap_or_else(|| origin.display_name()),
+            name: recent
+                .map(RecentServer::label)
+                .unwrap_or_else(|| crate::servers::default_name(&origin, "")),
             version: recent.and_then(|r| r.version.clone()),
             is_cloud: origin.is_cloud(),
             origin,
@@ -74,9 +82,13 @@ pub fn get_state(app: AppHandle) -> UiState {
         .settings
         .recent
         .iter()
-        .map(|r| RecentEntry {
+        .enumerate()
+        .map(|(i, r)| RecentEntry {
+            id: crate::servers::server_id(&r.origin),
+            label: r.label(),
             display_name: r.origin.display_name(),
             is_current: Some(&r.origin) == current_origin.as_ref(),
+            shortcut: crate::servers::shortcut_label(i, cfg!(target_os = "macos")),
             server: r.clone(),
         })
         .collect();
@@ -236,6 +248,15 @@ pub fn open_web_offline(app: AppHandle) -> Result<(), UiError> {
 #[tauri::command]
 pub fn switch_server(app: AppHandle) {
     flows::switch_server(&app);
+}
+
+/// A saved server on the connect screen ("Your servers", "Back to …"): its id, never an origin.
+/// Switches like the Servers menu (no new check: the server was confirmed when it was added; the
+/// restore asks `/api/v1/instance` again and refuses a redirect).
+#[tauri::command]
+pub async fn switch_to_server(app: AppHandle, webview: tauri::Webview, id: String) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
+    flows::switch_to(&app, &id).await
 }
 
 #[tauri::command]

@@ -20,6 +20,7 @@
     "allow-panel-timer-discard",
     "allow-panel-run",
     "allow-panel-resize",
-    "allow-panel-close"
+    "allow-panel-close",
+    "allow-panel-switch-server"
   ]
 }

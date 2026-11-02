@@ -56,7 +56,7 @@ pub async fn capture_context(app: AppHandle, webview: Webview) -> Result<Capture
         None => false,
     };
     Ok(CaptureContext {
-        server: origin.map(|o| o.display_name()),
+        server: origin.map(|o| state(&app).lock().settings.label_of(&o)),
         signed_in,
         queued,
         shortcut,

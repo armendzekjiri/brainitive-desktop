@@ -6,7 +6,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
 use serde::Serialize;
-use tauri::menu::MenuItem;
+use tauri::menu::{MenuItem, Submenu};
 use tauri::{AppHandle, Manager, WebviewUrl, Wry};
 use url::Url;
 
@@ -127,6 +127,10 @@ pub struct Inner {
     pub external_times: VecDeque<Instant>,
     pub last_external: Option<(Url, Instant)>,
     pub server_menu_item: Option<MenuItem<Wry>>,
+    /// The app menu's "Servers" submenu (rebuilt when the saved servers change).
+    pub servers_menu: Option<Submenu<Wry>>,
+    /// The Settings section to show when it opens next ("Manage Servers…"), taken once.
+    pub settings_focus: Option<&'static str>,
     /// "Brainitive Key…" (BRAI-440).
     pub leader_menu_item: Option<MenuItem<Wry>>,
     pub capture_menu_item: Option<MenuItem<Wry>>,
@@ -216,6 +220,8 @@ impl AppState {
                 external_times: VecDeque::new(),
                 last_external: None,
                 server_menu_item: None,
+                servers_menu: None,
+                settings_focus: None,
                 leader_menu_item: None,
                 capture_menu_item: None,
                 switcher_menu_item: None,

@@ -15,6 +15,7 @@ fn main() {
             "open_offline",
             "open_web_offline",
             "switch_server",
+            "switch_to_server",
             "sign_out",
             "forget_server",
             "dismiss_notice",
@@ -39,6 +40,14 @@ fn main() {
             "settings_set_update_channel",
             "settings_check_for_updates",
             "settings_restart_to_update",
+            // Settings → Servers
+            "settings_servers",
+            "settings_rename_server",
+            "settings_move_server",
+            "settings_switch_server",
+            "settings_sign_out_server",
+            "settings_forget_server",
+            "settings_add_server",
             // the quick-capture window (capabilities/capture.json)
             "capture_context",
             "capture_submit",
@@ -89,6 +98,7 @@ fn main() {
             "panel_run",
             "panel_resize",
             "panel_close",
+            "panel_switch_server",
             // the New task window (capabilities/task.json)
             "task_view",
             "task_load",

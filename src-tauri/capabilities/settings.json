@@ -17,6 +17,13 @@
     "allow-settings-remove-voice-model",
     "allow-settings-set-update-channel",
     "allow-settings-check-for-updates",
-    "allow-settings-restart-to-update"
+    "allow-settings-restart-to-update",
+    "allow-settings-servers",
+    "allow-settings-rename-server",
+    "allow-settings-move-server",
+    "allow-settings-switch-server",
+    "allow-settings-sign-out-server",
+    "allow-settings-forget-server",
+    "allow-settings-add-server"
   ]
 }

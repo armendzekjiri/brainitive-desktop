@@ -106,7 +106,8 @@ fn reveal_main(app: &AppHandle) {
     }
 }
 
-/// "Brainitive — Cloud" / "Brainitive — brainitive.example.com", also in the Server menu.
+/// "Brainitive — Work" / "Brainitive — Brainitive Cloud" (the server's name, `servers.rs`), also
+/// in the Server menu.
 pub fn refresh_title(app: &AppHandle) {
     let (title, label) = {
         let s = state(app);
@@ -117,10 +118,10 @@ pub fn refresh_title(app: &AppHandle) {
             ""
         };
         match inner.current_origin() {
-            Some(o) => (
-                format!("Brainitive — {}{offline}", o.display_name()),
-                format!("Connected to {}", o.display_name()),
-            ),
+            Some(o) => {
+                let name = inner.settings.label_of(&o);
+                (format!("Brainitive — {name}{offline}"), format!("Connected to {name}"))
+            }
             None => ("Brainitive".to_string(), "Not connected".to_string()),
         }
     };
@@ -337,8 +338,10 @@ fn build_app_window(
 }
 
 fn window_title(app: &AppHandle) -> String {
-    match state(app).lock().current_origin() {
-        Some(o) => format!("Brainitive — {}", o.display_name()),
+    let s = state(app);
+    let inner = s.lock();
+    match inner.current_origin() {
+        Some(o) => format!("Brainitive — {}", inner.settings.label_of(&o)),
         None => "Brainitive".to_string(),
     }
 }

@@ -171,7 +171,7 @@ pub fn switcher_context(app: AppHandle, webview: Webview) -> Result<SwitcherCont
     let s = state(&app);
     let inner = s.lock();
     Ok(SwitcherContext {
-        server: inner.current_origin().map(|o| o.display_name()),
+        server: inner.current_origin().map(|o| inner.settings.label_of(&o)),
         signed_in: inner.phase == Phase::InApp,
         platform: crate::api::platform(),
     })

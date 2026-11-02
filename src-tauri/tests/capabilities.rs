@@ -300,3 +300,104 @@ fn every_new_task_command_checks_its_caller() {
     );
     assert!(src.contains("popup::ensure_caller(app, webview, Popup::Task)"));
 }
+
+#[test]
+fn server_switching_commands_live_in_their_own_windows_files_only() {
+    // a switch takes a saved server's id; adding a server stays the connect flow
+    let settings = permissions(&capability("settings"));
+    for p in [
+        "allow-settings-servers",
+        "allow-settings-rename-server",
+        "allow-settings-move-server",
+        "allow-settings-switch-server",
+        "allow-settings-sign-out-server",
+        "allow-settings-forget-server",
+        "allow-settings-add-server",
+    ] {
+        assert!(settings.contains(&p.to_string()), "{p}");
+    }
+    assert!(permissions(&capability("panel")).contains(&"allow-panel-switch-server".to_string()));
+    assert!(permissions(&capability("local")).contains(&"allow-switch-to-server".to_string()));
+    for name in ALL {
+        for p in permissions(&capability(name)) {
+            let switching = p.ends_with("-server") || p.ends_with("-servers");
+            if !switching {
+                continue;
+            }
+            let own = match name {
+                "settings" => p.starts_with("allow-settings-"),
+                "panel" => p == "allow-panel-switch-server",
+                // the connect screen's existing commands + the new id-based switch
+                "local" => matches!(
+                    p.as_str(),
+                    "allow-check-server"
+                        | "allow-use-server"
+                        | "allow-switch-server"
+                        | "allow-switch-to-server"
+                        | "allow-forget-server"
+                ),
+                _ => false,
+            };
+            assert!(own, "{name} grants {p}");
+        }
+    }
+}
+
+/// The `#[tauri::command]` functions of `file` whose name matches `pick`, with the first line of
+/// their body.
+fn commands_in(file: &str, pick: impl Fn(&str) -> bool) -> Vec<(String, String)> {
+    let src = std::fs::read_to_string(format!("{}/src/{file}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut out = Vec::new();
+    for part in src.split("#[tauri::command]").skip(1) {
+        let name = part
+            .split("fn ")
+            .nth(1)
+            .and_then(|r| r.split('(').next())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !pick(&name) {
+            continue;
+        }
+        let body = part
+            .split_once(") -> ")
+            .or_else(|| part.split_once(')'))
+            .map(|(_, b)| b)
+            .unwrap_or("");
+        let body = body.split_once('{').map(|(_, b)| b).unwrap_or("");
+        let first = body.trim_start().lines().next().unwrap_or("").trim().to_string();
+        out.push((name, first));
+    }
+    out
+}
+
+#[test]
+fn every_server_switching_command_checks_its_caller_first() {
+    let settings = commands_in("prefs.rs", |n| n.ends_with("_server") || n == "settings_servers");
+    assert_eq!(settings.len(), 7, "{settings:?}");
+    for (name, first) in settings {
+        assert_eq!(
+            first, "popup::ensure_caller(&app, &webview, Popup::Settings)?;",
+            "{name}"
+        );
+    }
+    let local = commands_in("commands.rs", |n| n == "switch_to_server");
+    assert_eq!(local.len(), 1);
+    assert_eq!(local[0].1, "ensure_main_screen(&app, &webview)?;");
+    // the panel's command is covered by `every_panel_command_checks_its_caller`; it takes an id
+    let panel = std::fs::read_to_string(format!("{}/src/panel/mod.rs", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    assert!(panel.contains("pub fn panel_switch_server(app: AppHandle, webview: Webview, id: String)"));
+    // no switch command takes an origin / URL
+    for file in ["prefs.rs", "commands.rs", "panel/mod.rs"] {
+        let src = std::fs::read_to_string(format!("{}/src/{file}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        for part in src.split("#[tauri::command]").skip(1) {
+            let signature = part.split('{').next().unwrap_or("");
+            if signature.contains("switch") {
+                assert!(
+                    !signature.contains("origin") && !signature.contains("url"),
+                    "{signature}"
+                );
+            }
+        }
+    }
+}

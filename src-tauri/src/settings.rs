@@ -1,5 +1,5 @@
 //! What the app remembers between launches (`settings.json` in the app config dir): the
-//! current server, up to five recent servers, webview data stores still to be deleted, and the
+//! current server, the saved servers in the user's order, webview data stores still to be deleted, and the
 //! desktop preferences (shortcuts, tray, downloads, zoom). No secrets here — tokens live in the
 //! keychain (`secrets.rs`).
 
@@ -10,23 +10,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::server::ServerOrigin;
 
-pub const MAX_RECENT: usize = 5;
-
+/// A saved server (an account the user switches to; `servers.rs`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecentServer {
     pub origin: ServerOrigin,
+    /// The server's own name (`/api/v1/instance`), refreshed on every connect.
     pub name: String,
     #[serde(default)]
     pub version: Option<String>,
     /// Unix seconds.
     #[serde(default)]
     pub last_used: u64,
+    /// The name the user gave it in Settings → Servers (`None`: [`crate::servers::default_name`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_name: Option<String>,
+}
+
+impl RecentServer {
+    /// What the title, menus, the panel and Settings call it.
+    pub fn label(&self) -> String {
+        match &self.custom_name {
+            Some(name) => name.clone(),
+            None => crate::servers::default_name(&self.origin, &self.name),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub current: Option<ServerOrigin>,
+    /// The saved servers in the user's order (⌃⌘1…9; the JSON key is from when this was a
+    /// "recent" list).
     #[serde(default)]
     pub recent: Vec<RecentServer>,
     /// Hex ids of webview data stores of forgotten servers, deleted once nothing uses them.
@@ -249,23 +264,75 @@ impl Settings {
         std::fs::rename(tmp, path)
     }
 
-    /// Makes `origin` current and moves it to the top of the recent list.
+    /// Makes `origin` current. A saved server keeps its place in the list (its name and version
+    /// are refreshed); a new one goes to the end. The list never grows beyond
+    /// [`crate::servers::MAX_SERVERS`]: callers check [`Settings::is_full_for`] first.
     pub fn remember(&mut self, origin: &ServerOrigin, name: &str, version: Option<String>) {
-        self.recent.retain(|r| &r.origin != origin);
-        self.recent.insert(
-            0,
-            RecentServer {
+        let name: String = name.chars().take(120).collect();
+        if let Some(r) = self.recent.iter_mut().find(|r| &r.origin == origin) {
+            r.name = name;
+            r.version = version;
+            r.last_used = now();
+        } else if self.recent.len() < crate::servers::MAX_SERVERS {
+            self.recent.push(RecentServer {
                 origin: origin.clone(),
-                name: name.chars().take(120).collect(),
+                name,
                 version,
                 last_used: now(),
-            },
-        );
-        self.recent.truncate(MAX_RECENT);
+                custom_name: None,
+            });
+        } else {
+            log::warn!("server list full: {origin} not saved");
+        }
         self.current = Some(origin.clone());
         // a server chosen again must not lose its fresh data to an old wipe
         let id = crate::server::hex(&origin.store_id());
         self.pending_wipes.retain(|w| *w != id);
+    }
+
+    /// Whether adding `origin` would go beyond the limit (a saved server always fits).
+    pub fn is_full_for(&self, origin: &ServerOrigin) -> bool {
+        self.recent.len() >= crate::servers::MAX_SERVERS && !self.recent.iter().any(|r| &r.origin == origin)
+    }
+
+    /// Makes a saved server current (a switch): its last-used time, the order stays. `false` when
+    /// it is not saved.
+    pub fn touch(&mut self, origin: &ServerOrigin) -> bool {
+        let Some(r) = self.recent.iter_mut().find(|r| &r.origin == origin) else {
+            return false;
+        };
+        r.last_used = now();
+        self.current = Some(origin.clone());
+        let id = crate::server::hex(&origin.store_id());
+        self.pending_wipes.retain(|w| *w != id);
+        true
+    }
+
+    /// The instance answered with (possibly new) name and version: kept for the default name.
+    pub fn update_instance(&mut self, origin: &ServerOrigin, name: &str, version: Option<String>) -> bool {
+        let Some(r) = self.recent.iter_mut().find(|r| &r.origin == origin) else {
+            return false;
+        };
+        let name: String = name.chars().take(120).collect();
+        let changed = r.name != name || r.version != version;
+        r.name = name;
+        r.version = version;
+        changed
+    }
+
+    /// Settings → Servers: a name of the user's own; empty = back to the default.
+    pub fn rename(&mut self, id: &str, name: &str) -> bool {
+        let Some(i) = crate::servers::index_of(&self.recent, id) else {
+            return false;
+        };
+        let clean = crate::servers::clean_name(name);
+        self.recent[i].custom_name = (!clean.is_empty()).then_some(clean);
+        true
+    }
+
+    /// The saved server with this id (`servers::server_id`).
+    pub fn server_by_id(&self, id: &str) -> Option<&RecentServer> {
+        crate::servers::index_of(&self.recent, id).map(|i| &self.recent[i])
     }
 
     /// Removes the server from the list (and from `current`) and schedules its webview data.
@@ -275,17 +342,25 @@ impl Settings {
         if self.current.as_ref() == Some(origin) {
             self.current = None;
         }
+        self.schedule_wipe(origin);
+    }
+
+    /// The server's webview data store is deleted once no window uses it (Forget, and a
+    /// sign-out of a server that is not the current one).
+    pub fn schedule_wipe(&mut self, origin: &ServerOrigin) {
         let id = crate::server::hex(&origin.store_id());
         if !self.pending_wipes.contains(&id) {
             self.pending_wipes.push(id);
         }
     }
 
-    pub fn name_of(&self, origin: &ServerOrigin) -> Option<&str> {
+    /// The display name of `origin`: its saved label, else the default for an unnamed server.
+    pub fn label_of(&self, origin: &ServerOrigin) -> String {
         self.recent
             .iter()
             .find(|r| &r.origin == origin)
-            .map(|r| r.name.as_str())
+            .map(RecentServer::label)
+            .unwrap_or_else(|| crate::servers::default_name(origin, ""))
     }
 }
 
@@ -305,19 +380,75 @@ mod tests {
     }
 
     #[test]
-    fn remembers_at_most_five_servers_most_recent_first() {
+    fn saved_servers_keep_the_users_order() {
         let mut s = Settings::default();
-        for i in 0..7 {
+        for i in 0..3 {
             s.remember(&o(&format!("s{i}.example.com")), &format!("S{i}"), None);
         }
-        assert_eq!(s.recent.len(), MAX_RECENT);
-        assert_eq!(s.recent[0].name, "S6");
-        assert_eq!(s.current, Some(o("s6.example.com")));
+        assert_eq!(s.current, Some(o("s2.example.com")));
+        // used again: refreshed, but it keeps its place (⌃⌘1…9 don't move under the user)
+        s.remember(&o("s0.example.com"), "S0 again", Some("1.49.0".into()));
+        let order: Vec<_> = s.recent.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(order, ["S0 again", "S1", "S2"]);
+        assert_eq!(s.current, Some(o("s0.example.com")));
+        assert_eq!(s.recent[0].version.as_deref(), Some("1.49.0"));
+        // a switch: current + last used, the order stays
+        s.recent[2].last_used = 0;
+        assert!(s.touch(&o("s2.example.com")));
+        assert!(s.recent[2].last_used > 0);
+        assert_eq!(s.current, Some(o("s2.example.com")));
+        assert_eq!(s.recent[0].origin, o("s0.example.com"));
+        assert!(!s.touch(&o("unknown.example.com")), "only saved servers");
+        assert_eq!(s.current, Some(o("s2.example.com")));
+    }
 
-        s.remember(&o("s3.example.com"), "S3 again", Some("1.49.0".into()));
-        assert_eq!(s.recent.len(), MAX_RECENT);
-        assert_eq!(s.recent[0].name, "S3 again");
-        assert_eq!(s.recent.iter().filter(|r| r.origin == o("s3.example.com")).count(), 1);
+    #[test]
+    fn the_list_stops_at_its_limit_instead_of_dropping_a_server() {
+        use crate::servers::MAX_SERVERS;
+        let mut s = Settings::default();
+        for i in 0..MAX_SERVERS {
+            assert!(!s.is_full_for(&o(&format!("s{i}.example.com"))));
+            s.remember(&o(&format!("s{i}.example.com")), "S", None);
+        }
+        assert_eq!(s.recent.len(), MAX_SERVERS);
+        assert!(s.is_full_for(&o("new.example.com")));
+        assert!(!s.is_full_for(&o("s3.example.com")), "a saved one always fits");
+        s.remember(&o("new.example.com"), "N", None);
+        assert_eq!(s.recent.len(), MAX_SERVERS, "nothing dropped silently");
+        assert_eq!(s.recent[0].origin, o("s0.example.com"));
+    }
+
+    #[test]
+    fn names_rename_and_survive_a_reconnect() {
+        let mut s = Settings::default();
+        let work = o("brain.acme.com");
+        s.remember(&work, "Brainitive", None);
+        s.remember(&ServerOrigin::cloud(), "Brainitive", None);
+        assert_eq!(s.label_of(&work), "brain.acme.com");
+        assert_eq!(s.label_of(&ServerOrigin::cloud()), "Brainitive Cloud");
+        let id = crate::servers::server_id(&work);
+        assert!(s.rename(&id, "  Work "));
+        assert_eq!(s.label_of(&work), "Work");
+        // the server's own name changes on the next connect: the user's name stays
+        assert!(s.update_instance(&work, "Acme Brain", Some("1.50.0".into())));
+        s.remember(&work, "Acme Brain", None);
+        assert_eq!(s.label_of(&work), "Work");
+        // empty = the default again (now the server's own name)
+        assert!(s.rename(&id, "   "));
+        assert_eq!(s.label_of(&work), "Acme Brain");
+        assert!(!s.rename("0000000000000000", "x"));
+        // written and read back; files without the field load
+        s.rename(&id, "Work");
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.label_of(&work), "Work");
+        let old: Settings = serde_json::from_str(
+            r#"{"current":"brain.acme.com","recent":[{"origin":"brain.acme.com","name":"Acme","last_used":1}]}"#,
+        )
+        .unwrap();
+        assert_eq!(old.recent[0].custom_name, None);
+        assert_eq!(old.label_of(&work), "Acme");
+        // not saved: the default for an unnamed server
+        assert_eq!(s.label_of(&o("x.example.com")), "x.example.com");
     }
 
     #[test]

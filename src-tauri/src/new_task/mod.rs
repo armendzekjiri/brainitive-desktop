@@ -77,6 +77,31 @@ pub fn show(app: &AppHandle) {
 
 /// Sign-out / forget: nothing of the account stays (the window itself is destroyed by
 /// `popup::close_account_windows`).
+impl TaskState {
+    /// Whether anything of an account is kept (projects, a create waiting, the created issue).
+    pub fn holds_answers(&self) -> bool {
+        self.kept.is_some() || self.pending.is_some() || self.created.is_some()
+    }
+
+    /// Answers kept for `origin` + `account` (tests of the server switch).
+    #[cfg(test)]
+    pub(crate) fn kept_for_test(origin: &ServerOrigin, account: u64) -> Self {
+        Self {
+            kept: Some(Kept {
+                ticket: Ticket {
+                    origin: origin.clone(),
+                    account,
+                },
+                projects: Vec::new(),
+                configs: HashMap::new(),
+                at: Instant::now(),
+                outdated: false,
+            }),
+            ..Self::default()
+        }
+    }
+}
+
 pub fn clear(app: &AppHandle) {
     state(app).lock().task = TaskState::default();
 }
@@ -132,7 +157,7 @@ pub struct TaskView {
 
 fn view(inner: &mut Inner, ticket: Option<&Ticket>, state_name: &'static str) -> TaskView {
     let shortcut = crate::shortcuts::label_of(inner.settings.preferences.task_shortcut.as_deref());
-    let server = ticket.map(|t| t.origin.display_name());
+    let server = ticket.map(|t| inner.settings.label_of(&t.origin));
     let memory = ticket.and_then(|t| memory_of(inner, t));
     let (projects, stale) = match ticket.and_then(|t| kept(inner, t)) {
         Some(k) => (k.projects.clone(), k.outdated || k.at.elapsed() > FRESH),

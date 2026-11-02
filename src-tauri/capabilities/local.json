@@ -18,6 +18,7 @@
     "allow-open-offline",
     "allow-open-web-offline",
     "allow-switch-server",
+    "allow-switch-to-server",
     "allow-sign-out",
     "allow-forget-server",
     "allow-dismiss-notice",

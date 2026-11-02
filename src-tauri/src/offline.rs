@@ -47,8 +47,13 @@ pub struct OfflineData {
     pub auto_opened: bool,
     /// Why the last sync failed (shown in the window).
     pub last_error: Option<String>,
-    /// Bumped by a wipe: a sync that started before it stops and writes nothing back.
+    /// Bumped by a wipe and whenever another server's data is loaded (or the data is unloaded on
+    /// a switch): a sync that started before it stops and writes nothing back — never another
+    /// server's outbox or cache.
     pub epoch: u64,
+    /// Bumped whenever the loaded server changes (load / unload): a sync of the previous load no
+    /// longer touches `syncing` / `last_error` / `online` of this one.
+    pub load: u64,
     /// The generation of the last snapshot / clear (see [`next_generation`]).
     generation: u64,
 }
@@ -67,6 +72,7 @@ impl OfflineData {
             auto_opened: false,
             last_error: None,
             epoch: 0,
+            load: 0,
             generation: 0,
         }
     }
@@ -80,12 +86,35 @@ impl OfflineData {
         if self.origin.as_ref() == Some(origin) && self.cache.is_some() {
             return;
         }
+        if self.origin.as_ref() != Some(origin) {
+            // a sync of the other server still running must not go on with this one's data
+            self.epoch += 1;
+            self.load += 1;
+            self.syncing = false;
+            self.again = false;
+        }
         let dir = self.dir_for(origin);
         self.cache = Some(Cache::load(&dir.join("cache.json"), origin));
         self.outbox = Outbox::load(&dir.join("outbox.json"));
         self.origin = Some(origin.clone());
         self.verified = false;
         self.online = None;
+        self.auto_opened = false;
+        self.last_error = None;
+    }
+
+    /// A server switch: the previous server's data leaves memory (its files stay for the next
+    /// time it is current) and a sync of it still running stops at its next step.
+    pub fn unload(&mut self) {
+        self.epoch += 1;
+        self.load += 1;
+        self.origin = None;
+        self.cache = None;
+        self.outbox = Outbox::default();
+        self.verified = false;
+        self.online = None;
+        self.syncing = false;
+        self.again = false;
         self.auto_opened = false;
         self.last_error = None;
     }
@@ -348,7 +377,37 @@ fn with_data<T>(app: &AppHandle, epoch: u64, f: impl FnOnce(&mut OfflineData) ->
 /// Sends the outbox and pulls the changes of `origin` (one sync at a time; a call during a sync
 /// makes it run once more).
 pub async fn sync(app: &AppHandle, origin: &ServerOrigin) -> Result<(), CallError> {
-    {
+    sync_with(app, origin, true).await
+}
+
+/// How long a server switch waits for the old server's outbox (`send_before_leaving`).
+pub const LEAVE_FLUSH: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A switch to another server: the current one's waiting offline changes get one try (at most
+/// [`LEAVE_FLUSH`], only while it is signed in and reachable), sent to **this** server. What is
+/// left stays in its `outbox.json` and goes out the next time it is current.
+pub async fn send_before_leaving(app: &AppHandle, origin: &ServerOrigin) {
+    let waiting = {
+        let s = state(app);
+        let inner = s.lock();
+        inner.phase == Phase::InApp
+            && inner.offline.origin.as_ref() == Some(origin)
+            && inner.offline.online != Some(false)
+            && !inner.offline.outbox.is_empty()
+    };
+    if !waiting {
+        return;
+    }
+    match tokio::time::timeout(LEAVE_FLUSH, sync_with(app, origin, false)).await {
+        Ok(Ok(())) => log::info!("offline changes sent before the switch"),
+        Ok(Err(e)) => log::info!("offline changes kept for later ({e})"),
+        Err(_) => log::info!("offline changes kept for later (took too long)"),
+    }
+}
+
+/// `pull`: also ask for what changed (not before a switch: only the outbox matters then).
+async fn sync_with(app: &AppHandle, origin: &ServerOrigin, pull_changes: bool) -> Result<(), CallError> {
+    let load = {
         let s = state(app);
         let mut inner = s.lock();
         if inner.current_origin().as_ref() != Some(origin) || crate::flows::app_too_old(&inner, origin) {
@@ -361,11 +420,12 @@ pub async fn sync(app: &AppHandle, origin: &ServerOrigin) -> Result<(), CallErro
         }
         inner.offline.syncing = true;
         inner.offline.again = false;
-    }
+        inner.offline.load
+    };
     changed(app);
     let mut result;
     loop {
-        result = sync_once(app, origin).await;
+        result = sync_once(app, origin, pull_changes).await;
         let again = {
             let s = state(app);
             let mut inner = s.lock();
@@ -378,6 +438,10 @@ pub async fn sync(app: &AppHandle, origin: &ServerOrigin) -> Result<(), CallErro
     {
         let s = state(app);
         let mut inner = s.lock();
+        if inner.offline.load != load {
+            // the server was switched meanwhile: nothing of this run belongs to what is loaded now
+            return result;
+        }
         inner.offline.syncing = false;
         inner.offline.last_error = match &result {
             Ok(()) => None,
@@ -401,7 +465,7 @@ pub async fn sync(app: &AppHandle, origin: &ServerOrigin) -> Result<(), CallErro
     result
 }
 
-async fn sync_once(app: &AppHandle, origin: &ServerOrigin) -> Result<(), CallError> {
+async fn sync_once(app: &AppHandle, origin: &ServerOrigin, pull_changes: bool) -> Result<(), CallError> {
     let epoch = state(app).lock().offline.epoch;
     let epoch = verify_user(app, origin, epoch).await?;
     let (sent, problems, error) = flush(app, origin, epoch).await;
@@ -424,6 +488,9 @@ async fn sync_once(app: &AppHandle, origin: &ServerOrigin) -> Result<(), CallErr
     }
     if let Some(e) = error {
         return Err(e);
+    }
+    if !pull_changes {
+        return Ok(());
     }
     pull(app, origin, epoch).await
 }
@@ -593,7 +660,7 @@ fn window_view(app: &AppHandle) -> WindowView {
         _ => None,
     };
     WindowView {
-        server: origin.map(|o| o.display_name()),
+        server: origin.as_ref().map(|o| inner.settings.label_of(o)),
         signed_in,
         online: if offline { Some(false) } else { inner.offline.online },
         syncing: inner.offline.syncing,
@@ -877,6 +944,39 @@ mod tests {
         assert!(data.outbox.is_empty());
         data.ensure(&origin());
         assert_eq!(data.outbox.len(), 1, "read back from its file");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn another_server_or_a_switch_stops_a_running_sync() {
+        let base = std::env::temp_dir().join(format!("brainitive-offline-switch-{}", std::process::id()));
+        let mut data = OfflineData::new(base.clone());
+        data.ensure(&origin());
+        data.syncing = true;
+        let (epoch, load) = (data.epoch, data.load);
+        // the same server again: nothing changes for a sync that runs
+        data.ensure(&origin());
+        assert_eq!((data.epoch, data.load), (epoch, load));
+        assert!(data.syncing);
+        // another server's data: the old run's next `with_data` is stale (it can't take this
+        // outbox to the old server), and this server may sync on its own
+        data.ensure(&ServerOrigin::cloud());
+        assert!(data.epoch > epoch && data.load > load);
+        assert!(!data.syncing);
+        // a switch unloads everything
+        data.outbox
+            .push(Change::CaptureCreate {
+                text: "cloud".into(),
+                url: None,
+                intended_type: None,
+            })
+            .unwrap();
+        let epoch = data.epoch;
+        data.unload();
+        assert!(data.epoch > epoch);
+        assert_eq!(data.origin, None);
+        assert!(data.cache.is_none() && data.outbox.is_empty() && !data.verified);
+        assert!(data.snapshot().is_none(), "nothing to write for no server");
         let _ = std::fs::remove_dir_all(base);
     }
 

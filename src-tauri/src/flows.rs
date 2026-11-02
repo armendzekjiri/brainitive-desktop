@@ -167,18 +167,30 @@ pub async fn use_server(app: &AppHandle, origin: ServerOrigin) -> Result<(), UiE
         return Ok(());
     }
     let origin = check.origin;
+    let previous = {
+        let s = state(app);
+        let inner = s.lock();
+        if inner.settings.is_full_for(&origin) {
+            return Err(UiError::new(
+                "too_many",
+                format!(
+                    "Brainitive keeps up to {} servers. Forget one in Settings → Servers first.",
+                    crate::servers::MAX_SERVERS
+                ),
+            ));
+        }
+        inner.current_origin()
+    };
+    if let Some(previous) = previous.filter(|p| p != &origin) {
+        leave_server(app, &previous).await;
+    }
     {
         let s = state(app);
         let mut inner = s.lock();
-        let previous = inner.current_origin();
         inner.settings.remember(&origin, &check.name, check.version.clone());
         inner.save_settings();
-        if previous.as_ref() != Some(&origin) {
-            inner.last_good = None;
-            inner.reauth_at = None;
-        }
     }
-    shell::refresh_title(app);
+    servers_changed(app);
     // a server switch must not leave the other server's badge on the dock
     crate::bridge::set_badge(app, 0);
 
@@ -214,6 +226,11 @@ async fn restore_inner(app: &AppHandle, origin: ServerOrigin, to: Option<String>
         instance_gate(app, &origin),
         app_state.session.web_session_url(&origin, to.as_deref())
     );
+    // switched to another server while this one was asked: its answer shows nothing
+    if state(app).lock().current_origin().as_ref() != Some(&origin) {
+        log::info!("restore of a server that is no longer current dropped");
+        return;
+    }
     match gate {
         Err(problem) => return show_unreachable(app, problem),
         Ok(Some(update)) => return show_update_required(app, update),
@@ -253,7 +270,20 @@ async fn instance_gate(app: &AppHandle, origin: &ServerOrigin) -> Result<Option<
         .as_deref()
         .filter(|m| !meets_minimum(APP_VERSION, m))
         .map(|m| UpdateRequired::new(&info.name, origin, info.version.clone(), m));
-    state(app).lock().instance = Some((origin.clone(), info));
+    let renamed = {
+        let s = state(app);
+        let mut inner = s.lock();
+        // the server's own name (the default display name) may have changed
+        let renamed = inner.settings.update_instance(origin, &info.name, info.version.clone());
+        if renamed {
+            inner.save_settings();
+        }
+        inner.instance = Some((origin.clone(), info));
+        renamed
+    };
+    if renamed {
+        servers_changed(app);
+    }
     Ok(update)
 }
 
@@ -591,15 +621,130 @@ fn clear_account_traces(app: &AppHandle) {
     crate::popup::close_account_windows(app);
 }
 
-/// "Switch server…": back to the choice, without signing out of the current server.
+/// "Switch server…" / "Add Server…": back to the choice, without signing out of the current
+/// server (its "Back to …" button and the saved servers switch without a new sign-in).
 pub fn switch_server(app: &AppHandle) {
     state(app).session.cancel_sign_in();
     shell::show_local(app, Phase::Choose, None);
 }
 
+/// The id of a saved server (`servers::server_id`) → its origin. Commands never take an origin
+/// from a page for a switch: only servers the user added through the connect flow.
+pub fn saved_server(app: &AppHandle, id: &str) -> Result<ServerOrigin, UiError> {
+    state(app)
+        .lock()
+        .settings
+        .server_by_id(id)
+        .map(|r| r.origin.clone())
+        .ok_or_else(|| UiError::new("unknown_server", "That server is not in your list any more."))
+}
+
+/// A switch to a saved server (menu ⌃⌘1…9, tray, the panel's switcher, Settings, the Choose
+/// screen): the old server's waiting offline changes get one bounded try, its in-memory account
+/// data goes (not its keychain entry, store or files), then the new one is restored like at
+/// start — its own webview store, its stored sign-in, else its sign-in screen.
+pub async fn switch_to(app: &AppHandle, id: &str) -> Result<(), UiError> {
+    let origin = saved_server(app, id)?;
+    let (previous, phase) = {
+        let s = state(app);
+        let inner = s.lock();
+        (inner.current_origin(), inner.phase)
+    };
+    shell::focus_main(app);
+    if previous.as_ref() == Some(&origin) {
+        // already there (or on its way): nothing to switch; from the Choose / sign-in screens it
+        // goes back into this server
+        if !matches!(phase, Phase::InApp | Phase::Connecting | Phase::Waiting) {
+            restore(app, origin, None).await;
+        }
+        return Ok(());
+    }
+    log::info!("switching servers");
+    if let Some(previous) = &previous {
+        leave_server(app, previous).await;
+    }
+    state(app).session.cancel_sign_in();
+    {
+        let s = state(app);
+        let mut inner = s.lock();
+        // forgotten while the old server's outbox was sent
+        if !inner.settings.touch(&origin) {
+            return Err(UiError::new(
+                "unknown_server",
+                "That server is not in your list any more.",
+            ));
+        }
+        inner.save_settings();
+    }
+    servers_changed(app);
+    restore(app, origin, None).await;
+    Ok(())
+}
+
+/// Leaving `previous` for another server (a switch, or another server on the Choose screen):
+/// its waiting offline changes first (bounded, to that server only), then everything of its
+/// account that is in memory or in a hidden window. Its keychain entry, webview store, offline
+/// files, capture queue and New-task memory stay, so switching back needs no new sign-in.
+async fn leave_server(app: &AppHandle, previous: &ServerOrigin) {
+    crate::offline::send_before_leaving(app, previous).await;
+    crate::voice::cancel_for_sign_out(app);
+    crate::popup::close_account_windows(app);
+    drop_account_state(&mut state(app).lock());
+    crate::bridge::set_badge(app, 0);
+}
+
+/// The in-memory account data of the server that was current (pure, tested): the account
+/// epoch moves on (a poll, panel load, New-task call or sync still running for it writes
+/// nothing), the panel's and New task's answers, the tray data, the ETag cache, a capture
+/// prefill and the loaded offline data go. Per-origin data on disk stays.
+pub fn drop_account_state(inner: &mut crate::state::Inner) {
+    inner.account_epoch += 1;
+    inner.capture_prefill = None;
+    inner.task = Default::default();
+    inner.panel.clear_account();
+    inner.tray_data = Default::default();
+    inner.tray_data.my_day_stale = true;
+    inner.etags.clear();
+    inner.offline.unload();
+    inner.instance = None;
+    inner.last_good = None;
+    inner.reauth_at = None;
+}
+
+/// The saved servers, a name or the current one changed: title, Servers menu, tray (and the
+/// panel's header, which `tray::refresh` tells).
+pub fn servers_changed(app: &AppHandle) {
+    shell::refresh_title(app);
+    crate::menu::refresh_servers(app);
+    crate::tray::refresh(app);
+}
+
+/// Settings → Servers → Sign out. The current server: the usual sign-out (sign-in screen). Another
+/// one: its device is signed out on the server, its keychain entry, capture queue, offline files
+/// and webview data go — but it stays in the list (unlike Forget), ready to sign in again.
+pub async fn sign_out_server(app: &AppHandle, origin: ServerOrigin) {
+    if state(app).lock().current_origin().as_ref() == Some(&origin) {
+        sign_out(app).await;
+        servers_changed(app);
+        return;
+    }
+    state(app).session.sign_out(&origin).await;
+    crate::capture::drop_queue(app, &origin);
+    crate::offline::wipe(app, &origin);
+    {
+        let s = state(app);
+        let mut inner = s.lock();
+        inner.settings.schedule_wipe(&origin);
+        inner.save_settings();
+    }
+    shell::run_pending_wipes(app).await;
+    servers_changed(app);
+}
+
 /// "Forget this server": sign out there, delete its keychain entry and its webview data,
 /// remove it from the recent list.
 pub async fn forget_server(app: &AppHandle, origin: ServerOrigin) {
+    let label = state(app).lock().settings.label_of(&origin);
     if state(app).lock().current_origin().as_ref() == Some(&origin) {
         clear_account_traces(app);
     }
@@ -610,41 +755,41 @@ pub async fn forget_server(app: &AppHandle, origin: ServerOrigin) {
         let s = state(app);
         let mut inner = s.lock();
         let was_current = inner.current_origin().as_ref() == Some(&origin);
-        inner.account_epoch += 1;
-        inner.settings.forget(&origin);
-        inner.save_settings();
         if was_current {
+            inner.account_epoch += 1;
             inner.instance = None;
             inner.last_good = None;
         }
+        inner.settings.forget(&origin);
+        inner.save_settings();
         was_current
     };
-    shell::refresh_title(app);
+    servers_changed(app);
+    if was_current {
+        crate::bridge::set_badge(app, 0);
+    }
+    let notice = Notice::info(format!("{label} was removed from this app."));
     let uses_store = state(app).lock().window_store == Some(origin.store_id());
     if uses_store {
-        if was_current {
-            crate::bridge::set_badge(app, 0);
-        }
         // move the window to the neutral store; the old one is deleted once it is released
-        state(app).lock().phase = Phase::Choose;
-        state(app).lock().notice = Some(Notice::info(format!(
-            "{} was removed from this app.",
-            origin.display_name()
-        )));
+        {
+            let s = state(app);
+            let mut inner = s.lock();
+            if was_current {
+                inner.phase = Phase::Choose;
+            }
+            inner.notice = Some(notice);
+        }
         shell::open_main(
             app,
             crate::server::local_store_id(),
             tauri::WebviewUrl::App("index.html".into()),
         );
+    } else if was_current {
+        shell::show_local(app, Phase::Choose, Some(notice));
+        shell::run_pending_wipes(app).await;
     } else {
-        shell::show_local(
-            app,
-            Phase::Choose,
-            Some(Notice::info(format!(
-                "{} was removed from this app.",
-                origin.display_name()
-            ))),
-        );
+        // another server than the current one (Settings → Servers): the app stays where it is
         shell::run_pending_wipes(app).await;
     }
 }
@@ -652,6 +797,143 @@ pub async fn forget_server(app: &AppHandle, origin: ServerOrigin) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::AppState;
+
+    fn o(s: &str) -> ServerOrigin {
+        ServerOrigin::parse(s).unwrap()
+    }
+
+    fn app_state(name: &str) -> (AppState, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("brainitive-switch-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let state = AppState::new(dir.join("settings.json"), dir.join("queue.json"), dir.join("offline"));
+        (state, dir)
+    }
+
+    #[test]
+    fn a_switch_leaves_nothing_of_the_old_server_in_memory_and_keeps_its_data() {
+        use crate::new_task::model::{remember, Memory};
+        use crate::queue::{CaptureInput, QueuedCapture};
+        let (app_state, dir) = app_state("leave");
+        let work = o("work.acme.com");
+        let private = ServerOrigin::cloud();
+        let mut inner = app_state.lock();
+        inner.settings.remember(&private, "Brainitive", None);
+        inner.settings.remember(&work, "Acme", None);
+        inner.phase = Phase::InApp;
+
+        // the work server's account in memory: panel answers, New task, tray, ETags, offline data
+        let kept = crate::panel::kept_for_current(&mut inner).expect("signed in");
+        kept.today = Some(crate::panel::Stored {
+            body: serde_json::json!({"events": []}),
+            at: Instant::now(),
+        });
+        let epoch = inner.account_epoch;
+        inner.task = crate::new_task::TaskState::kept_for_test(&work, epoch);
+        inner.tray_data.unread = Some(7);
+        inner.capture_prefill = Some("dictated for work".into());
+        let key = crate::tray::etag_key(&work, "/api/v1/me/timer");
+        inner.etags.insert(key, ("\"e1\"".into(), serde_json::json!({})));
+        inner.offline.ensure(&work);
+        inner
+            .offline
+            .outbox
+            .push(crate::outbox::Change::CaptureCreate {
+                text: "offline work note".into(),
+                url: None,
+                intended_type: None,
+            })
+            .unwrap();
+        let offline_epoch = inner.offline.epoch;
+        // data on disk / per origin that must stay with the work server
+        let note = CaptureInput::new("queued for work", None, None).unwrap();
+        inner.queue.push(QueuedCapture::new(&work, note)).unwrap();
+        let memory = Memory {
+            project_id: Some(10),
+            board_id: Some(100),
+            type_id: None,
+            at: 1,
+        };
+        remember(&mut inner.settings.preferences.new_task, work.as_str(), memory);
+
+        drop_account_state(&mut inner);
+        assert!(inner.settings.touch(&private));
+
+        // nothing of the work account is in memory any more
+        assert!(inner.account_epoch > epoch, "polls / loads still running write nothing");
+        assert!(!inner.task.holds_answers());
+        assert!(!inner.panel.holds_answers());
+        assert!(crate::panel::kept_for_current(&mut inner).unwrap().today.is_none());
+        assert_eq!(inner.tray_data.unread, None);
+        assert!(inner.tray_data.my_day_stale);
+        assert!(inner.etags.is_empty());
+        assert_eq!(inner.capture_prefill, None);
+        assert!(inner.instance.is_none() && inner.last_good.is_none());
+        assert_eq!(inner.offline.origin, None, "unloaded");
+        assert!(inner.offline.outbox.is_empty());
+        assert!(inner.offline.epoch > offline_epoch, "a sync of the work server stops");
+        // the private server sees none of it
+        assert_eq!(inner.queue.pending_for(&private).len(), 0);
+        assert!(!inner.settings.preferences.new_task.contains_key(private.as_str()));
+        // … and the work server keeps it for when the user comes back
+        assert_eq!(inner.queue.pending_for(&work).len(), 1);
+        assert_eq!(inner.settings.preferences.new_task[work.as_str()], memory);
+        assert!(inner.settings.server_by_id(&crate::servers::server_id(&work)).is_some());
+        drop(inner);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_new_task_or_panel_answer_of_the_old_server_is_not_shown_for_the_new_one() {
+        let (app_state, dir) = app_state("tickets");
+        let a = o("a.example.com");
+        let b = o("b.example.com");
+        let mut inner = app_state.lock();
+        inner.settings.remember(&a, "A", None);
+        inner.settings.remember(&b, "B", None);
+        assert!(inner.settings.touch(&a));
+        inner.phase = Phase::InApp;
+        let ticket = crate::tray::PollTicket::now(&inner).unwrap();
+        drop_account_state(&mut inner);
+        assert!(inner.settings.touch(&b));
+        // an answer for A that arrives now is dropped (`PollTicket::holds`)
+        assert!(!ticket.still_current(inner.current_origin().as_ref(), inner.account_epoch, true));
+        // switching back to A is a new sign-in epoch too: A's late answer stays dropped
+        drop_account_state(&mut inner);
+        assert!(inner.settings.touch(&a));
+        assert!(!ticket.still_current(inner.current_origin().as_ref(), inner.account_epoch, true));
+        drop(inner);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sign_out_keeps_the_server_saved_and_forget_removes_it() {
+        use crate::new_task::model::{remember, Memory};
+        let mut s = crate::settings::Settings::default();
+        let a = o("a.example.com");
+        let b = o("b.example.com");
+        s.remember(&a, "A", None);
+        s.remember(&b, "B", None);
+        let id = crate::servers::server_id(&a);
+        s.rename(&id, "Work");
+        remember(&mut s.preferences.new_task, a.as_str(), Memory::default());
+        // sign-out (of a server that is not current): its webview data is scheduled, it stays
+        s.schedule_wipe(&a);
+        assert!(s.server_by_id(&id).is_some());
+        assert_eq!(s.label_of(&a), "Work", "keeps its name and place");
+        assert_eq!(s.recent[0].origin, a);
+        assert!(s.preferences.new_task.contains_key(a.as_str()));
+        assert_eq!(s.current, Some(b.clone()));
+        // signing in there again later keeps the fresh data from the old wipe
+        assert!(s.touch(&a));
+        assert!(s.pending_wipes.is_empty());
+        // forget: off the list, its memory gone, its data scheduled
+        s.forget(&a);
+        assert!(s.server_by_id(&id).is_none());
+        assert!(!s.preferences.new_task.contains_key(a.as_str()));
+        assert_eq!(s.pending_wipes, vec![crate::server::hex(&a.store_id())]);
+        assert_eq!(s.current, None);
+    }
 
     #[test]
     fn a_server_that_now_answers_elsewhere_needs_a_new_confirm() {

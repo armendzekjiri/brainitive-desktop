@@ -97,12 +97,25 @@ pub struct PanelState {
     hidden_at: Option<Instant>,
 }
 
+impl PanelState {
+    /// A server switch / sign-out: the kept answers go (where it opened stays).
+    pub fn clear_account(&mut self) {
+        self.owner = None;
+        self.kept = Kept::default();
+    }
+
+    /// Whether answers of some server + sign-in are kept.
+    pub fn holds_answers(&self) -> bool {
+        self.owner.is_some()
+    }
+}
+
 fn signed_in(phase: Phase) -> bool {
     matches!(phase, Phase::InApp | Phase::Unreachable | Phase::Connecting)
 }
 
 /// The kept answers of the current server + sign-in (another one's are dropped first).
-fn kept_for_current(inner: &mut Inner) -> Option<&mut Kept> {
+pub(crate) fn kept_for_current(inner: &mut Inner) -> Option<&mut Kept> {
     let owner = inner
         .current_origin()
         .filter(|_| signed_in(inner.phase))
@@ -138,6 +151,8 @@ pub struct Head {
     platform: &'static str,
     /// Changes without a sync type are off while offline (why).
     offline_hint: Option<&'static str>,
+    /// The saved servers for the header's switcher (ids and names only).
+    servers: Vec<crate::servers::Choice>,
 }
 
 fn head(app: &AppHandle) -> Head {
@@ -153,13 +168,14 @@ fn head(app: &AppHandle) -> Head {
             (Some(_), false) => "signed_out",
             (Some(_), true) => "ready",
         },
-        server: origin.map(|o| o.display_name()),
+        server: origin.map(|o| inner.settings.label_of(&o)),
         status: view::sync_status(offline, inner.offline.syncing, pending),
         pending,
         unread: inner.tray_data.unread.unwrap_or(0),
         tab: Tab::remembered(&inner.settings.preferences.panel_tab),
         platform: crate::api::platform(),
         offline_hint: view::needs_server(offline),
+        servers: crate::servers::choices(&inner.settings, cfg!(target_os = "macos")),
     }
 }
 
@@ -966,6 +982,8 @@ pub enum PanelAction {
     Open,
     Settings,
     SignIn,
+    /// The header's switcher: Settings → Servers.
+    ManageServers,
 }
 
 #[tauri::command]
@@ -976,8 +994,20 @@ pub fn panel_run(app: AppHandle, webview: Webview, action: PanelAction) -> Resul
         PanelAction::Capture => popup::show(&app, Popup::Capture),
         PanelAction::Task => crate::new_task::show(&app),
         PanelAction::Settings => popup::show(&app, Popup::Settings),
+        PanelAction::ManageServers => crate::menu::manage_servers(&app),
         PanelAction::Open | PanelAction::SignIn => crate::shell::focus_main(&app),
     }
+    Ok(())
+}
+
+/// The header's switcher: a saved server by its id (never an origin). The panel hides; the
+/// switch destroys it with the old server's answers, so it opens fresh for the new one.
+#[tauri::command]
+pub fn panel_switch_server(app: AppHandle, webview: Webview, id: String) -> Result<(), UiError> {
+    caller(&app, &webview)?;
+    crate::flows::saved_server(&app, &id)?;
+    popup::hide(&app, Popup::Panel);
+    crate::menu::pick_server(&app, &id);
     Ok(())
 }
 

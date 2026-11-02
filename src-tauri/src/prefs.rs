@@ -21,7 +21,7 @@ pub fn launched_at_login(mut args: impl Iterator<Item = String>) -> bool {
 pub struct PrefsView {
     app_version: &'static str,
     platform: &'static str,
-    /// "Cloud" / "brainitive.example.com", `None` before a server is chosen.
+    /// The current server's name ("Work", "Brainitive Cloud"), `None` before a server is chosen.
     server: Option<String>,
     signed_in: bool,
     zoom_percent: u32,
@@ -51,6 +51,8 @@ pub struct PrefsView {
     shortcut_problem: Option<String>,
     /// Auto-updates (BRAI-373): on / off, channel, last check, status.
     updates: crate::updater::View,
+    /// A section to scroll to once ("servers" after Manage Servers…).
+    focus: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -76,7 +78,7 @@ pub fn view(app: &AppHandle) -> PrefsView {
     PrefsView {
         app_version: APP_VERSION,
         platform: crate::api::platform(),
-        server: inner.current_origin().map(|o| o.display_name()),
+        server: inner.current_origin().map(|o| inner.settings.label_of(&o)),
         signed_in: inner.phase == Phase::InApp,
         zoom_percent: (prefs.zoom * 100.0).round() as u32,
         leader_shortcut: crate::shortcuts::label_of(prefs.leader_shortcut.as_deref()),
@@ -107,13 +109,16 @@ pub fn view(app: &AppHandle) -> PrefsView {
         start_hidden: prefs.start_hidden,
         shortcut_problem: inner.hotkey_error.clone(),
         updates,
+        focus: None,
     }
 }
 
 #[tauri::command]
 pub fn settings_get(app: AppHandle, webview: Webview) -> Result<PrefsView, String> {
     popup::ensure_caller(&app, &webview, Popup::Settings)?;
-    Ok(view(&app))
+    let mut view = view(&app);
+    view.focus = state(&app).lock().settings_focus.take();
+    Ok(view)
 }
 
 /// "Account settings" / "Notification settings": the web app's profile page in the app window.
@@ -180,11 +185,13 @@ pub fn settings_set_shortcut(
             HotkeyAction::Task => crate::shortcuts::DEFAULT_TASK,
         }
         .map(str::to_string),
-        ShortcutChoice::Keys(keys) => Some(
-            crate::shortcuts::parse(&keys)
-                .map(|s| crate::shortcuts::canonical(&s))
-                .map_err(|e| e.to_string())?,
-        ),
+        ShortcutChoice::Keys(keys) => {
+            let shortcut = crate::shortcuts::parse(&keys).map_err(|e| e.to_string())?;
+            if crate::servers::takes_server_keys(&shortcut, cfg!(target_os = "macos")) {
+                return Err("These keys switch servers in the app's menu (Servers ▸). Choose other keys.".into());
+            }
+            Some(crate::shortcuts::canonical(&shortcut))
+        }
     };
     let label = crate::shortcuts::label_of(value.as_deref());
     let previous = state(&app).lock().settings.preferences.clone();
@@ -343,6 +350,147 @@ pub async fn settings_remove_voice_model(app: AppHandle, webview: Webview) -> Re
     popup::ensure_caller(&app, &webview, Popup::Settings)?;
     crate::voice::remove_model(&app)?;
     Ok(view(&app))
+}
+
+// ── Settings → Servers ─────────────────────────────────────────────────────────
+
+/// One saved server in Settings → Servers.
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerRow {
+    #[serde(flatten)]
+    choice: crate::servers::Choice,
+    /// What the name is when the field is emptied.
+    default_name: String,
+    /// A refresh token is in the keychain (signed in on this computer).
+    signed_in: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ServersView {
+    servers: Vec<ServerRow>,
+    max: usize,
+}
+
+/// The saved servers in their order; "signed in" is one keychain read per server.
+async fn servers_view(app: &AppHandle) -> ServersView {
+    let rows: Vec<(crate::servers::Choice, crate::server::ServerOrigin, String)> = {
+        let s = state(app);
+        let inner = s.lock();
+        let choices = crate::servers::choices(&inner.settings, cfg!(target_os = "macos"));
+        choices
+            .into_iter()
+            .zip(inner.settings.recent.iter())
+            .map(|(c, r)| (c, r.origin.clone(), crate::servers::default_name(&r.origin, &r.name)))
+            .collect()
+    };
+    let mut servers = Vec::with_capacity(rows.len());
+    for (choice, origin, default_name) in rows {
+        let signed_in = state(app).session.has_stored_sign_in(&origin).await;
+        servers.push(ServerRow {
+            choice,
+            default_name,
+            signed_in,
+        });
+    }
+    ServersView {
+        servers,
+        max: crate::servers::MAX_SERVERS,
+    }
+}
+
+fn saved(app: &AppHandle, id: &str) -> Result<crate::server::ServerOrigin, String> {
+    crate::flows::saved_server(app, id).map_err(|e| e.message)
+}
+
+#[tauri::command]
+pub async fn settings_servers(app: AppHandle, webview: Webview) -> Result<ServersView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    Ok(servers_view(&app).await)
+}
+
+/// A name of the user's own (empty: back to the default).
+#[tauri::command]
+pub async fn settings_rename_server(
+    app: AppHandle,
+    webview: Webview,
+    id: String,
+    name: String,
+) -> Result<ServersView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    if name.chars().count() > 500 {
+        return Err("That name is too long.".into());
+    }
+    {
+        let s = state(&app);
+        let mut inner = s.lock();
+        if !inner.settings.rename(&id, &name) {
+            return Err("That server is not in your list any more.".into());
+        }
+        inner.save_settings();
+    }
+    crate::flows::servers_changed(&app);
+    Ok(servers_view(&app).await)
+}
+
+/// ↑ / ↓: the order is the ⌃⌘1…9 / Alt+1…9 order.
+#[tauri::command]
+pub async fn settings_move_server(
+    app: AppHandle,
+    webview: Webview,
+    id: String,
+    direction: crate::servers::Move,
+) -> Result<ServersView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    let moved = {
+        let s = state(&app);
+        let mut inner = s.lock();
+        let moved = crate::servers::move_server(&mut inner.settings.recent, &id, direction);
+        if moved {
+            inner.save_settings();
+        }
+        moved
+    };
+    if moved {
+        crate::flows::servers_changed(&app);
+    }
+    Ok(servers_view(&app).await)
+}
+
+/// "Switch to": the main window comes to the front on that server (or its sign-in screen).
+#[tauri::command]
+pub async fn settings_switch_server(app: AppHandle, webview: Webview, id: String) -> Result<(), String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    saved(&app, &id)?;
+    crate::menu::pick_server(&app, &id);
+    Ok(())
+}
+
+/// "Sign out": that server's device, keychain entry, queue, offline files and webview data go;
+/// it stays in the list.
+#[tauri::command]
+pub async fn settings_sign_out_server(app: AppHandle, webview: Webview, id: String) -> Result<ServersView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    let origin = saved(&app, &id)?;
+    crate::flows::sign_out_server(&app, origin).await;
+    Ok(servers_view(&app).await)
+}
+
+/// "Forget" (second click): the existing flow — signed out, its data deleted, off the list.
+#[tauri::command]
+pub async fn settings_forget_server(app: AppHandle, webview: Webview, id: String) -> Result<ServersView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    let origin = saved(&app, &id)?;
+    crate::flows::forget_server(&app, origin).await;
+    Ok(servers_view(&app).await)
+}
+
+/// "Add Server…": the connect screen in the main window (the current server stays signed in).
+#[tauri::command]
+pub fn settings_add_server(app: AppHandle, webview: Webview) -> Result<(), String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    popup::dismiss(&app, Popup::Settings);
+    crate::menu::add_server(&app);
+    Ok(())
 }
 
 #[cfg(test)]
