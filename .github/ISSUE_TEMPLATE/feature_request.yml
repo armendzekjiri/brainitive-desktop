@@ -1,0 +1,30 @@
+name: Feature request
+description: Suggest an improvement for Brainitive Desktop
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem or workflow, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like the app to do?
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Which systems does it matter on?
+      multiple: true
+      options: [macOS, Windows, Linux]
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds you tried
+  - type: markdown
+    attributes:
+      value: Features that need server changes (new API endpoints) belong to the Brainitive app; we may move the discussion there.
