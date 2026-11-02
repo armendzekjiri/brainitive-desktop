@@ -107,7 +107,9 @@ fn versions_map_to_four_parts() {
     // the version a Store package is built with today
     let config: serde_json::Value = serde_json::from_str(&read("tauri.conf.json")).unwrap();
     let version = config["version"].as_str().unwrap();
-    assert_eq!(msix_version(version), Some(format!("{version}.0")));
+    // a pre-release (1.0.0-beta.1) has no Store version: the msstore job skips such tags
+    let expected = (!version.contains('-')).then(|| format!("{version}.0"));
+    assert_eq!(msix_version(version), expected);
 }
 
 #[test]
