@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Brainitive Offline</title>
+    <link rel="stylesheet" href="/src/native.css" />
+    <link rel="stylesheet" href="/src/offline.css" />
+    <script type="module" src="/src/offline.ts"></script>
+  </head>
+  <body>
+    <!-- BRAI-366: this computer's copy of the user's own data; every change goes through Rust
+         (POST /api/v1/sync with the stored app token). Server text is set with textContent only. -->
+    <div class="offline">
+      <header id="status" class="status" role="status">
+        <span id="status-dot" class="dot" aria-hidden="true"></span>
+        <span class="status-text">
+          <strong id="status-title">Brainitive</strong>
+          <small id="status-detail" class="muted"></small>
+        </span>
+        <button id="open-app" type="button">Open Brainitive</button>
+        <button id="sync-now" class="primary" type="button">Sync now</button>
+      </header>
+      <p id="sync-error" class="error banner" hidden></p>
+
+      <nav class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="my-day">My Day <span class="count" data-count="my-day"></span></button>
+        <button type="button" role="tab" data-tab="work">My Work <span class="count" data-count="work"></span></button>
+        <button type="button" role="tab" data-tab="lists">Task lists</button>
+        <button type="button" role="tab" data-tab="captures">Captures</button>
+        <button type="button" role="tab" data-tab="problems" id="problems-tab" hidden>Needs a look <span class="count bad" data-count="problems"></span></button>
+      </nav>
+
+      <main id="content">
+        <section id="empty" class="empty" hidden>
+          <h2 id="empty-title">Nothing on this computer yet</h2>
+          <p id="empty-text" class="muted">Brainitive keeps My Day, your work, task lists and captures here once it has synced with the server. Open it while you're online, and it's ready for the next time you're not.</p>
+        </section>
+
+        <section data-panel="my-day" hidden>
+          <h2 id="day-title">My Day</h2>
+          <ul id="day-list" class="items"></ul>
+          <p id="day-empty" class="muted" hidden>Nothing planned for today. Add work from My Work.</p>
+        </section>
+
+        <section data-panel="work" hidden>
+          <h2>My Work <small class="muted">open work assigned to you</small></h2>
+          <ul id="work-list" class="items"></ul>
+          <p id="work-empty" class="muted" hidden>No open work.</p>
+        </section>
+
+        <section data-panel="lists" hidden>
+          <div class="list-head">
+            <label for="list-select" class="muted">List</label>
+            <select id="list-select"></select>
+          </div>
+          <form id="add-task" class="add">
+            <input id="task-title" type="text" maxlength="500" placeholder="Add a task" autocomplete="off" />
+            <button class="primary" type="submit">Add</button>
+          </form>
+          <ul id="task-list" class="items"></ul>
+          <p id="lists-empty" class="muted" hidden>No task lists on this computer. The lists of tasks assigned to you are kept here.</p>
+        </section>
+
+        <section data-panel="captures" hidden>
+          <form id="add-capture" class="capture-form">
+            <textarea id="capture-text" rows="3" maxlength="20000" placeholder="Capture an idea, a link, a to-do…"></textarea>
+            <div class="add">
+              <input id="capture-url" type="text" inputmode="url" placeholder="Link (optional)" autocomplete="off" />
+              <button class="primary" type="submit">Capture</button>
+            </div>
+          </form>
+          <ul id="capture-list" class="items"></ul>
+        </section>
+
+        <section data-panel="problems" hidden>
+          <div class="list-head">
+            <h2>Changes that need a look</h2>
+            <button id="dismiss-all" class="link" type="button">Dismiss all</button>
+          </div>
+          <ul id="problem-list" class="problems"></ul>
+        </section>
+      </main>
+      <p id="form-error" class="error banner" hidden></p>
+    </div>
+  </body>
+</html>

@@ -338,8 +338,13 @@ function wire(): void {
     $('update-download').addEventListener('click', () => {
         invoke('open_download_page').catch((e) => showError('update-error', errorMessage(e)));
     });
+    // BRAI-366: the bundled offline window (this computer's copy); the web app's own offline
+    // mode (service worker, opt-in on the web) stays one click away
     $('open-offline').addEventListener('click', () => {
         invoke('open_offline').catch((e) => showError('retry-error', errorMessage(e)));
+    });
+    $('open-web-offline').addEventListener('click', () => {
+        invoke('open_web_offline').catch((e) => showError('retry-error', errorMessage(e)));
     });
     document.querySelectorAll<HTMLButtonElement>('.switch').forEach((b) =>
         b.addEventListener('click', () => {
