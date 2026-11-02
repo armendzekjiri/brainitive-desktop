@@ -1,0 +1,8 @@
+# Same line endings on every OS: the packaging scripts and the MSIX manifest test parse text files
+# line by line, and a Windows checkout with CRLF broke them (first MSIX CI run, BRAI-442).
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.ico binary
+*.icns binary
+*.bin binary
