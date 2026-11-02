@@ -355,6 +355,49 @@ pub struct UpdaterState {
     pub status: Status,
     pub schedule: Schedule,
     pub pending: Option<Pending>,
+    /// Bumped when the channel changes (BRAI-377): a check or download started before belongs
+    /// to the old channel, and whatever it brings back is discarded.
+    pub generation: u64,
+}
+
+impl UpdaterState {
+    /// Starts a check unless one runs or an update waits: the generation it belongs to.
+    pub fn begin_check(&mut self) -> Option<u64> {
+        if self.status.busy() || self.status.is_ready() {
+            return None;
+        }
+        self.status = Status::Checking;
+        Some(self.generation)
+    }
+
+    /// Whether a check / download of `generation` still belongs to the current channel.
+    pub fn is_current(&self, generation: u64) -> bool {
+        self.generation == generation
+    }
+
+    /// A status from a check or download of `generation`; dropped (`false`) when the channel
+    /// changed meanwhile.
+    pub fn report(&mut self, generation: u64, status: Status) -> bool {
+        if !self.is_current(generation) {
+            return false;
+        }
+        self.status = status;
+        true
+    }
+
+    /// Settings changed the channel: a waiting update is dropped, a running check or download
+    /// is discarded when it comes back (only an install already running goes on), and an
+    /// automatic check of the new channel runs soon.
+    pub fn switch_channel(&mut self, now: u64) {
+        self.generation = self.generation.wrapping_add(1);
+        if matches!(self.status, Status::Installing { .. }) {
+            return;
+        }
+        self.pending = None;
+        self.status = Status::Idle;
+        self.schedule = Schedule::default();
+        self.schedule.start(now.saturating_sub(START_DELAY.as_secs()));
+    }
 }
 
 /// A downloaded, verified update waiting for the user's click.
@@ -486,16 +529,20 @@ pub fn init(app: &AppHandle) {
                     now_secs(),
                 )
             };
-            if let Some(channel) = due.then(|| begin_check(&h)).flatten() {
-                run_check(&h, channel, Trigger::Auto).await;
+            if let Some((channel, generation)) = due.then(|| begin_check(&h)).flatten() {
+                run_check(&h, channel, generation, Trigger::Auto).await;
             }
         }
     });
 }
 
-fn set_status(app: &AppHandle, status: Status) {
-    state(app).lock().updater.status = status;
-    ui_changed(app);
+/// `status` from the check / download of `generation`; nothing when the channel changed since.
+fn set_status(app: &AppHandle, generation: u64, status: Status) -> bool {
+    let current = state(app).lock().updater.report(generation, status);
+    if current {
+        ui_changed(app);
+    }
+    current
 }
 
 /// The menu item, the tray and (while it shows a bundled screen) the main window follow.
@@ -520,33 +567,39 @@ pub fn check_now(app: &AppHandle, trigger: Trigger) -> Result<(), String> {
         }
     }
     // marked as checking before the command returns, so the window that asked sees it at once
-    let Some(channel) = begin_check(app) else { return Ok(()) };
+    let Some((channel, generation)) = begin_check(app) else {
+        return Ok(());
+    };
     let h = app.clone();
-    tauri::async_runtime::spawn(async move { run_check(&h, channel, trigger).await });
+    tauri::async_runtime::spawn(async move { run_check(&h, channel, generation, trigger).await });
     Ok(())
 }
 
-/// Marks a check as running, unless one runs or an update already waits. The channel to ask.
-fn begin_check(app: &AppHandle) -> Option<Channel> {
-    let channel = {
+/// Marks a check as running, unless one runs or an update already waits. The channel to ask
+/// and the generation the check belongs to.
+fn begin_check(app: &AppHandle) -> Option<(Channel, u64)> {
+    let started = {
         let s = state(app);
         let mut inner = s.lock();
-        if inner.updater.status.busy() || inner.updater.status.is_ready() {
-            return None;
-        }
-        inner.updater.status = Status::Checking;
-        inner.settings.preferences.update_channel
+        let channel = inner.settings.preferences.update_channel;
+        inner.updater.begin_check().map(|generation| (channel, generation))
     };
-    ui_changed(app);
-    Some(channel)
+    if started.is_some() {
+        ui_changed(app);
+    }
+    started
 }
 
-async fn run_check(app: &AppHandle, channel: Channel, trigger: Trigger) {
+async fn run_check(app: &AppHandle, channel: Channel, generation: u64, trigger: Trigger) {
     let result = find_update(app, channel.manifests(), github_only).await;
     let now = now_secs();
     {
         let s = state(app);
         let mut inner = s.lock();
+        if !inner.updater.is_current(generation) {
+            log::info!("updater: the channel changed during the check; its answer is dropped");
+            return;
+        }
         inner.updater.schedule.record(now, result.is_ok());
         if result.is_ok() {
             inner.settings.last_update_check = Some(now);
@@ -554,11 +607,10 @@ async fn run_check(app: &AppHandle, channel: Channel, trigger: Trigger) {
         }
     }
     match result {
-        Ok(Some(update)) => download(app, update, trigger).await,
+        Ok(Some(update)) => download(app, update, generation, trigger).await,
         Ok(None) => {
             log::info!("updater: {APP_VERSION} is the newest version ({channel:?})");
-            set_status(app, Status::UpToDate);
-            if trigger == Trigger::Menu {
+            if set_status(app, generation, Status::UpToDate) && trigger == Trigger::Menu {
                 crate::bridge::show_notification(
                     app,
                     "Brainitive is up to date",
@@ -571,6 +623,7 @@ async fn run_check(app: &AppHandle, channel: Channel, trigger: Trigger) {
             log::warn!("updater: check failed: {e}");
             failed(
                 app,
+                generation,
                 trigger,
                 "Could not check for updates. Check your connection and try again later.",
             );
@@ -578,36 +631,40 @@ async fn run_check(app: &AppHandle, channel: Channel, trigger: Trigger) {
     }
 }
 
-fn failed(app: &AppHandle, trigger: Trigger, message: &str) {
-    set_status(
+fn failed(app: &AppHandle, generation: u64, trigger: Trigger, message: &str) {
+    let current = set_status(
         app,
+        generation,
         Status::Failed {
             message: message.to_string(),
         },
     );
-    if trigger == Trigger::Menu {
+    if current && trigger == Trigger::Menu {
         crate::bridge::show_notification(app, "Update failed", message, None);
     }
 }
 
-async fn download(app: &AppHandle, update: Update, trigger: Trigger) {
+async fn download(app: &AppHandle, update: Update, generation: u64, trigger: Trigger) {
     let version = update.version.clone();
     if !allowed_url(&update.download_url) {
         log::warn!(
             "updater: {version} refused: its bundle is not on GitHub ({})",
             update.download_url
         );
-        failed(app, trigger, "The update could not be downloaded.");
+        failed(app, generation, trigger, "The update could not be downloaded.");
         return;
     }
     log::info!("updater: downloading {version}");
-    set_status(
+    if !set_status(
         app,
+        generation,
         Status::Downloading {
             version: version.clone(),
             percent: None,
         },
-    );
+    ) {
+        return;
+    }
     let mut done: u64 = 0;
     let mut shown: Option<u8> = None;
     let progress = app.clone();
@@ -620,11 +677,13 @@ async fn download(app: &AppHandle, update: Update, trigger: Trigger) {
                 let p = percent(done, total);
                 if p.map(|p| p / 10) != shown.map(|p| p / 10) {
                     shown = p;
-                    state(&progress).lock().updater.status = Status::Downloading {
+                    let status = Status::Downloading {
                         version: progress_version.clone(),
                         percent: p,
                     };
-                    ui_changed(&progress);
+                    if state(&progress).lock().updater.report(generation, status) {
+                        ui_changed(&progress);
+                    }
                 }
             },
             || {},
@@ -636,28 +695,48 @@ async fn download(app: &AppHandle, update: Update, trigger: Trigger) {
             log::warn!("updater: {version} not downloaded or not verified: {e}");
             failed(
                 app,
+                generation,
                 trigger,
                 "The update could not be downloaded or its signature did not match. Nothing was installed.",
             );
             return;
         }
     };
-    let Some(file) = staging_dir(app).map(|d| d.join("pending.update")) else {
-        failed(app, trigger, "The update could not be stored.");
+    if !state(app).lock().updater.is_current(generation) {
+        log::info!("updater: the channel changed during the download; {version} is discarded");
+        return;
+    }
+    // one file per generation: a discarded download never overwrites the current one
+    let Some(file) = staging_dir(app).map(|d| d.join(format!("pending-{generation}.update"))) else {
+        failed(app, generation, trigger, "The update could not be stored.");
         return;
     };
     if let Err(e) = write_private(&file, &bytes) {
         log::warn!("updater: could not store the update: {e}");
-        failed(app, trigger, "The update could not be stored.");
+        failed(app, generation, trigger, "The update could not be stored.");
         return;
     }
-    {
+    let accepted = {
         let s = state(app);
         let mut inner = s.lock();
-        inner.updater.pending = Some(Pending { update, file });
-        inner.updater.status = Status::Ready {
-            version: version.clone(),
-        };
+        let accepted = inner.updater.report(
+            generation,
+            Status::Ready {
+                version: version.clone(),
+            },
+        );
+        if accepted {
+            inner.updater.pending = Some(Pending {
+                update,
+                file: file.clone(),
+            });
+        }
+        accepted
+    };
+    if !accepted {
+        log::info!("updater: the channel changed during the download; {version} is discarded");
+        let _ = std::fs::remove_file(&file);
+        return;
     }
     log::info!("updater: {version} downloaded and verified; waiting for Restart to Update");
     ui_changed(app);
@@ -711,12 +790,18 @@ pub fn restart_to_update(app: &AppHandle) -> Result<(), String> {
             }
             Err(e) => {
                 log::warn!("updater: installing {version} failed: {e}");
-                state(&h).lock().updater.pending = None;
+                let generation = {
+                    let s = state(&h);
+                    let mut inner = s.lock();
+                    inner.updater.pending = None;
+                    inner.updater.generation
+                };
                 if let Some(dir) = staging_dir(&h) {
                     let _ = std::fs::remove_dir_all(dir);
                 }
                 failed(
                     &h,
+                    generation,
                     Trigger::Menu,
                     "The update could not be installed. Nothing was changed.",
                 );
@@ -739,8 +824,9 @@ pub fn on_menu_click(app: &AppHandle) {
     }
 }
 
-/// Settings: another channel. A waiting update of the old channel is dropped, and an automatic
-/// check runs soon.
+/// Settings: another channel. A waiting update of the old channel is dropped, a check or
+/// download still running for it is discarded when it ends ([`UpdaterState::switch_channel`]),
+/// and an automatic check of the new channel runs soon.
 pub fn set_channel(app: &AppHandle, channel: Channel) {
     let changed = {
         let s = state(app);
@@ -749,17 +835,10 @@ pub fn set_channel(app: &AppHandle, channel: Channel) {
         if changed {
             inner.settings.preferences.update_channel = channel;
             inner.save_settings();
-            if !inner.updater.status.busy() {
-                inner.updater.pending = None;
-                inner.updater.status = Status::Idle;
-                inner.updater.schedule = Schedule::default();
-                inner
-                    .updater
-                    .schedule
-                    .start(now_secs().saturating_sub(START_DELAY.as_secs()));
-            }
+            inner.updater.switch_channel(now_secs());
         }
-        changed
+        // an install already running reads its file from the staging folder
+        changed && !matches!(inner.updater.status, Status::Installing { .. })
     };
     if changed {
         if let Some(dir) = staging_dir(app) {
@@ -987,6 +1066,67 @@ mod tests {
         };
         assert!(!should_auto_check(true, Availability::Available, &ready, &s, now));
         assert!(!should_auto_check(true, Availability::Available, &idle, &s, t0 + 10));
+    }
+
+    #[test]
+    fn a_channel_change_discards_the_running_check_and_download() {
+        let mut u = UpdaterState::default();
+        let old = u.begin_check().unwrap();
+        assert_eq!(u.begin_check(), None, "one check at a time");
+        assert!(u.report(
+            old,
+            Status::Downloading {
+                version: "1.1.0".into(),
+                percent: Some(40)
+            }
+        ));
+        // Settings → Beta while the stable download runs
+        u.switch_channel(1_000_000);
+        assert!(!u.is_current(old));
+        assert_eq!(u.status, Status::Idle, "the old download no longer shows");
+        assert!(u.pending.is_none());
+        // the old download's progress and its "ready" are dropped
+        assert!(!u.report(
+            old,
+            Status::Downloading {
+                version: "1.1.0".into(),
+                percent: Some(90)
+            }
+        ));
+        assert!(!u.report(
+            old,
+            Status::Ready {
+                version: "1.1.0".into()
+            }
+        ));
+        assert_eq!(u.status, Status::Idle);
+        // the new channel's check is due soon and reports normally
+        assert!(u.schedule.due(1_000_000));
+        let new = u.begin_check().unwrap();
+        assert_ne!(new, old);
+        assert!(u.report(
+            new,
+            Status::Ready {
+                version: "1.2.0-beta.1".into()
+            }
+        ));
+        assert!(u.status.is_ready());
+        // an old failure arriving late doesn't hide the new update either
+        assert!(!u.report(old, Status::Failed { message: "x".into() }));
+        assert!(u.status.is_ready());
+    }
+
+    #[test]
+    fn a_channel_change_leaves_a_running_install_alone() {
+        let mut u = UpdaterState {
+            status: Status::Installing {
+                version: "1.1.0".into(),
+            },
+            ..UpdaterState::default()
+        };
+        u.switch_channel(5);
+        assert!(matches!(u.status, Status::Installing { .. }));
+        assert_eq!(u.generation, 1);
     }
 
     #[test]
