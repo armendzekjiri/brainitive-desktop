@@ -13,6 +13,7 @@ fn main() {
             "open_download_page",
             "log_client_error",
             "open_offline",
+            "open_web_offline",
             "switch_server",
             "sign_out",
             "forget_server",
@@ -40,6 +41,16 @@ fn main() {
             "switcher_copy_snippet",
             "switcher_start_timer",
             "switcher_close",
+            // the offline window (capabilities/offline.json, BRAI-366)
+            "offline_view",
+            "offline_set_done",
+            "offline_my_day_add",
+            "offline_add_task",
+            "offline_update_task",
+            "offline_add_capture",
+            "offline_sync_now",
+            "offline_dismiss_problem",
+            "offline_open_app",
         ])),
     )
     .expect("failed to run tauri-build");

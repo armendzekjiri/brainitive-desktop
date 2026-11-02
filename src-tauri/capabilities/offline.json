@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "offline",
+  "description": "The bundled offline window only (offline.html, BRAI-366). It reads this computer's copy of My Day, My Work, task lists and captures and queues changes through Rust (POST /api/v1/sync with the stored app token); the token never reaches this page. Events: only `offline://changed`, sent to this window.",
+  "local": true,
+  "windows": ["offline"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-offline-view",
+    "allow-offline-set-done",
+    "allow-offline-my-day-add",
+    "allow-offline-add-task",
+    "allow-offline-update-task",
+    "allow-offline-add-capture",
+    "allow-offline-sync-now",
+    "allow-offline-dismiss-problem",
+    "allow-offline-open-app"
+  ]
+}

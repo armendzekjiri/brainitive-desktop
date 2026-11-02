@@ -16,6 +16,7 @@
     "allow-open-download-page",
     "allow-log-client-error",
     "allow-open-offline",
+    "allow-open-web-offline",
     "allow-switch-server",
     "allow-sign-out",
     "allow-forget-server",

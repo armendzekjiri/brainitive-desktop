@@ -30,12 +30,13 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         .iter()
         .map(|c| c.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(enabled, ["local", "settings", "capture", "switcher"]);
+    assert_eq!(enabled, ["local", "settings", "capture", "switcher", "offline"]);
 
     for (name, window, prefix) in [
         ("settings", "settings", "allow-settings-"),
         ("capture", "capture", "allow-capture-"),
         ("switcher", "switcher", "allow-switcher-"),
+        ("offline", "offline", "allow-offline-"),
     ] {
         let cap = capability(name);
         assert_eq!(cap["identifier"], name);
@@ -44,7 +45,9 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         assert_eq!(cap["windows"], serde_json::json!([window]), "{name}: exactly its own window");
         assert!(cap.get("webviews").is_none());
         for p in permissions(&cap) {
-            assert!(p.starts_with(prefix), "{name} grants {p}");
+            // the offline window also listens for `offline://changed` (sent to it only)
+            let event = name == "offline" && matches!(p.as_str(), "core:event:allow-listen" | "core:event:allow-unlisten");
+            assert!(p.starts_with(prefix) || event, "{name} grants {p}");
         }
     }
 
@@ -56,7 +59,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
 
 #[test]
 fn no_capability_file_grants_plugins_or_the_bridge() {
-    for name in ["local", "settings", "capture", "switcher"] {
+    for name in ["local", "settings", "capture", "switcher", "offline"] {
         for p in permissions(&capability(name)) {
             assert!(!p.contains("brainitive-"), "{name}: bridge command {p}");
             for plugin in ["global-shortcut", "autostart", "dialog", "clipboard", "fs", "opener", "notification", "shell"] {
@@ -73,7 +76,7 @@ fn no_capability_file_grants_plugins_or_the_bridge() {
 #[test]
 fn every_command_of_a_capability_is_in_the_app_manifest() {
     let build = std::fs::read_to_string(format!("{}/build.rs", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    for name in ["local", "settings", "capture", "switcher"] {
+    for name in ["local", "settings", "capture", "switcher", "offline"] {
         for p in permissions(&capability(name)) {
             if let Some(cmd) = p.strip_prefix("allow-") {
                 let cmd = cmd.replace('-', "_");
@@ -81,4 +84,17 @@ fn every_command_of_a_capability_is_in_the_app_manifest() {
             }
         }
     }
+}
+
+#[test]
+fn only_the_offline_window_gets_the_offline_commands() {
+    for name in ["local", "settings", "capture", "switcher"] {
+        for p in permissions(&capability(name)) {
+            assert!(!p.starts_with("allow-offline-"), "{name} grants {p}");
+        }
+    }
+    // the main window's screens open it, and only they
+    let local = permissions(&capability("local"));
+    assert!(local.contains(&"allow-open-offline".to_string()));
+    assert!(local.contains(&"allow-open-web-offline".to_string()));
 }

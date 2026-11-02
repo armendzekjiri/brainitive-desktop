@@ -10,7 +10,7 @@ use crate::server::{ServerOrigin, CLOUD_ORIGIN, DEV_ORIGIN, LOCAL_ORIGIN};
 use crate::settings::RecentServer;
 use crate::problem::Problem;
 use crate::state::{state, Notice, Phase, UpdateRequired};
-use crate::version::{meets_minimum, APP_VERSION, DOWNLOAD_URL};
+use crate::version::{APP_VERSION, DOWNLOAD_URL};
 
 #[derive(Serialize)]
 pub struct CurrentServer {
@@ -146,31 +146,41 @@ pub fn open_download_page(app: AppHandle) -> Result<(), UiError> {
         })
 }
 
-/// "Open anyway": the server's pages from the webview cache / service worker, no new session.
+fn too_old_error() -> UiError {
+    UiError {
+        kind: "app_too_old",
+        message: "This server needs a newer Brainitive Desktop. Please update the app.".into(),
+    }
+}
+
+/// The current server, unless it needs a newer app (then nothing of it is opened or synced).
+fn usable_server(app: &AppHandle) -> Result<ServerOrigin, UiError> {
+    let s = state(app);
+    let inner = s.lock();
+    let origin = inner.current_origin().ok_or(UiError {
+        kind: "no_server",
+        message: "Choose a server first.".into(),
+    })?;
+    if flows::app_too_old(&inner, &origin) {
+        return Err(too_old_error());
+    }
+    Ok(origin)
+}
+
+/// "Open offline" (BRAI-366): the bundled offline window with this computer's copy of My Day,
+/// My Work, the kept task lists and captures.
 #[tauri::command]
 pub fn open_offline(app: AppHandle) -> Result<(), UiError> {
-    let (origin, too_old) = {
-        let s = state(&app);
-        let inner = s.lock();
-        let origin = inner.current_origin().ok_or(UiError {
-            kind: "no_server",
-            message: "Choose a server first.".into(),
-        })?;
-        // the last answer of this server (or the update screen itself): never load an old app
-        let min = inner
-            .instance
-            .as_ref()
-            .filter(|(o, _)| *o == origin)
-            .and_then(|(_, info)| info.min_versions.as_ref()?.desktop.clone());
-        let too_old = inner.phase == Phase::UpdateRequired || min.is_some_and(|m| !meets_minimum(APP_VERSION, &m));
-        (origin, too_old)
-    };
-    if too_old {
-        return Err(UiError {
-            kind: "app_too_old",
-            message: "This server needs a newer Brainitive Desktop. Please update the app.".into(),
-        });
-    }
+    usable_server(&app)?;
+    crate::popup::show(&app, crate::popup::Popup::Offline);
+    Ok(())
+}
+
+/// "Use the web app offline": the server's pages from the webview cache / the web app's own
+/// service worker (its opt-in offline mode), no new session.
+#[tauri::command]
+pub fn open_web_offline(app: AppHandle) -> Result<(), UiError> {
+    let origin = usable_server(&app)?;
     crate::shell::enter_app(&app, &origin, origin.join("/dashboard"));
     Ok(())
 }

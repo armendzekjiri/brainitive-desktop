@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(step.done.len(), 2, "applied + conflict are done");
         assert_eq!(step.problems, 3);
         assert!(step.stop, "a server error: try later");
-        assert_eq!(ids(&o), [e.clone()], "only the failed one stays");
+        assert_eq!(ids(&o), [e], "only the failed one stays");
         assert_eq!(o.entries[0].attempts, 1);
 
         let p = &o.problems;
@@ -935,7 +935,7 @@ mod tests {
             assert!(!step.stop);
         }
         assert_eq!(o.len(), 2);
-        let step = o.apply_results(&[a.clone()], &[result(&a, "waiting", 424)]);
+        let step = o.apply_results(std::slice::from_ref(&a), &[result(&a, "waiting", 424)]);
         assert_eq!(step.problems, 1);
         assert_eq!(ids(&o), [b]);
     }
@@ -963,7 +963,7 @@ mod tests {
         let step = o.apply_batch_error(&sent, &server(422));
         assert!(step.split, "one by one");
         assert_eq!(o.len(), 2);
-        let step = o.apply_batch_error(&[a.clone()], &server(422));
+        let step = o.apply_batch_error(std::slice::from_ref(&a), &server(422));
         assert_eq!(step.problems, 1);
         assert_eq!(ids(&o), [b]);
         assert_eq!(o.problems[0].kind, "rejected");

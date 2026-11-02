@@ -109,6 +109,11 @@ pub fn show_notification(app: &AppHandle, title: &str, body: &str, target: Optio
     notify(app, title, body, target.map(NotificationTarget::Page));
 }
 
+/// A notification about offline changes; a click opens the offline window.
+pub fn show_offline_notification(app: &AppHandle, title: &str, body: &str) {
+    notify(app, title, body, Some(NotificationTarget::OfflineView));
+}
+
 /// A notification about a downloaded file; a click shows it in Finder / Explorer.
 pub fn show_file_notification(app: &AppHandle, title: &str, body: &str, file: std::path::PathBuf) {
     notify(app, title, body, Some(NotificationTarget::File(file)));
@@ -155,6 +160,7 @@ pub fn on_notification_action(app: &AppHandle, action_id: &str, id: Option<i32>)
                 _ => shell::focus_main(app),
             }
         }
+        Some(NotificationTarget::OfflineView) => crate::popup::show(app, crate::popup::Popup::Offline),
         None => shell::focus_main(app),
     }
 }

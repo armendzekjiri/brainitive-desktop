@@ -593,7 +593,7 @@ pub fn view(cache: &Cache, out: &Outbox) -> View {
         l.tasks
             .sort_by(|a, b| a.position.partial_cmp(&b.position).unwrap_or(std::cmp::Ordering::Equal));
     }
-    lists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    lists.sort_by_key(|a| a.name.to_lowercase());
 
     View {
         has_data: !cache.is_empty(),

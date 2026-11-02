@@ -83,6 +83,9 @@ pub enum TrayAction {
     Notifications,
     Settings,
     Quit,
+    /// The offline window (BRAI-366).
+    Offline,
+    SyncNow,
 }
 
 impl TrayAction {
@@ -99,6 +102,8 @@ impl TrayAction {
             Self::Notifications => "tray-notifications".into(),
             Self::Settings => "tray-settings".into(),
             Self::Quit => "tray-quit".into(),
+            Self::Offline => "tray-offline".into(),
+            Self::SyncNow => "tray-sync-now".into(),
         }
     }
 
@@ -117,6 +122,8 @@ impl TrayAction {
             "tray-notifications" => Self::Notifications,
             "tray-settings" => Self::Settings,
             "tray-quit" => Self::Quit,
+            "tray-offline" => Self::Offline,
+            "tray-sync-now" => Self::SyncNow,
             _ => return None,
         })
     }
@@ -179,13 +186,27 @@ pub fn model(
     data: &TrayData,
     capture_shortcut: Option<String>,
     switcher_shortcut: Option<String>,
+    offline: &crate::offline::TrayStatus,
 ) -> Vec<Entry> {
     let mut out = Vec::new();
     out.push(label(match (server, signed_in) {
         (Some(s), true) => format!("Brainitive — {s}"),
+        (Some(s), false) if offline.available => format!("Brainitive — {s}"),
         (Some(s), false) => format!("Brainitive — {s} (signed out)"),
         (None, _) => "Brainitive — not connected".to_string(),
     }));
+    if offline.available {
+        // offline mode (BRAI-366): the status, the offline window and "Sync now"
+        let changes = |n: usize| if n == 1 { "1 change".to_string() } else { format!("{n} changes") };
+        match (offline.offline, offline.pending) {
+            (true, 0) => out.push(label("Offline — changes will sync")),
+            (true, n) => out.push(label(format!("Offline — {} will sync", changes(n)))),
+            (false, 0) => {}
+            (false, n) => out.push(label(format!("{} waiting to sync", changes(n)))),
+        }
+        out.push(item(TrayAction::Offline, "Open Offline View…"));
+        out.push(item(TrayAction::SyncNow, "Sync Now"));
+    }
     out.push(Entry::Separator);
     out.push(Entry::Item {
         action: Some(TrayAction::Capture),
@@ -333,7 +354,7 @@ fn tray(app: &AppHandle) -> Option<TrayIcon<Wry>> {
 /// Rebuilds the menu, tooltip and (macOS) the count next to the icon from the current data.
 pub fn refresh(app: &AppHandle) {
     let Some(tray) = tray(app) else { return };
-    let (server, signed_in, data, capture, switcher) = {
+    let (server, signed_in, data, capture, switcher, offline) = {
         let s = state(app);
         let inner = s.lock();
         let accel = |a: Option<&str>| {
@@ -346,9 +367,10 @@ pub fn refresh(app: &AppHandle) {
             inner.tray_data.clone(),
             accel(inner.settings.preferences.capture_shortcut.as_deref()),
             accel(inner.settings.preferences.switcher_shortcut.as_deref()),
+            crate::offline::tray_status(&inner),
         )
     };
-    let entries = model(server.as_deref(), signed_in, &data, capture, switcher);
+    let entries = model(server.as_deref(), signed_in, &data, capture, switcher, &offline);
     {
         // unchanged: keep the native menu (it may be open right now)
         let s = state(app);
@@ -365,9 +387,10 @@ pub fn refresh(app: &AppHandle) {
         Err(e) => log::warn!("tray menu: {e}"),
     }
     let unread = data.unread.filter(|n| *n > 0 && signed_in);
-    let tooltip = match unread {
-        Some(n) => format!("Brainitive — {n} unread"),
-        None => "Brainitive".to_string(),
+    let tooltip = match (unread, offline.offline) {
+        (_, true) => "Brainitive — offline, changes will sync".to_string(),
+        (Some(n), false) => format!("Brainitive — {n} unread"),
+        (None, false) => "Brainitive".to_string(),
     };
     let _ = tray.set_tooltip(Some(tooltip));
     #[cfg(target_os = "macos")]
@@ -404,6 +427,11 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
             crate::shell::open_page(app, url.as_deref().unwrap_or("/my-work"));
         }
         TrayAction::Quit => app.exit(0),
+        TrayAction::Offline => popup::show(app, Popup::Offline),
+        TrayAction::SyncNow => {
+            let h = app.clone();
+            tauri::async_runtime::spawn(async move { crate::offline::sync_now(&h).await });
+        }
         TrayAction::ToggleDay(work) => {
             let h = app.clone();
             tauri::async_runtime::spawn(async move { toggle_day(&h, &work).await });
@@ -622,10 +650,15 @@ pub fn start_poller(app: &AppHandle) {
             let stale = state(&app).lock().tray_data.my_day_stale;
             let result = poll_once(&app, &origin, poll::plan(tick, stale)).await;
             tick = tick.wrapping_add(1);
+            crate::offline::note_poll(&app, &result);
             match result {
                 Ok(()) => {
                     backoff.succeeded();
                     crate::capture::flush(&app).await;
+                    // offline mode: send what waited, pull what changed (BRAI-366)
+                    if let Err(e) = crate::offline::sync(&app, &origin).await {
+                        log::info!("offline sync: {e}");
+                    }
                 }
                 Err(e) => {
                     backoff.failed();
@@ -660,6 +693,8 @@ mod tests {
             TrayAction::Notifications,
             TrayAction::Settings,
             TrayAction::Quit,
+            TrayAction::Offline,
+            TrayAction::SyncNow,
         ] {
             assert_eq!(TrayAction::from_id(&a.id()), Some(a));
         }
@@ -700,7 +735,7 @@ mod tests {
 
     #[test]
     fn menu_model_signed_out_only_offers_the_basics() {
-        let m = model(Some("Cloud"), false, &TrayData::default(), None, None);
+        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, &Default::default());
         assert_eq!(
             m[0],
             Entry::Item {
@@ -745,7 +780,7 @@ mod tests {
             ]),
             my_day_stale: false,
         };
-        let m = model(Some("Cloud"), true, &data, Some("shift+super+Space".into()), None);
+        let m = model(Some("Cloud"), true, &data, Some("shift+super+Space".into()), None, &Default::default());
         let Some(Entry::Submenu { text, entries }) = m.iter().find(|e| matches!(e, Entry::Submenu { .. })) else {
             panic!("no My Day");
         };
@@ -770,9 +805,35 @@ mod tests {
             unread: Some(0),
             ..TrayData::default()
         };
-        let m = model(Some("Cloud"), true, &none, None, None);
+        let m = model(Some("Cloud"), true, &none, None, None, &Default::default());
         assert!(m.contains(&label("No timer running")));
         assert!(m.contains(&item(TrayAction::Notifications, "No unread notifications")));
+    }
+
+    #[test]
+    fn menu_model_offline() {
+        use crate::offline::TrayStatus;
+        let offline = TrayStatus {
+            available: true,
+            offline: true,
+            pending: 3,
+        };
+        // the unreachable screen: not "signed out", the offline view and Sync Now
+        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, &offline);
+        assert_eq!(m[0], label("Brainitive — Cloud"));
+        assert_eq!(m[1], label("Offline — 3 changes will sync"));
+        assert!(m.contains(&item(TrayAction::Offline, "Open Offline View…")));
+        assert!(m.contains(&item(TrayAction::SyncNow, "Sync Now")));
+        let one = TrayStatus { pending: 1, ..offline.clone() };
+        assert_eq!(model(Some("Cloud"), false, &TrayData::default(), None, None, &one)[1], label("Offline — 1 change will sync"));
+        let none = TrayStatus { pending: 0, ..offline.clone() };
+        assert_eq!(model(Some("Cloud"), true, &TrayData::default(), None, None, &none)[1], label("Offline — changes will sync"));
+        // online with changes still waiting
+        let online = TrayStatus { offline: false, ..offline };
+        assert_eq!(model(Some("Cloud"), true, &TrayData::default(), None, None, &online)[1], label("3 changes waiting to sync"));
+        // signed out: no offline entries
+        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, &TrayStatus::default());
+        assert!(!m.contains(&item(TrayAction::SyncNow, "Sync Now")));
     }
 
     #[test]

@@ -151,6 +151,8 @@ pub struct Inner {
     pub flushing: bool,
     /// Downloads in progress (BRAI-363).
     pub downloads: Vec<crate::downloads::Pending>,
+    /// Offline mode (BRAI-366): the current server's cache and outbox.
+    pub offline: crate::offline::OfflineData,
 }
 
 /// What a click on one of our notifications opens.
@@ -160,6 +162,8 @@ pub enum NotificationTarget {
     Page(Url),
     /// A downloaded file: shown in Finder / Explorer.
     File(PathBuf),
+    /// The offline window (BRAI-366: changes sent / not applied).
+    OfflineView,
 }
 
 pub struct AppState {
@@ -170,7 +174,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(settings_path: PathBuf, queue_path: PathBuf) -> Self {
+    pub fn new(settings_path: PathBuf, queue_path: PathBuf, offline_dir: PathBuf) -> Self {
         let settings = Settings::load(&settings_path);
         Self {
             inner: Mutex::new(Inner {
@@ -211,6 +215,7 @@ impl AppState {
                 queue_path,
                 flushing: false,
                 downloads: Vec::new(),
+                offline: crate::offline::OfflineData::new(offline_dir),
             }),
             session: Session::default(),
             poll_now: tokio::sync::Notify::new(),

@@ -110,9 +110,10 @@ pub fn refresh_title(app: &AppHandle) {
     let (title, label) = {
         let s = state(app);
         let inner = s.lock();
+        let offline = if crate::offline::is_offline(&inner) { " (offline)" } else { "" };
         match inner.current_origin() {
             Some(o) => (
-                format!("Brainitive — {}", o.display_name()),
+                format!("Brainitive — {}{offline}", o.display_name()),
                 format!("Connected to {}", o.display_name()),
             ),
             None => ("Brainitive".to_string(), "Not connected".to_string()),
@@ -213,7 +214,9 @@ pub fn enter_app(app: &AppHandle, origin: &ServerOrigin, url: Url) {
     open_main(app, origin.store_id(), WebviewUrl::External(url));
     refresh_title(app);
     reveal_main(app);
-    // signed in: the tray polls now; the quick captures that waited are sent
+    // signed in: the tray polls now (and syncs the offline data); the quick captures that
+    // waited are sent
+    crate::offline::on_enter_app(app);
     crate::tray::reset(app);
     let handle = app.clone();
     tauri::async_runtime::spawn(async move { crate::capture::flush(&handle).await });

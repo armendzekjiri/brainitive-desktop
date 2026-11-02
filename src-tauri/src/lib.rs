@@ -13,6 +13,7 @@ pub mod hotkeys;
 pub mod links;
 pub mod logging;
 pub mod menu;
+pub mod offline;
 pub mod offline_cache;
 pub mod outbox;
 pub mod pkce;
@@ -80,6 +81,7 @@ pub fn run() {
             commands::open_download_page,
             commands::log_client_error,
             commands::open_offline,
+            commands::open_web_offline,
             commands::switch_server,
             commands::sign_out,
             commands::forget_server,
@@ -104,6 +106,15 @@ pub fn run() {
             switcher::switcher_copy_snippet,
             switcher::switcher_start_timer,
             switcher::switcher_close,
+            offline::offline_view,
+            offline::offline_set_done,
+            offline::offline_my_day_add,
+            offline::offline_add_task,
+            offline::offline_update_task,
+            offline::offline_add_capture,
+            offline::offline_sync_now,
+            offline::offline_dismiss_problem,
+            offline::offline_open_app,
         ])
         .setup(|app| {
             // first: everything after this is logged, and a panic leaves a trace
@@ -123,8 +134,9 @@ pub fn run() {
             );
             startup::mark("setup entered");
             let settings_path = app.path().app_config_dir()?.join("settings.json");
-            let queue_path = app.path().app_local_data_dir()?.join("capture-queue.json");
-            app.manage(AppState::new(settings_path, queue_path));
+            let data_dir = app.path().app_local_data_dir()?;
+            let queue_path = data_dir.join("capture-queue.json");
+            app.manage(AppState::new(settings_path, queue_path, data_dir.join("offline")));
             {
                 let s = state(app.handle());
                 let mut inner = s.lock();

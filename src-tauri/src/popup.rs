@@ -1,6 +1,7 @@
-//! The bundled windows (BRAI-359 quick capture, BRAI-401 quick switcher, the Settings window).
+//! The bundled windows (BRAI-359 quick capture, BRAI-401 quick switcher, the Settings window,
+//! BRAI-366 the offline view).
 //!
-//! They load bundled pages only (`capture.html`, `switcher.html`, `settings.html`), never the
+//! They load bundled pages only (`capture.html`, `switcher.html`, `settings.html`, `offline.html`), never the
 //! server. They talk to the server exclusively through their own Rust commands, which use the
 //! stored app token; the token never reaches their JavaScript. Each window has its own
 //! capability file (`capabilities/<label>.json`) and every command checks the caller again
@@ -18,16 +19,19 @@ pub enum Popup {
     Capture,
     Switcher,
     Settings,
+    /// The offline view (BRAI-366): the cached My Day, work, task lists and captures.
+    Offline,
 }
 
 impl Popup {
-    pub const ALL: [Popup; 3] = [Popup::Capture, Popup::Switcher, Popup::Settings];
+    pub const ALL: [Popup; 4] = [Popup::Capture, Popup::Switcher, Popup::Settings, Popup::Offline];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Capture => "capture",
             Self::Switcher => "switcher",
             Self::Settings => "settings",
+            Self::Offline => "offline",
         }
     }
 
@@ -40,6 +44,7 @@ impl Popup {
             Self::Capture => "capture.html",
             Self::Switcher => "switcher.html",
             Self::Settings => "settings.html",
+            Self::Offline => "offline.html",
         }
     }
 
@@ -48,6 +53,7 @@ impl Popup {
             Self::Capture => "Quick Capture",
             Self::Switcher => "Quick Switcher",
             Self::Settings => "Settings",
+            Self::Offline => "Brainitive Offline",
         }
     }
 
@@ -56,6 +62,7 @@ impl Popup {
             Self::Capture => (560.0, 260.0),
             Self::Switcher => (660.0, 440.0),
             Self::Settings => (560.0, 640.0),
+            Self::Offline => (920.0, 680.0),
         }
     }
 
@@ -218,5 +225,6 @@ mod tests {
         }
         assert_eq!(Popup::from_label("main"), None);
         assert!(Popup::Capture.floating() && Popup::Switcher.floating() && !Popup::Settings.floating());
+        assert!(!Popup::Offline.floating());
     }
 }

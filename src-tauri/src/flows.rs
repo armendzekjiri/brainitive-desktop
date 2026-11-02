@@ -227,6 +227,17 @@ async fn instance_gate(app: &AppHandle, origin: &ServerOrigin) -> Result<Option<
     Ok(update)
 }
 
+/// Whether `origin` needs a newer app: the update screen is up, or its last `/api/v1/instance`
+/// answer says so. Nothing is loaded or synced with such a server.
+pub fn app_too_old(inner: &crate::state::Inner, origin: &ServerOrigin) -> bool {
+    let min = inner
+        .instance
+        .as_ref()
+        .filter(|(o, _)| o == origin)
+        .and_then(|(_, info)| info.min_versions.as_ref()?.desktop.clone());
+    inner.phase == Phase::UpdateRequired || min.is_some_and(|m| !meets_minimum(APP_VERSION, &m))
+}
+
 /// "Please update Brainitive Desktop": the web app is not loaded, nothing retries by itself.
 pub fn show_update_required(app: &AppHandle, update: UpdateRequired) {
     log::info!(
@@ -261,6 +272,7 @@ pub fn show_unreachable(app: &AppHandle, mut problem: Problem) {
         (inner.reconnect_gen, wait, inner.current_origin())
     };
     shell::show_local(app, Phase::Unreachable, None);
+    crate::offline::on_unreachable(app);
     if let (true, Some(origin)) = (problem.retryable, origin) {
         let handle = app.clone();
         let probe = problem.probes_network();
@@ -494,6 +506,7 @@ pub async fn sign_out(app: &AppHandle) {
     };
     state(app).session.sign_out(&origin).await;
     crate::capture::drop_queue(app, &origin);
+    crate::offline::wipe(app, &origin);
     crate::bridge::set_badge(app, 0);
     if let Some(w) = shell::main_window(app) {
         // the window uses this server's own data store, so this clears only its data
@@ -520,6 +533,7 @@ pub fn switch_server(app: &AppHandle) {
 pub async fn forget_server(app: &AppHandle, origin: ServerOrigin) {
     state(app).session.sign_out(&origin).await;
     crate::capture::drop_queue(app, &origin);
+    crate::offline::wipe(app, &origin);
     let was_current = {
         let s = state(app);
         let mut inner = s.lock();
