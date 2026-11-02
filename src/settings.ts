@@ -22,6 +22,24 @@ interface Prefs {
     launch_at_login: boolean;
     start_hidden: boolean;
     shortcut_problem: string | null;
+    updates: Updates;
+}
+
+// auto-updates (BRAI-373)
+type UpdateStatus =
+    | { state: 'idle' | 'checking' | 'up_to_date' }
+    | { state: 'downloading'; version: string; percent: number | null }
+    | { state: 'ready' | 'installing'; version: string }
+    | { state: 'failed'; message: string };
+
+interface Updates {
+    available: boolean;
+    unavailable_reason: string | null;
+    auto_check: boolean;
+    channel: 'stable' | 'beta';
+    last_check: number | null;
+    current_version: string;
+    status: UpdateStatus;
 }
 
 type Toggle = 'keep_in_tray' | 'ask_where_to_save' | 'launch_at_login' | 'start_hidden' | 'voice_enabled';
@@ -54,6 +72,47 @@ function render(p: Prefs): void {
         if (current) current.textContent = label || 'Off';
     });
     renderVoice(p);
+    renderUpdates(p.updates);
+}
+
+let updatePoll: number | undefined;
+let updateReady = false;
+
+function renderUpdates(u: Updates): void {
+    const off = $('updates-off');
+    off.textContent = u.unavailable_reason ?? '';
+    off.hidden = u.available;
+    const auto = $<HTMLInputElement>('auto_update_check');
+    const beta = $<HTMLInputElement>('update_beta');
+    auto.checked = u.auto_check;
+    beta.checked = u.channel === 'beta';
+    auto.disabled = beta.disabled = !u.available;
+    $('update-version').textContent = u.current_version;
+    const s = u.status;
+    const checked = u.last_check ? `Last checked ${new Date(u.last_check * 1000).toLocaleString()}.` : 'Not checked yet.';
+    const text: Record<UpdateStatus['state'], string> = {
+        idle: checked,
+        checking: 'Checking for updates…',
+        up_to_date: `This is the newest version. ${checked}`,
+        downloading: 'version' in s ? `Downloading ${s.version}${'percent' in s && s.percent !== null ? `: ${s.percent} %` : '…'}` : '',
+        ready: 'version' in s ? `Version ${s.version} is ready. It is installed when you restart.` : '',
+        installing: 'version' in s ? `Installing ${s.version}…` : '',
+        failed: 'message' in s ? s.message : '',
+    };
+    $('update-status').textContent = u.available ? text[s.state] : '';
+    const action = $<HTMLButtonElement>('update-action');
+    updateReady = u.available && s.state === 'ready';
+    action.textContent = updateReady ? 'Restart to Update' : 'Check now';
+    action.disabled = !u.available || ['checking', 'downloading', 'installing'].includes(s.state);
+    // a check or download runs in the background: follow it
+    window.clearTimeout(updatePoll);
+    if (['checking', 'downloading', 'installing'].includes(s.state)) updatePoll = window.setTimeout(() => void refresh(), 1000);
+}
+
+function updateError(message: string | null): void {
+    const el = $('update-error');
+    el.textContent = message ?? '';
+    el.hidden = !message;
 }
 
 function renderVoice(p: Prefs): void {
@@ -174,6 +233,26 @@ function voiceError(message: string | null): void {
     el.textContent = message ?? '';
     el.hidden = !message;
 }
+
+$('auto_update_check').addEventListener('change', (e) => {
+    updateError(null);
+    invoke<Prefs>('settings_set_toggle', { key: 'auto_update_check', value: (e.target as HTMLInputElement).checked })
+        .then(render)
+        .catch((err) => updateError(errorMessage(err)));
+});
+$('update_beta').addEventListener('change', (e) => {
+    updateError(null);
+    const channel = (e.target as HTMLInputElement).checked ? 'beta' : 'stable';
+    invoke<Prefs>('settings_set_update_channel', { channel })
+        .then(render)
+        .catch((err) => updateError(errorMessage(err)));
+});
+$('update-action').addEventListener('click', () => {
+    updateError(null);
+    // only this click installs: the app restarts right after
+    const call = updateReady ? invoke('settings_restart_to_update') : invoke<Prefs>('settings_check_for_updates');
+    call.then(() => refresh()).catch((err) => updateError(errorMessage(err)));
+});
 
 $('zoom-reset').addEventListener('click', () => void invoke<Prefs>('settings_reset_zoom').then(render));
 $('open-account').addEventListener('click', () => void invoke('settings_open_account'));

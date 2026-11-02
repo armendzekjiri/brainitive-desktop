@@ -45,6 +45,16 @@ interface UpdateRequired {
     download_url: string;
 }
 
+// auto-updates (BRAI-373)
+interface Updater {
+    available: boolean;
+    status:
+        | { state: 'idle' | 'checking' | 'up_to_date' }
+        | { state: 'downloading'; version: string; percent: number | null }
+        | { state: 'ready' | 'installing'; version: string }
+        | { state: 'failed'; message: string };
+}
+
 interface UiState {
     phase: Phase;
     notice: Notice | null;
@@ -55,6 +65,7 @@ interface UiState {
     app_version: string;
     cloud_origin: string;
     presets: { label: string; origin: string }[];
+    updater: Updater;
 }
 
 interface ServerCheck {
@@ -209,6 +220,37 @@ function renderUpdate(u: UpdateRequired | null): void {
     showError('update-error', null);
 }
 
+let updaterReady = false;
+
+/** The "Please update" screen with the auto-updater: "Check for update now", then "Restart to Update". */
+function renderUpdater(up: Updater): void {
+    const now = $<HTMLButtonElement>('update-now');
+    const status = $('update-auto-status');
+    now.hidden = !up.available;
+    status.hidden = !up.available;
+    if (!up.available) return;
+    const s = up.status;
+    updaterReady = s.state === 'ready';
+    now.textContent = updaterReady ? 'Restart to Update' : 'Check for update now';
+    now.classList.toggle('primary', updaterReady);
+    now.disabled = ['checking', 'downloading', 'installing'].includes(s.state);
+    status.textContent =
+        s.state === 'checking'
+            ? 'Checking for updates…'
+            : s.state === 'downloading'
+              ? `Downloading ${s.version}${s.percent !== null ? `: ${s.percent} %` : '…'}`
+              : s.state === 'ready'
+                ? `Version ${s.version} is ready. Restart to install it.`
+                : s.state === 'installing'
+                  ? `Installing ${s.version}…`
+                  : s.state === 'up_to_date'
+                    ? 'No newer version is published yet. Try again later, or download it by hand.'
+                    : s.state === 'failed'
+                      ? s.message
+                      : '';
+    status.hidden = !status.textContent;
+}
+
 async function refresh(): Promise<void> {
     state = await invoke<UiState>('get_state');
     $('app-version').textContent = state.app_version;
@@ -219,7 +261,10 @@ async function refresh(): Promise<void> {
     renderPresets(state);
     if (state.phase !== 'unreachable') window.clearInterval(countdown);
     if (state.phase === 'unreachable') renderProblem(state.problem);
-    if (state.phase === 'update_required') renderUpdate(state.update);
+    if (state.phase === 'update_required') {
+        renderUpdate(state.update);
+        renderUpdater(state.updater);
+    }
 
     switch (state.phase) {
         case 'choose':
@@ -335,6 +380,13 @@ function wire(): void {
     });
     $('retry').addEventListener('click', () => void retry('retry-error'));
     $('update-check').addEventListener('click', () => void retry('update-error'));
+    $('update-now').addEventListener('click', () => {
+        showError('update-error', null);
+        // "Restart to Update" is the only thing that installs: the user's click
+        invoke(updaterReady ? 'restart_to_update' : 'check_for_update')
+            .catch((e) => showError('update-error', errorMessage(e)))
+            .finally(() => void refresh());
+    });
     $('update-download').addEventListener('click', () => {
         invoke('open_download_page').catch((e) => showError('update-error', errorMessage(e)));
     });

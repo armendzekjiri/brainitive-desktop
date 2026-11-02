@@ -103,6 +103,26 @@
       </section>
 
       <section>
+        <h2>Updates</h2>
+        <p id="updates-off" class="muted" hidden></p>
+        <div class="setting">
+          <label for="auto_update_check">Check for updates automatically
+            <small>When the app starts and every 6 hours. Updates download in the background and are installed only when you choose Restart to Update.</small></label>
+          <input id="auto_update_check" type="checkbox" />
+        </div>
+        <div class="setting">
+          <label for="update_beta">Get beta updates
+            <small>Pre-release versions with the newest features, and some rough edges. Turning it off keeps the beta you have until a newer stable version comes out.</small></label>
+          <input id="update_beta" type="checkbox" />
+        </div>
+        <div class="setting">
+          <span class="text">Version <span id="update-version"></span> <small id="update-status"></small></span>
+          <span class="controls"><button id="update-action" type="button">Check now</button></span>
+        </div>
+        <p id="update-error" class="error" hidden></p>
+      </section>
+
+      <section>
         <h2>Account</h2>
         <div class="setting">
           <span class="text"><span id="server">Not connected</span> <small id="server-state"></small></span>

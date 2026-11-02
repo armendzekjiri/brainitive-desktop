@@ -620,6 +620,7 @@ async fn download(app: &AppHandle, update: Update, trigger: Trigger) {
                         version: progress_version.clone(),
                         percent: p,
                     };
+                    ui_changed(&progress);
                 }
             },
             || {},

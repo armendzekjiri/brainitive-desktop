@@ -111,10 +111,12 @@
           <dt>Needed by the server</dt><dd id="update-min"></dd>
           <dt>Server</dt><dd id="update-server-version"></dd>
         </dl>
-        <p class="muted">Download: <span id="update-url"></span>. After installing, quit and reopen the app.</p>
+        <p class="muted" id="update-manual">Download: <span id="update-url"></span>. After installing, quit and reopen the app.</p>
+        <p id="update-auto-status" class="muted" hidden></p>
         <div class="actions">
           <button class="switch" type="button">Switch server</button>
           <button id="update-check" type="button">Check again</button>
+          <button id="update-now" type="button" hidden>Check for update now</button>
           <button id="update-download" class="primary" type="button">Download the update</button>
         </div>
         <p id="update-error" class="error" hidden></p>
