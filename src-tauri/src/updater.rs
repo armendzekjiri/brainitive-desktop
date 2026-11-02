@@ -1023,7 +1023,12 @@ mod tests {
     // ---- the plugin itself, with the throwaway key -------------------------------------------
 
     fn mock_app(pubkey: &str) -> tauri::App<tauri::test::MockRuntime> {
+        mock_app_at(pubkey, "0.1.0")
+    }
+
+    fn mock_app_at(pubkey: &str, version: &str) -> tauri::App<tauri::test::MockRuntime> {
         let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.package_info_mut().version = Version::parse(version).unwrap();
         context.config_mut().plugins.0.insert(
             "updater".into(),
             serde_json::json!({ "pubkey": pubkey, "requireSignedVersion": true }),
@@ -1181,6 +1186,43 @@ mod tests {
         // nothing answers: an error (the schedule retries in an hour)
         let urls = vec![Url::parse("http://127.0.0.1:9/latest.json").unwrap()];
         assert!(find_update(app.handle(), urls, loopback).await.is_err());
+    }
+
+    /// CI, after `tauri build` with the signing secret: an updater bundle CI just signed must
+    /// verify with the public key committed in `tauri.conf.json`, exactly as the shipped app
+    /// checks it (plugin, `requireSignedVersion`, the app's version). A mismatched key pair would
+    /// otherwise ship a release nobody can update to. Skipped without the variable.
+    /// `BRAINITIVE_UPDATER_ARTIFACT=<bundle> cargo test --lib ci_signed_bundle -- --ignored`
+    #[test]
+    #[ignore]
+    fn ci_signed_bundle_verifies_with_the_committed_key() {
+        let Some(artifact) = std::env::var("BRAINITIVE_UPDATER_ARTIFACT")
+            .ok()
+            .filter(|a| !a.is_empty())
+        else {
+            eprintln!("BRAINITIVE_UPDATER_ARTIFACT not set: nothing to check");
+            return;
+        };
+        let path = format!("{}/tauri.conf.json", env!("CARGO_MANIFEST_DIR"));
+        let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let pubkey = config["plugins"]["updater"]["pubkey"].as_str().unwrap();
+        assert_eq!(
+            key_status(pubkey),
+            KeyStatus::Valid,
+            "tauri.conf.json still has no real updater key"
+        );
+        let version = config["version"].as_str().unwrap();
+        let bytes = std::fs::read(&artifact).expect("the bundle");
+        let signature = std::fs::read_to_string(format!("{artifact}.sig")).expect("its .sig");
+        let app = mock_app_at(pubkey, "0.0.0");
+        let updater = build_updater(app.handle(), stable_manifest_url(REPO), github_only).unwrap();
+        let update = updater
+            .restore_update(manifest(version, "https://github.com/x", signature.trim()))
+            .unwrap()
+            .expect("the release version is above 0.0.0");
+        update
+            .verify(&bytes)
+            .expect("the bundle's signature does not match the committed public key (or lacks the version)");
     }
 
     #[test]

@@ -4,20 +4,25 @@ name: Build
 #   - pull request: tests only, no bundles
 #   - tag v*:       tests, bundles, a DRAFT GitHub release with the installers + SHA256SUMS
 #   - manual run:   tests + bundles as workflow artifacts (no release)
+#   - a pre-release published by hand: its latest.json becomes the beta channel's manifest
 # Signing is optional: every signing step only runs when its secrets exist, so the workflow
 # produces unsigned installers until they are added. See docs/RELEASING.md.
+# Auto-updates (BRAI-373): with TAURI_SIGNING_PRIVATE_KEY, tag builds also make signed updater
+# bundles and the draft release gets latest.json; without it they are skipped, nothing fails.
 
 on:
   push:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 env:
@@ -27,6 +32,7 @@ env:
 jobs:
   build:
     name: ${{ matrix.name }}
+    if: github.event_name != 'release'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -37,13 +43,20 @@ jobs:
             args: --target universal-apple-darwin --bundles app,dmg
             rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
             artifact: macos
-            bundle-glob: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+            bundle-glob: |
+              src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+              src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
+              src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz.sig
+            updater-glob: src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
           - name: Windows (x64)
             os: windows-2022
             args: --bundles nsis
             rust-targets: ""
             artifact: windows
-            bundle-glob: src-tauri/target/release/bundle/nsis/*.exe
+            bundle-glob: |
+              src-tauri/target/release/bundle/nsis/*.exe
+              src-tauri/target/release/bundle/nsis/*.exe.sig
+            updater-glob: src-tauri/target/release/bundle/nsis/*-setup.exe
           - name: Linux (x64)
             os: ubuntu-22.04
             args: --bundles deb,appimage
@@ -51,7 +64,10 @@ jobs:
             artifact: linux
             bundle-glob: |
               src-tauri/target/release/bundle/deb/*.deb
+              src-tauri/target/release/bundle/deb/*.deb.sig
               src-tauri/target/release/bundle/appimage/*.AppImage
+              src-tauri/target/release/bundle/appimage/*.AppImage.sig
+            updater-glob: src-tauri/target/release/bundle/appimage/*.AppImage
     steps:
       - uses: actions/checkout@v4.2.2
 
@@ -98,12 +114,14 @@ jobs:
           HAS_APPLE_NOTARY_ID: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
           HAS_APPLE_NOTARY_KEY: ${{ secrets.APPLE_API_KEY != '' && secrets.APPLE_API_ISSUER != '' && secrets.APPLE_API_KEY_P8 != '' }}
           HAS_AZURE: ${{ secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT != '' && secrets.AZURE_TRUSTED_SIGNING_PROFILE != '' }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
           {
             echo "apple=$HAS_APPLE"
             echo "apple_notary_id=$HAS_APPLE_NOTARY_ID"
             echo "apple_notary_key=$HAS_APPLE_NOTARY_KEY"
             echo "azure=$HAS_AZURE"
+            echo "updater=$HAS_UPDATER_KEY"
           } >> "$GITHUB_OUTPUT"
 
       # Tauri imports the .p12 into a temporary keychain itself when APPLE_CERTIFICATE is set.
@@ -180,18 +198,50 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "config=$RUNNER_TEMP/sign.conf.json" >> "$GITHUB_OUTPUT"
 
-      # Bundles are not built for pull requests.
+      # Updater bundles (BRAI-373), tag builds only: a config overlay switches them on
+      # (tauri.conf.json keeps createUpdaterArtifacts off, so builds without the secret never fail
+      # on a missing key). Skipped while tauri.conf.json still has the placeholder public key: such
+      # an app never updates, signed bundles would be useless.
+      - name: Updater signing
+        id: updater
+        if: github.ref_type == 'tag' && github.event_name == 'push' && steps.signing.outputs.updater == 'true'
+        shell: bash
+        run: |
+          if grep -q '"pubkey": "PLACEHOLDER' src-tauri/tauri.conf.json; then
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is set but tauri.conf.json still has the placeholder updater key: no updater bundles"
+            exit 0
+          fi
+          printf '{"bundle":{"createUpdaterArtifacts":true}}' > "$RUNNER_TEMP/updater.conf.json"
+          echo "config=$RUNNER_TEMP/updater.conf.json" >> "$GITHUB_OUTPUT"
+
+      # Bundles are not built for pull requests. Config overlays merge in order (signing, updater).
+      # The updater key reaches this step only, and only when the overlay above was written.
       - name: tauri build
         if: github.event_name != 'pull_request'
         shell: bash
         env:
           SIGN_CONFIG: ${{ steps.winsign.outputs.config }}
+          UPDATER_CONFIG: ${{ steps.updater.outputs.config }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ steps.updater.outputs.config != '' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ steps.updater.outputs.config != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: |
-          if [ -n "$SIGN_CONFIG" ]; then
-            npx tauri build ${{ matrix.args }} --config "$SIGN_CONFIG"
-          else
-            npx tauri build ${{ matrix.args }}
-          fi
+          configs=()
+          [ -n "$SIGN_CONFIG" ] && configs+=(--config "$SIGN_CONFIG")
+          [ -n "$UPDATER_CONFIG" ] && configs+=(--config "$UPDATER_CONFIG")
+          npx tauri build ${{ matrix.args }} "${configs[@]}"
+
+      # The bundle CI just signed must verify with the public key in tauri.conf.json, the way the
+      # shipped app checks it; a mismatched key pair would ship a release nobody can update to.
+      - name: Check the updater signature
+        if: steps.updater.outputs.config != ''
+        shell: bash
+        run: |
+          shopt -s nullglob
+          bundles=(${{ matrix.updater-glob }})
+          [ ${#bundles[@]} -eq 1 ] || { echo "::error::expected one updater bundle, found ${#bundles[@]}"; exit 1; }
+          cd src-tauri
+          BRAINITIVE_UPDATER_ARTIFACT="$GITHUB_WORKSPACE/${bundles[0]}" \
+            cargo test --locked --lib ci_signed_bundle_verifies_with_the_committed_key -- --ignored
 
       - name: Upload installers
         if: github.event_name != 'pull_request'
@@ -204,27 +254,84 @@ jobs:
 
   release:
     name: Draft release
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' && github.event_name == 'push'
     needs: build
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4.2.2
+
       - uses: actions/download-artifact@v4.3.0
         with:
           path: installers
           pattern: installers-*
           merge-multiple: true
 
+      # latest.json (Tauri's static manifest) from the signed updater bundles; their .sig files
+      # go into the manifest, not into the release. No signed bundles: no manifest.
+      - name: Updater manifest
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set +e
+          node scripts/updater-manifest.mjs installers "$TAG" "$GITHUB_REPOSITORY" \
+            "Brainitive Desktop $TAG — see the release notes on GitHub." > latest.json
+          code=$?
+          set -e
+          if [ $code -eq 0 ]; then
+            mv latest.json installers/latest.json
+          elif [ $code -eq 2 ]; then
+            echo "::notice::no signed updater bundles: this release has no latest.json (no auto-update to it)"
+            rm -f latest.json
+          else
+            exit $code
+          fi
+          rm -f installers/*.sig
+
       - name: Checksums
         working-directory: installers
         run: sha256sum * > SHA256SUMS
 
-      # A draft: the owner reviews it and publishes by hand (docs/RELEASING.md).
+      # A draft: the owner reviews it and publishes by hand (docs/RELEASING.md). Tags with a
+      # pre-release part (v1.0.0-beta.1) become pre-releases: GitHub's "latest" (the stable
+      # channel) never points at them.
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" installers/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+          prerelease=()
+          [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$TAG" installers/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag "${prerelease[@]}" \
             --title "Brainitive Desktop $TAG" --notes "See CHANGELOG.md. Unsigned builds show a Gatekeeper / SmartScreen warning."
+
+  # Beta channel (BRAI-373): when the owner publishes a pre-release, its latest.json becomes
+  # beta.json of the rolling pre-release "updater-beta" (created on first use, always kept a
+  # pre-release so it never becomes "latest"). Stable needs nothing: releases/latest/download/
+  # latest.json follows the newest published stable release by itself.
+  beta-manifest:
+    name: Beta channel manifest
+    if: github.event_name == 'release' && github.event.release.prerelease && github.event.release.tag_name != 'updater-beta'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish beta.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          mkdir manifest
+          if ! gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir manifest; then
+            echo "::notice::$TAG has no latest.json (no updater signing key at build time): beta channel unchanged"
+            exit 0
+          fi
+          mv manifest/latest.json manifest/beta.json
+          if ! gh release view updater-beta --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release create updater-beta --repo "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+              --title "Beta update channel" \
+              --notes "Holds beta.json for the app's beta channel. Not a release: do not delete or mark as latest."
+          fi
+          gh release edit updater-beta --repo "$GITHUB_REPOSITORY" --prerelease --latest=false
+          gh release upload updater-beta manifest/beta.json --repo "$GITHUB_REPOSITORY" --clobber
