@@ -11,7 +11,7 @@ use crate::popup::{self, Popup};
 use crate::queue::{self, CaptureInput, Outcome, QueuedCapture};
 use crate::server::ServerOrigin;
 use crate::session::CallError;
-use crate::state::{state, Phase};
+use crate::state::{state, AccountTicket, Phase};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CaptureContext {
@@ -103,10 +103,10 @@ pub async fn capture_submit(
 /// reached (quick capture, and New task's "Save to Inbox instead").
 pub async fn save(app: &AppHandle, input: CaptureInput) -> Result<CaptureResult, UiError> {
     let app = app.clone();
-    let origin = state(&app)
-        .lock()
-        .current_origin()
+    // the sign-in this capture belongs to: checked again before it is kept for later
+    let ticket = AccountTicket::now(&state(&app).lock())
         .ok_or_else(|| ui("no_server", "Connect Brainitive to a server first."))?;
+    let origin = ticket.origin.clone();
     if !state(&app).session.has_stored_sign_in(&origin).await {
         return Err(ui("signed_out", format!("Sign in to {} first.", origin.display_name())));
     }
@@ -130,10 +130,7 @@ pub async fn save(app: &AppHandle, input: CaptureInput) -> Result<CaptureResult,
                     format!("Sign in to {} again to capture.", origin.display_name()),
                 ));
             }
-            let s = state(&app);
-            let mut inner = s.lock();
-            inner.queue.push(entry).map_err(|e| ui("queue_full", e.to_string()))?;
-            inner.save_queue();
+            keep_for_retry(&mut state(&app).lock(), &ticket, entry)?;
             Ok(CaptureResult {
                 status: "queued",
                 message: "You're offline. The capture is kept on this computer and sent when the connection is back."
@@ -141,6 +138,26 @@ pub async fn save(app: &AppHandle, input: CaptureInput) -> Result<CaptureResult,
             })
         }
     }
+}
+
+/// Keeps a capture that could not be sent for a later try — only while the sign-in it was made
+/// in is still current (codex review 5): a send that fails after a sign-out (or a switch) must
+/// not write the text back into the queue the sign-out just deleted.
+pub(crate) fn keep_for_retry(
+    inner: &mut crate::state::Inner,
+    ticket: &AccountTicket,
+    entry: QueuedCapture,
+) -> Result<(), UiError> {
+    if !ticket.holds(inner) {
+        log::info!("a capture that failed after a sign-out or switch was not kept");
+        return Err(ui(
+            "signed_out",
+            "You signed out or switched servers while this was sent. It was not saved.",
+        ));
+    }
+    inner.queue.push(entry).map_err(|e| ui("queue_full", e.to_string()))?;
+    inner.save_queue();
+    Ok(())
 }
 
 #[tauri::command]
@@ -238,5 +255,44 @@ fn ui(kind: &'static str, message: impl Into<String>) -> UiError {
     UiError {
         kind,
         message: message.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+
+    #[test]
+    fn a_send_that_fails_after_the_sign_out_does_not_recreate_the_queue() {
+        let dir = std::env::temp_dir().join(format!("brainitive-capture-epoch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let queue_path = dir.join("capture-queue.json");
+        let app_state = AppState::new(dir.join("settings.json"), queue_path.clone(), dir.join("offline"));
+        let a = ServerOrigin::parse("a.example.com").unwrap();
+        let mut inner = app_state.lock();
+        inner.settings.remember(&a, "A", None);
+        let ticket = AccountTicket::now(&inner).unwrap();
+        let entry = || QueuedCapture::new(&a, CaptureInput::new("private note", None, None).unwrap());
+
+        // the send was on the wire when the user signed out (the epoch moves first)
+        inner.account_epoch += 1;
+        inner.queue.drop_origin(&a);
+        let refused = keep_for_retry(&mut inner, &ticket, entry()).unwrap_err();
+        assert_eq!(refused.kind, "signed_out");
+        assert_eq!(inner.queue.count_for(&a), 0, "nothing in memory");
+        assert!(!queue_path.exists(), "nothing on disk");
+        // a later sign-in to the same server does not bring it back either
+        inner.account_epoch += 1;
+        assert!(keep_for_retry(&mut inner, &ticket, entry()).is_err());
+        assert_eq!(inner.queue.count_for(&a), 0);
+
+        // the same sign-in: kept for later as before
+        let ticket = AccountTicket::now(&inner).unwrap();
+        keep_for_retry(&mut inner, &ticket, entry()).unwrap();
+        assert_eq!(inner.queue.count_for(&a), 1);
+        assert!(queue_path.exists());
+        drop(inner);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

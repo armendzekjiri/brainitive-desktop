@@ -276,6 +276,31 @@ impl Inner {
     }
 }
 
+/// Who a piece of work was started for: the server and the sign-in (`Inner::account_epoch`,
+/// bumped by every sign-in, sign-out and switch). Work that awaited the network checks it again
+/// under the state lock before it writes anything (a queued capture, an outbox entry, a panel
+/// answer), so nothing of one sign-in lands in another's data (codex review 1, 5, 9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountTicket {
+    pub origin: ServerOrigin,
+    pub account: u64,
+}
+
+impl AccountTicket {
+    /// The current server and sign-in (`None`: no server chosen).
+    pub fn now(inner: &Inner) -> Option<Self> {
+        Some(Self {
+            origin: inner.current_origin()?,
+            account: inner.account_epoch,
+        })
+    }
+
+    /// Still the same server and the same sign-in.
+    pub fn holds(&self, inner: &Inner) -> bool {
+        inner.current_origin().as_ref() == Some(&self.origin) && inner.account_epoch == self.account
+    }
+}
+
 pub fn state(app: &AppHandle) -> tauri::State<'_, AppState> {
     app.state::<AppState>()
 }
