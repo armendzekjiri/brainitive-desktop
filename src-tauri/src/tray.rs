@@ -93,6 +93,8 @@ pub enum TrayAction {
     /// Auto-updates (BRAI-373): check by hand / install the waiting update and restart.
     CheckForUpdates,
     RestartToUpdate,
+    /// The menu-bar panel, from the menu (Linux: AppIndicator reports no clicks on the icon).
+    Panel,
 }
 
 impl TrayAction {
@@ -115,6 +117,7 @@ impl TrayAction {
             Self::SyncNow => "tray-sync-now".into(),
             Self::CheckForUpdates => "tray-check-updates".into(),
             Self::RestartToUpdate => "tray-restart-update".into(),
+            Self::Panel => "tray-panel".into(),
         }
     }
 
@@ -139,6 +142,7 @@ impl TrayAction {
             "tray-sync-now" => Self::SyncNow,
             "tray-check-updates" => Self::CheckForUpdates,
             "tray-restart-update" => Self::RestartToUpdate,
+            "tray-panel" => Self::Panel,
             _ => return None,
         })
     }
@@ -352,6 +356,14 @@ pub fn add_leader_entry(entries: &mut Vec<Entry>, leader: Option<String>) {
     );
 }
 
+/// Adds "Open Panel…" at the top (under the server line) where the icon itself can't open it
+/// (Linux: AppIndicator sends no click events).
+pub fn add_panel_entry(entries: &mut Vec<Entry>, needed: bool) {
+    if needed {
+        entries.insert(1.min(entries.len()), item(TrayAction::Panel, "Open Panel…"));
+    }
+}
+
 /// Adds the update line above "Open Brainitive" (BRAI-373): "Restart to Update (x.y.z)" when an
 /// update waits, else "Check for Updates…" (greyed while a check or download runs). Nothing when
 /// updates are off for this build (placeholder key, development build).
@@ -441,9 +453,11 @@ fn build_menu(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Menu<Wry>> {
 
 /// Creates the tray icon (once, at start).
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
+    // left click: the menu-bar panel; right click (and ⌃-click on macOS): this native menu
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("Brainitive")
-        .show_menu_on_left_click(true);
+        .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| crate::panel::on_tray_event(tray.app_handle(), event));
     if let Some(icon) = app.default_window_icon().cloned() {
         builder = builder.icon(icon);
     }
@@ -483,6 +497,9 @@ pub fn refresh(app: &AppHandle) {
     let mut entries = model(server.as_deref(), signed_in, &data, capture, switcher, voice, &offline);
     add_leader_entry(&mut entries, leader);
     add_update_entry(&mut entries, update_availability, &update_status);
+    add_panel_entry(&mut entries, cfg!(target_os = "linux"));
+    // the panel reads its data, the unread count and the sync status again
+    crate::panel::notify(app);
     {
         // unchanged: keep the native menu (it may be open right now)
         let s = state(app);
@@ -542,6 +559,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
         }
         TrayAction::Quit => app.exit(0),
         TrayAction::Offline => popup::show(app, Popup::Offline),
+        TrayAction::Panel => crate::panel::toggle(app, None),
         TrayAction::CheckForUpdates | TrayAction::RestartToUpdate => crate::updater::on_menu_click(app),
         TrayAction::SyncNow => {
             let h = app.clone();
@@ -662,11 +680,20 @@ pub fn parse_timer(body: &Value) -> Option<Option<Timer>> {
             .and_then(|i| i.get("url"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        elapsed_seconds: t.get("elapsed_seconds").and_then(Value::as_u64).unwrap_or(0),
+        elapsed_seconds: elapsed_seconds(t, crate::outbox::now() as i64),
         fetched_at: Instant::now(),
         activity_required: body.get("activity_required").and_then(Value::as_bool).unwrap_or(false),
         default_activity_id: body.get("default_activity_id").filter(|v| !v.is_null()).cloned(),
     }))
+}
+
+/// Seconds the timer runs: from `started_at` (a 304 gives back the older body, whose
+/// `elapsed_seconds` is stale, BRAI-440), else the answer's `elapsed_seconds`.
+fn elapsed_seconds(timer: &Value, now: i64) -> u64 {
+    match timer["started_at"].as_str().and_then(crate::panel::view::parse_instant) {
+        Some(start) if now >= start => (now - start) as u64,
+        _ => timer.get("elapsed_seconds").and_then(Value::as_u64).unwrap_or(0),
+    }
 }
 
 pub fn parse_unread(body: &Value) -> Option<u64> {
@@ -707,7 +734,7 @@ impl PollTicket {
 
 /// GET with the ETag of the last answer: a 304 gives the cached body back. `None`: the answer
 /// came after the ticket expired.
-async fn get_cached(app: &AppHandle, ticket: &PollTicket, path: &'static str) -> Result<Option<Value>, CallError> {
+pub(crate) async fn get_cached(app: &AppHandle, ticket: &PollTicket, path: &str) -> Result<Option<Value>, CallError> {
     let origin = &ticket.origin;
     let cached = state(app).lock().etags.get(path).cloned();
     let request = ApiRequest::get(path).etag(cached.as_ref().map(|(etag, _)| etag.clone()));
@@ -947,6 +974,29 @@ mod tests {
 
         assert_eq!(parse_unread(&json!({"unread_count": 4})), Some(4));
         assert_eq!(parse_unread(&json!({})), None);
+    }
+
+    #[test]
+    fn the_timer_counts_from_started_at_so_a_304_body_is_not_stale() {
+        let started = crate::panel::view::parse_instant("2026-11-02T09:00:00Z").unwrap();
+        let t = json!({"started_at": "2026-11-02T09:00:00Z", "elapsed_seconds": 60});
+        assert_eq!(elapsed_seconds(&t, started + 3600), 3600);
+        // no / broken started_at, or a clock behind the server: the answer's own count
+        assert_eq!(
+            elapsed_seconds(&json!({"started_at": "x", "elapsed_seconds": 60}), started),
+            60
+        );
+        assert_eq!(elapsed_seconds(&t, started - 10), 60);
+    }
+
+    #[test]
+    fn linux_gets_an_open_panel_line_under_the_server_line() {
+        let mut entries = vec![label("Brainitive — Cloud"), Entry::Separator];
+        add_panel_entry(&mut entries, false);
+        assert_eq!(entries.len(), 2);
+        add_panel_entry(&mut entries, true);
+        assert_eq!(entries[1], item(TrayAction::Panel, "Open Panel…"));
+        assert_eq!(TrayAction::from_id("tray-panel"), Some(TrayAction::Panel));
     }
 
     #[test]

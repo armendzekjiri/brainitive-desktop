@@ -165,6 +165,8 @@ pub struct Inner {
     pub offline: crate::offline::OfflineData,
     /// Auto-updates (BRAI-373): whether they may run, status, schedule, the waiting update.
     pub updater: crate::updater::UpdaterState,
+    /// The menu-bar panel: its last answers, where it opened.
+    pub panel: crate::panel::PanelState,
 }
 
 /// What a click on one of our notifications opens.
@@ -234,6 +236,7 @@ impl AppState {
                 downloads: Vec::new(),
                 offline: crate::offline::OfflineData::new(offline_dir),
                 updater: Default::default(),
+                panel: Default::default(),
             }),
             session: Session::default(),
             poll_now: tokio::sync::Notify::new(),

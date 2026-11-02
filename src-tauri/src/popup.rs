@@ -26,16 +26,20 @@ pub enum Popup {
     Voice,
     /// The Brainitive key overlay (BRAI-440): lists the letters, reads the next key.
     Leader,
+    /// The menu-bar panel (left click on the tray icon): Today, My Day, assigned work,
+    /// notifications, the timer.
+    Panel,
 }
 
 impl Popup {
-    pub const ALL: [Popup; 6] = [
+    pub const ALL: [Popup; 7] = [
         Popup::Capture,
         Popup::Switcher,
         Popup::Settings,
         Popup::Offline,
         Popup::Voice,
         Popup::Leader,
+        Popup::Panel,
     ];
 
     pub fn label(self) -> &'static str {
@@ -46,6 +50,7 @@ impl Popup {
             Self::Offline => "offline",
             Self::Voice => "voice",
             Self::Leader => "leader",
+            Self::Panel => "panel",
         }
     }
 
@@ -61,6 +66,7 @@ impl Popup {
             Self::Offline => "offline.html",
             Self::Voice => "voice.html",
             Self::Leader => "leader.html",
+            Self::Panel => "panel.html",
         }
     }
 
@@ -72,6 +78,7 @@ impl Popup {
             Self::Offline => "Brainitive Offline",
             Self::Voice => "Voice Capture",
             Self::Leader => "Brainitive Key",
+            Self::Panel => "Brainitive",
         }
     }
 
@@ -83,25 +90,30 @@ impl Popup {
             Self::Offline => (920.0, 680.0),
             Self::Voice => (420.0, 200.0),
             Self::Leader => (340.0, 252.0),
+            Self::Panel => (crate::panel::geometry::WIDTH, 440.0),
         }
     }
 
     /// Spotlight-like: no frame, above other windows, on every desktop.
     pub fn floating(self) -> bool {
-        matches!(self, Self::Capture | Self::Switcher | Self::Voice | Self::Leader)
+        matches!(
+            self,
+            Self::Capture | Self::Switcher | Self::Voice | Self::Leader | Self::Panel
+        )
     }
 
     /// Windows that hold the signed-in account's content (typed or transcribed capture text,
     /// search results, the offline copy): destroyed on sign-out, rebuilt empty on next use
-    /// (BRAI-377). Settings and the voice indicator hold no account data.
+    /// (BRAI-377). Settings and the voice indicator hold no account data. The panel shows
+    /// the account's work and notifications.
     pub fn holds_account_data(self) -> bool {
-        matches!(self, Self::Capture | Self::Switcher | Self::Offline)
+        matches!(self, Self::Capture | Self::Switcher | Self::Offline | Self::Panel)
     }
 
     /// Gone when it loses focus. Not the voice indicator: a recording goes on while the user
     /// clicks elsewhere (its own Stop / Cancel and the shortcut end it).
     pub fn hides_on_blur(self) -> bool {
-        matches!(self, Self::Capture | Self::Switcher | Self::Leader)
+        matches!(self, Self::Capture | Self::Switcher | Self::Leader | Self::Panel)
     }
 }
 
@@ -133,18 +145,30 @@ pub fn ensure_caller(app: &AppHandle, webview: &Webview, popup: Popup) -> Result
 
 /// Shows (building it on first use) and focuses the window.
 pub fn show(app: &AppHandle, popup: Popup) {
+    show_with(app, popup, |_| {});
+}
+
+/// [`show`], with `prepare` run on the window right before it is shown (the panel's size and
+/// position).
+pub fn show_with(app: &AppHandle, popup: Popup, prepare: impl FnOnce(&WebviewWindow) + Send + 'static) {
     // opened from another bundled window (voice indicator → quick capture): return the focus to
     // where that one would have
     let app_was_active = shell::app_window_focused(app) || inherited_return(app, popup);
     match app.get_webview_window(popup.label()) {
-        Some(w) => present(app, popup, w, app_was_active),
+        Some(w) => {
+            prepare(&w);
+            present(app, popup, w, app_was_active)
+        }
         None => {
             // menu, tray and shortcut handlers run on the main thread; building a webview
             // there can deadlock on Windows, so it is built from the async runtime
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 match build(&app, popup) {
-                    Ok(w) => present(&app, popup, w, app_was_active),
+                    Ok(w) => {
+                        prepare(&w);
+                        present(&app, popup, w, app_was_active)
+                    }
                     Err(e) => log::error!("could not open {}: {e}", popup.label()),
                 }
             });
@@ -166,7 +190,8 @@ fn present(app: &AppHandle, popup: Popup, window: WebviewWindow, app_was_active:
         .lock()
         .popup_return
         .insert(popup.label().to_string(), app_was_active);
-    if popup.floating() {
+    // the panel is placed under the tray icon (`panel::show`)
+    if popup.floating() && popup != Popup::Panel {
         let _ = window.center();
     }
     let _ = window.unminimize();
@@ -225,6 +250,9 @@ pub fn on_focus_lost(app: &AppHandle, label: &str) {
             let _ = w.hide();
         }
         state(app).lock().popup_return.remove(popup.label());
+        if popup == Popup::Panel {
+            crate::panel::hidden_by_blur(app);
+        }
     }
 }
 
@@ -263,6 +291,11 @@ fn build(app: &AppHandle, popup: Popup) -> tauri::Result<WebviewWindow> {
             }
             NewWindowResponse::Deny
         });
+    let builder = if popup == Popup::Panel {
+        crate::panel::window_style(builder)
+    } else {
+        builder
+    };
     // macOS 26: the page must not run under the see-through title bar (see shell::TITLE_BAR)
     #[cfg(target_os = "macos")]
     let builder = if floating {
@@ -312,7 +345,10 @@ mod tests {
     #[test]
     fn sign_out_closes_the_windows_with_account_data() {
         let closed: Vec<_> = Popup::ALL.into_iter().filter(|p| p.holds_account_data()).collect();
-        assert_eq!(closed, vec![Popup::Capture, Popup::Switcher, Popup::Offline]);
+        assert_eq!(
+            closed,
+            vec![Popup::Capture, Popup::Switcher, Popup::Offline, Popup::Panel]
+        );
     }
 
     use super::*;
@@ -354,5 +390,8 @@ mod tests {
         assert!(Popup::Leader.floating() && Popup::Leader.hides_on_blur());
         assert!(!Popup::Leader.holds_account_data());
         assert_eq!(Popup::from_label("leader"), Some(Popup::Leader));
+        // the menu-bar panel: floats, goes on blur, holds the account's work and notifications
+        assert!(Popup::Panel.floating() && Popup::Panel.hides_on_blur() && Popup::Panel.holds_account_data());
+        assert_eq!(Popup::from_label("panel"), Some(Popup::Panel));
     }
 }

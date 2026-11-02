@@ -76,6 +76,19 @@ fn main() {
             "leader_press",
             "leader_release",
             "leader_close",
+            // the menu-bar panel (capabilities/panel.json)
+            "panel_view",
+            "panel_load",
+            "panel_set_tab",
+            "panel_set_done",
+            "panel_open",
+            "panel_mark_all_read",
+            "panel_timer_start",
+            "panel_timer_stop",
+            "panel_timer_discard",
+            "panel_run",
+            "panel_resize",
+            "panel_close",
         ])),
     )
     .expect("failed to run tauri-build");

@@ -17,6 +17,11 @@ fn permissions(cap: &Value) -> Vec<String> {
         .collect()
 }
 
+/// Every capability file (= every bundled window + the main window's screens).
+const ALL: [&str; 8] = [
+    "local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel",
+];
+
 fn config() -> Value {
     let path = format!("{}/tauri.conf.json", env!("CARGO_MANIFEST_DIR"));
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
@@ -32,7 +37,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         .collect();
     assert_eq!(
         enabled,
-        ["local", "settings", "capture", "switcher", "offline", "voice", "leader"]
+        ["local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel"]
     );
 
     for (name, window, prefix) in [
@@ -42,6 +47,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         ("offline", "offline", "allow-offline-"),
         ("voice", "voice", "allow-voice-"),
         ("leader", "leader", "allow-leader-"),
+        ("panel", "panel", "allow-panel-"),
     ] {
         let cap = capability(name);
         assert_eq!(cap["identifier"], name);
@@ -55,8 +61,9 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         assert!(cap.get("webviews").is_none());
         for p in permissions(&cap) {
             // the offline window listens for `offline://changed`, the voice indicator for
-            // `voice://view` / `voice://level` (each sent to that window only)
-            let event = matches!(name, "offline" | "voice")
+            // `voice://view` / `voice://level`, the panel for `panel://changed` (each sent to that
+            // window only)
+            let event = matches!(name, "offline" | "voice" | "panel")
                 && matches!(p.as_str(), "core:event:allow-listen" | "core:event:allow-unlisten");
             assert!(p.starts_with(prefix) || event, "{name} grants {p}");
         }
@@ -70,7 +77,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
 
 #[test]
 fn no_capability_file_grants_plugins_or_the_bridge() {
-    for name in ["local", "settings", "capture", "switcher", "offline", "voice", "leader"] {
+    for name in ALL {
         for p in permissions(&capability(name)) {
             assert!(!p.contains("brainitive-"), "{name}: bridge command {p}");
             for plugin in [
@@ -94,7 +101,7 @@ fn no_capability_file_grants_plugins_or_the_bridge() {
 #[test]
 fn every_command_of_a_capability_is_in_the_app_manifest() {
     let build = std::fs::read_to_string(format!("{}/build.rs", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    for name in ["local", "settings", "capture", "switcher", "offline", "voice", "leader"] {
+    for name in ALL {
         for p in permissions(&capability(name)) {
             if let Some(cmd) = p.strip_prefix("allow-") {
                 let cmd = cmd.replace('-', "_");
@@ -161,7 +168,7 @@ fn only_the_settings_window_and_the_main_screens_get_the_update_commands() {
             assert!(!updater_command, "{name} grants {p}");
         }
     }
-    for name in ["local", "settings", "capture", "switcher", "offline", "voice", "leader"] {
+    for name in ALL {
         for p in permissions(&capability(name)) {
             assert!(!p.starts_with("updater:"), "{name} grants the plugin's {p}");
         }
@@ -188,4 +195,56 @@ fn the_brainitive_key_overlay_gets_its_four_commands_only() {
     }
     // the indicator's own key-up command (hold the letter to talk) stays with the indicator
     assert!(permissions(&capability("voice")).contains(&"allow-voice-release".to_string()));
+}
+
+#[test]
+fn only_the_menu_bar_panel_gets_the_panel_commands() {
+    // the panel's commands (API calls with the app token, opening pages, timer, ticks) belong to
+    // the panel window; the panel gets nothing of the other windows
+    let panel = permissions(&capability("panel"));
+    for p in &panel {
+        assert!(
+            p.starts_with("allow-panel-") || p == "core:event:allow-listen" || p == "core:event:allow-unlisten",
+            "panel grants {p}"
+        );
+    }
+    for p in [
+        "allow-panel-view",
+        "allow-panel-load",
+        "allow-panel-set-done",
+        "allow-panel-open",
+        "allow-panel-timer-stop",
+        "allow-panel-close",
+    ] {
+        assert!(panel.contains(&p.to_string()), "{p}");
+    }
+    for name in ALL.into_iter().filter(|n| *n != "panel") {
+        for p in permissions(&capability(name)) {
+            assert!(!p.starts_with("allow-panel-"), "{name} grants {p}");
+        }
+    }
+}
+
+#[test]
+fn every_panel_command_checks_its_caller() {
+    // each `#[tauri::command]` of the panel starts with the caller check (popup::ensure_caller)
+    let src = std::fs::read_to_string(format!("{}/src/panel/mod.rs", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut commands = 0;
+    for part in src.split("#[tauri::command]").skip(1) {
+        commands += 1;
+        let body = part.split_once('{').map(|(_, b)| b).unwrap_or("");
+        let first = body.trim_start().lines().next().unwrap_or("");
+        assert_eq!(
+            first.trim(),
+            "caller(&app, &webview)?;",
+            "{}",
+            part.lines().nth(1).unwrap_or("")
+        );
+    }
+    assert_eq!(
+        commands,
+        permissions(&capability("panel")).len() - 2,
+        "one permission per command"
+    );
+    assert!(src.contains("popup::ensure_caller(app, webview, Popup::Panel)"));
 }

@@ -81,6 +81,8 @@ pub struct Preferences {
     /// Stable (default) or beta ("Get beta updates"); an unknown value in the file is stable.
     #[serde(deserialize_with = "crate::updater::lenient_channel")]
     pub update_channel: crate::updater::Channel,
+    /// The menu-bar panel's last tab (`panel::view::Tab`; anything unknown opens Today).
+    pub panel_tab: String,
 }
 
 impl Default for Preferences {
@@ -100,6 +102,7 @@ impl Default for Preferences {
             voice_language: crate::voice::AUTO_LANGUAGE.to_string(),
             auto_update_check: true,
             update_channel: crate::updater::Channel::Stable,
+            panel_tab: "today".to_string(),
         }
     }
 }

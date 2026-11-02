@@ -796,6 +796,31 @@ pub fn offline_dismiss_problem(
     Ok(window_view(&app))
 }
 
+/// A done tick from the menu-bar panel while the server can't be reached: the same `work.done`
+/// change as this window's circle (`server_done` = what the server last showed; an unsent change
+/// of the same item keeps its base).
+pub fn queue_work_done(
+    app: &AppHandle,
+    work_id: &str,
+    done: bool,
+    server_done: bool,
+    title: &str,
+) -> Result<(), UiError> {
+    if !crate::tray::is_work_id(work_id) {
+        return Err(ui("invalid", "Unknown item."));
+    }
+    record(app, |data| {
+        let base_done = data.outbox.base_done(work_id, server_done);
+        Ok(Some(Change::WorkDone {
+            title: title.chars().take(outbox::MAX_TITLE).collect(),
+            work_id: work_id.to_string(),
+            done,
+            base_done,
+        }))
+    })
+    .map(|_| ())
+}
+
 /// "Open Brainitive": back to the main window (it retries the server by itself).
 #[tauri::command]
 pub fn offline_open_app(app: AppHandle, webview: Webview) -> Result<(), String> {

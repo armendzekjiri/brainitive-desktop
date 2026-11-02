@@ -1,0 +1,25 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "panel",
+  "description": "The bundled menu-bar panel only (panel.html). It shows Today, My Day, assigned work, notifications and the timer and asks Rust for every change (the API is called from Rust with the stored app token; the page never sees a token or a URL). Commands act only on ids of the server's last answers. Events: only `panel://changed`, sent to this window.",
+  "local": true,
+  "windows": [
+    "panel"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-panel-view",
+    "allow-panel-load",
+    "allow-panel-set-tab",
+    "allow-panel-set-done",
+    "allow-panel-open",
+    "allow-panel-mark-all-read",
+    "allow-panel-timer-start",
+    "allow-panel-timer-stop",
+    "allow-panel-timer-discard",
+    "allow-panel-run",
+    "allow-panel-resize",
+    "allow-panel-close"
+  ]
+}

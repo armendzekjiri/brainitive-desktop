@@ -17,6 +17,7 @@ pub mod menu;
 pub mod offline;
 pub mod offline_cache;
 pub mod outbox;
+pub mod panel;
 pub mod pkce;
 pub mod poll;
 pub mod popup;
@@ -144,6 +145,18 @@ pub fn run() {
             leader::leader_press,
             leader::leader_release,
             leader::leader_close,
+            panel::panel_view,
+            panel::panel_load,
+            panel::panel_set_tab,
+            panel::panel_set_done,
+            panel::panel_open,
+            panel::panel_mark_all_read,
+            panel::panel_timer_start,
+            panel::panel_timer_stop,
+            panel::panel_timer_discard,
+            panel::panel_run,
+            panel::panel_resize,
+            panel::panel_close,
         ])
         .setup(|app| {
             // first: everything after this is logged, and a panic leaves a trace

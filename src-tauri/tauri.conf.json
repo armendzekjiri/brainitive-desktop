@@ -33,7 +33,8 @@
         "switcher",
         "offline",
         "voice",
-        "leader"
+        "leader",
+        "panel"
       ]
     }
   },
