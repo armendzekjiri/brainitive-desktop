@@ -551,9 +551,17 @@ async fn sync_with(app: &AppHandle, origin: &ServerOrigin, pull_changes: bool) -
 }
 
 async fn sync_once(app: &AppHandle, origin: &ServerOrigin, pull_changes: bool) -> Result<(), CallError> {
-    let epoch = state(app).lock().offline.epoch;
+    let (epoch, owner) = {
+        let s = state(app);
+        let inner = s.lock();
+        let owner = AccountTicket::now(&inner).filter(|t| &t.origin == origin);
+        (inner.offline.epoch, owner)
+    };
+    let Some(owner) = owner else {
+        return Err(Stale.into());
+    };
     let epoch = verify_user(app, origin, epoch).await?;
-    let (sent, problems, error) = flush(app, origin, epoch).await;
+    let (sent, problems, error) = flush(app, &owner, epoch).await;
     if sent > 0 {
         let body = if sent == 1 {
             "1 change you made offline is on the server now.".to_string()
@@ -612,7 +620,8 @@ async fn verify_user(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> Resu
 }
 
 /// Sends the outbox in order. Returns (sent, new problems, the error that stopped it).
-async fn flush(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> (usize, usize, Option<CallError>) {
+async fn flush(app: &AppHandle, owner: &AccountTicket, epoch: u64) -> (usize, usize, Option<CallError>) {
+    let origin = &owner.origin;
     let (mut sent, mut problems) = (0, 0);
     let mut size = BATCH;
     loop {
@@ -647,7 +656,7 @@ async fn flush(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> (usize, us
             log::info!("offline change dropped, no longer there on the server: {what}");
         }
         // the timer, a notification, the unread count as the server has them now
-        crate::panel::apply_sync_states(app, origin, &step.states);
+        crate::panel::apply_sync_states(app, owner, &step.states);
         if step.needs_activity {
             crate::bridge::show_offline_notification(
                 app,

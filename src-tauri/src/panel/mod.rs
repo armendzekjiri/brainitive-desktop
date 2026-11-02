@@ -754,16 +754,7 @@ pub async fn panel_set_done(app: AppHandle, webview: Webview, work_id: String, d
                         view::set_done(&mut s.body, &work_id, done);
                     }
                 });
-                {
-                    let s = state(&app);
-                    let mut inner = s.lock();
-                    if let Some(items) = inner.tray_data.my_day.as_mut() {
-                        for i in items.iter_mut().filter(|i| i.id == work_id) {
-                            i.done = done;
-                        }
-                    }
-                    inner.tray_data.my_day_stale = true;
-                }
+                mark_tray_done(&mut state(&app).lock(), &t, &work_id, done);
                 state(&app).poll_now.notify_one();
                 changed(&app);
                 return Ok(());
@@ -777,6 +768,22 @@ pub async fn panel_set_done(app: AppHandle, webview: Webview, work_id: String, d
     crate::offline::queue_work_done(&app, &owner, &work_id, done, work.done, &work.label)?;
     changed(&app);
     Ok(())
+}
+
+/// The tray's My Day follows a tick the server confirmed — only while the sign-in the request was
+/// made for is still current (codex review 9): an answer that arrives after a switch never
+/// ticks the new account's item with the same id.
+pub(crate) fn mark_tray_done(inner: &mut crate::state::Inner, t: &PollTicket, work_id: &str, done: bool) -> bool {
+    if PollTicket::now(inner).as_ref() != Some(t) {
+        return false;
+    }
+    if let Some(items) = inner.tray_data.my_day.as_mut() {
+        for i in items.iter_mut().filter(|i| i.id == work_id) {
+            i.done = done;
+        }
+    }
+    inner.tray_data.my_day_stale = true;
+    true
 }
 
 /// A My Day item of the offline copy that is not in its work list (planned, not assigned).
@@ -961,13 +968,15 @@ pub async fn panel_mark_all_read(app: AppHandle, webview: Webview) -> Result<(),
 /// The live state a sync result brings (`timer`, `notification`, `unread_count`): the tray, the
 /// badge and the panel show what the server has now (also for a refused offline start: the timer
 /// that runs).
-pub fn apply_sync_states(app: &AppHandle, origin: &ServerOrigin, states: &[crate::outbox::SyncResult]) {
+pub fn apply_sync_states(app: &AppHandle, owner: &AccountTicket, states: &[crate::outbox::SyncResult]) {
     if states.is_empty() {
         return;
     }
-    let Some(t) = ticket(app).filter(|t| &t.origin == origin) else {
+    // the server + sign-in the sync ran for, not whoever is current now (codex review 9)
+    let Some(t) = ticket(app).filter(|t| t.account() == *owner) else {
         return;
     };
+    let origin = &owner.origin;
     for r in states {
         let Some((kind, entity)) = r.live_state() else { continue };
         match kind {
