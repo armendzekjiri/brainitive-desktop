@@ -52,6 +52,8 @@ whisper-rs = { version = "=0.16.0", features = ["log_backend"] }
 whisper-rs = { version = "=0.16.0", features = ["log_backend", "metal"] }
 objc2 = "=0.6.5"
 block2 = "=0.6.2"
+# downloads (BRAI-377): setxattr / getxattr for the com.apple.quarantine flag
+libc = "=0.2.191"
 
 [dev-dependencies]
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros"] }
