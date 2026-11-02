@@ -74,6 +74,8 @@ pub struct TrayData {
 pub enum TrayAction {
     Capture,
     Switcher,
+    /// Voice capture (BRAI-439).
+    Voice,
     Open,
     MyDay,
     ToggleDay(String),
@@ -93,6 +95,7 @@ impl TrayAction {
         match self {
             Self::Capture => "tray-capture".into(),
             Self::Switcher => "tray-switcher".into(),
+            Self::Voice => "tray-voice".into(),
             Self::Open => "tray-open".into(),
             Self::MyDay => "tray-my-day".into(),
             Self::ToggleDay(id) => format!("tray-day:{id}"),
@@ -114,6 +117,7 @@ impl TrayAction {
         Some(match id {
             "tray-capture" => Self::Capture,
             "tray-switcher" => Self::Switcher,
+            "tray-voice" => Self::Voice,
             "tray-open" => Self::Open,
             "tray-my-day" => Self::MyDay,
             "tray-timer-open" => Self::TimerOpen,
@@ -186,6 +190,7 @@ pub fn model(
     data: &TrayData,
     capture_shortcut: Option<String>,
     switcher_shortcut: Option<String>,
+    voice_shortcut: Option<String>,
     offline: &crate::offline::TrayStatus,
 ) -> Vec<Entry> {
     let mut out = Vec::new();
@@ -217,6 +222,11 @@ pub fn model(
         action: Some(TrayAction::Switcher),
         text: "Quick Switcher…".into(),
         accelerator: switcher_shortcut,
+    });
+    out.push(Entry::Item {
+        action: Some(TrayAction::Voice),
+        text: "Voice Capture…".into(),
+        accelerator: voice_shortcut,
     });
 
     if signed_in {
@@ -354,7 +364,7 @@ fn tray(app: &AppHandle) -> Option<TrayIcon<Wry>> {
 /// Rebuilds the menu, tooltip and (macOS) the count next to the icon from the current data.
 pub fn refresh(app: &AppHandle) {
     let Some(tray) = tray(app) else { return };
-    let (server, signed_in, data, capture, switcher, offline) = {
+    let (server, signed_in, data, capture, switcher, voice, offline) = {
         let s = state(app);
         let inner = s.lock();
         let accel = |a: Option<&str>| {
@@ -367,10 +377,11 @@ pub fn refresh(app: &AppHandle) {
             inner.tray_data.clone(),
             accel(inner.settings.preferences.capture_shortcut.as_deref()),
             accel(inner.settings.preferences.switcher_shortcut.as_deref()),
+            accel(inner.settings.preferences.voice_shortcut.as_deref()),
             crate::offline::tray_status(&inner),
         )
     };
-    let entries = model(server.as_deref(), signed_in, &data, capture, switcher, &offline);
+    let entries = model(server.as_deref(), signed_in, &data, capture, switcher, voice, &offline);
     {
         // unchanged: keep the native menu (it may be open right now)
         let s = state(app);
@@ -418,6 +429,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
     match action {
         TrayAction::Capture => popup::show(app, Popup::Capture),
         TrayAction::Switcher => popup::show(app, Popup::Switcher),
+        TrayAction::Voice => crate::voice::start_from_menu(app),
         TrayAction::Settings => popup::show(app, Popup::Settings),
         TrayAction::Open => crate::shell::focus_main(app),
         TrayAction::MyDay => crate::shell::open_page(app, "/my-work"),
@@ -683,6 +695,7 @@ mod tests {
         for a in [
             TrayAction::Capture,
             TrayAction::Switcher,
+            TrayAction::Voice,
             TrayAction::Open,
             TrayAction::MyDay,
             TrayAction::ToggleDay("issue:12".into()),
@@ -735,7 +748,7 @@ mod tests {
 
     #[test]
     fn menu_model_signed_out_only_offers_the_basics() {
-        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, &Default::default());
+        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, None, &Default::default());
         assert_eq!(
             m[0],
             Entry::Item {
@@ -746,6 +759,8 @@ mod tests {
         );
         assert!(!m.iter().any(|e| matches!(e, Entry::Submenu { .. })));
         assert!(m.contains(&item(TrayAction::Quit, "Quit Brainitive")));
+        // voice capture is offered even signed out (the text waits in quick capture)
+        assert!(m.iter().any(|e| matches!(e, Entry::Item { action: Some(TrayAction::Voice), text, .. } if text == "Voice Capture…")));
     }
 
     #[test]
@@ -780,7 +795,7 @@ mod tests {
             ]),
             my_day_stale: false,
         };
-        let m = model(Some("Cloud"), true, &data, Some("shift+super+Space".into()), None, &Default::default());
+        let m = model(Some("Cloud"), true, &data, Some("shift+super+Space".into()), None, None, &Default::default());
         let Some(Entry::Submenu { text, entries }) = m.iter().find(|e| matches!(e, Entry::Submenu { .. })) else {
             panic!("no My Day");
         };
@@ -805,7 +820,7 @@ mod tests {
             unread: Some(0),
             ..TrayData::default()
         };
-        let m = model(Some("Cloud"), true, &none, None, None, &Default::default());
+        let m = model(Some("Cloud"), true, &none, None, None, None, &Default::default());
         assert!(m.contains(&label("No timer running")));
         assert!(m.contains(&item(TrayAction::Notifications, "No unread notifications")));
     }
@@ -819,20 +834,20 @@ mod tests {
             pending: 3,
         };
         // the unreachable screen: not "signed out", the offline view and Sync Now
-        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, &offline);
+        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, None, &offline);
         assert_eq!(m[0], label("Brainitive — Cloud"));
         assert_eq!(m[1], label("Offline — 3 changes will sync"));
         assert!(m.contains(&item(TrayAction::Offline, "Open Offline View…")));
         assert!(m.contains(&item(TrayAction::SyncNow, "Sync Now")));
         let one = TrayStatus { pending: 1, ..offline.clone() };
-        assert_eq!(model(Some("Cloud"), false, &TrayData::default(), None, None, &one)[1], label("Offline — 1 change will sync"));
+        assert_eq!(model(Some("Cloud"), false, &TrayData::default(), None, None, None, &one)[1], label("Offline — 1 change will sync"));
         let none = TrayStatus { pending: 0, ..offline.clone() };
-        assert_eq!(model(Some("Cloud"), true, &TrayData::default(), None, None, &none)[1], label("Offline — changes will sync"));
+        assert_eq!(model(Some("Cloud"), true, &TrayData::default(), None, None, None, &none)[1], label("Offline — changes will sync"));
         // online with changes still waiting
         let online = TrayStatus { offline: false, ..offline };
-        assert_eq!(model(Some("Cloud"), true, &TrayData::default(), None, None, &online)[1], label("3 changes waiting to sync"));
+        assert_eq!(model(Some("Cloud"), true, &TrayData::default(), None, None, None, &online)[1], label("3 changes waiting to sync"));
         // signed out: no offline entries
-        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, &TrayStatus::default());
+        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, None, &TrayStatus::default());
         assert!(!m.contains(&item(TrayAction::SyncNow, "Sync Now")));
     }
 

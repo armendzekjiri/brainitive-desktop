@@ -28,6 +28,12 @@ pub struct PrefsView {
     /// "⇧⌘Space" etc.; empty = off.
     capture_shortcut: String,
     switcher_shortcut: String,
+    /// Voice capture (BRAI-439).
+    voice_shortcut: String,
+    voice_enabled: bool,
+    voice_language: String,
+    voice_languages: Vec<Language>,
+    voice_model: crate::voice::ModelStatus,
     keep_in_tray: bool,
     ask_where_to_save: bool,
     /// The OS login item is the truth (LaunchAgent / registry / autostart .desktop file).
@@ -37,7 +43,14 @@ pub struct PrefsView {
     shortcut_problem: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct Language {
+    code: &'static str,
+    name: &'static str,
+}
+
 pub fn view(app: &AppHandle) -> PrefsView {
+    let voice_model = crate::voice::model_status(app);
     let s = state(app);
     let inner = s.lock();
     let prefs = &inner.settings.preferences;
@@ -49,6 +62,14 @@ pub fn view(app: &AppHandle) -> PrefsView {
         zoom_percent: (prefs.zoom * 100.0).round() as u32,
         capture_shortcut: crate::shortcuts::label_of(prefs.capture_shortcut.as_deref()),
         switcher_shortcut: crate::shortcuts::label_of(prefs.switcher_shortcut.as_deref()),
+        voice_shortcut: crate::shortcuts::label_of(prefs.voice_shortcut.as_deref()),
+        voice_enabled: prefs.voice_enabled,
+        voice_language: prefs.voice_language.clone(),
+        voice_languages: crate::voice::LANGUAGES
+            .iter()
+            .map(|(code, name)| Language { code, name })
+            .collect(),
+        voice_model,
         keep_in_tray: prefs.keep_in_tray,
         ask_where_to_save: prefs.ask_where_to_save,
         launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
@@ -110,6 +131,7 @@ pub fn settings_set_shortcut(
         ShortcutChoice::Off => None,
         ShortcutChoice::Default => Some(match which.as_str() {
             "switcher" => crate::shortcuts::DEFAULT_SWITCHER.to_string(),
+            "voice" => crate::shortcuts::DEFAULT_VOICE.to_string(),
             _ => crate::shortcuts::DEFAULT_CAPTURE.to_string(),
         }),
         ShortcutChoice::Keys(keys) => Some(
@@ -123,6 +145,7 @@ pub fn settings_set_shortcut(
     match which.as_str() {
         "capture" => next.capture_shortcut = value,
         "switcher" => next.switcher_shortcut = value,
+        "voice" => next.voice_shortcut = value,
         _ => return Err("unknown shortcut".into()),
     }
     state(&app).lock().settings.preferences = next;
@@ -167,10 +190,38 @@ pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value:
             "start_hidden" => prefs.start_hidden = value,
             "keep_in_tray" => prefs.keep_in_tray = value,
             "ask_where_to_save" => prefs.ask_where_to_save = value,
+            "voice_enabled" => prefs.voice_enabled = value,
             _ => return Err("unknown setting".into()),
         }
         inner.save_settings();
     }
+    if key == "voice_enabled" && !value {
+        crate::voice::turned_off(&app);
+    }
+    Ok(view(&app))
+}
+
+/// The language voice capture listens for ("auto" or one of `voice::LANGUAGES`).
+#[tauri::command]
+pub fn settings_set_voice_language(app: AppHandle, webview: Webview, language: String) -> Result<PrefsView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    if !crate::voice::is_language(&language) {
+        return Err("unknown language".into());
+    }
+    {
+        let s = state(&app);
+        let mut inner = s.lock();
+        inner.settings.preferences.voice_language = language;
+        inner.save_settings();
+    }
+    Ok(view(&app))
+}
+
+/// "Remove voice model": frees the disk space; the next voice capture downloads it again.
+#[tauri::command]
+pub async fn settings_remove_voice_model(app: AppHandle, webview: Webview) -> Result<PrefsView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    crate::voice::remove_model(&app)?;
     Ok(view(&app))
 }
 

@@ -146,6 +146,15 @@ pub fn capture_close(app: AppHandle, webview: Webview) -> Result<(), String> {
     Ok(())
 }
 
+/// The window's microphone button (BRAI-439): voice capture until Enter / Stop; the text comes
+/// back into this window (added to what is already typed).
+#[tauri::command]
+pub fn capture_voice(app: AppHandle, webview: Webview) -> Result<(), String> {
+    popup::ensure_caller(&app, &webview, Popup::Capture)?;
+    crate::voice::start_from_menu(&app);
+    Ok(())
+}
+
 async fn send(app: &AppHandle, origin: &ServerOrigin, entry: &QueuedCapture) -> Result<(), CallError> {
     let request = ApiRequest::post("/api/v1/captures", entry.body());
     state(app).session.request(origin, &request).await.map(|_| ())

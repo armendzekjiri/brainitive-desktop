@@ -26,7 +26,7 @@
         "frame-src": "'none'",
         "frame-ancestors": "'none'"
       },
-      "capabilities": ["local", "settings", "capture", "switcher", "offline"]
+      "capabilities": ["local", "settings", "capture", "switcher", "offline", "voice"]
     }
   },
   "bundle": {

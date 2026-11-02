@@ -30,10 +30,13 @@ fn main() {
             "settings_set_shortcut",
             "settings_record_shortcut",
             "settings_set_toggle",
+            "settings_set_voice_language",
+            "settings_remove_voice_model",
             // the quick-capture window (capabilities/capture.json)
             "capture_context",
             "capture_submit",
             "capture_close",
+            "capture_voice",
             // the quick-switcher window (capabilities/switcher.json)
             "switcher_context",
             "switcher_search",
@@ -51,6 +54,15 @@ fn main() {
             "offline_sync_now",
             "offline_dismiss_problem",
             "offline_open_app",
+            // the voice-capture indicator (capabilities/voice.json, BRAI-439)
+            "voice_view",
+            "voice_start",
+            "voice_stop",
+            "voice_cancel",
+            "voice_turn_on",
+            "voice_download",
+            "voice_open_privacy",
+            "voice_close",
         ])),
     )
     .expect("failed to run tauri-build");

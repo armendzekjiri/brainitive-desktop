@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "voice",
+  "description": "The bundled voice-capture indicator only (voice.html, BRAI-439). It shows the recording state and set-up steps and asks Rust to start / stop / cancel; the microphone, the audio and the transcription stay in Rust, and the audio never reaches this page. Events: only `voice://view` and `voice://level`, sent to this window.",
+  "local": true,
+  "windows": ["voice"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-voice-view",
+    "allow-voice-start",
+    "allow-voice-stop",
+    "allow-voice-cancel",
+    "allow-voice-turn-on",
+    "allow-voice-download",
+    "allow-voice-open-privacy",
+    "allow-voice-close"
+  ]
+}

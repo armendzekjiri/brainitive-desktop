@@ -13,6 +13,9 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 pub const DEFAULT_CAPTURE: &str = "CommandOrControl+Shift+Space";
 /// ⌥⌘K on macOS, Ctrl+Alt+K on Windows / Linux ("K" like the web app's ⌘K search).
 pub const DEFAULT_SWITCHER: &str = "CommandOrControl+Alt+K";
+/// ⇧⌘V on macOS, Ctrl+Shift+V on Windows / Linux (voice capture, BRAI-439; held to talk). Not
+/// final: it may move under a "Brainitive key" chord later.
+pub const DEFAULT_VOICE: &str = "CommandOrControl+Shift+KeyV";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ShortcutError {
@@ -212,16 +215,27 @@ mod tests {
 
     #[test]
     fn defaults_are_valid_and_different() {
-        let all = parse_all(&[("capture", Some(DEFAULT_CAPTURE)), ("switcher", Some(DEFAULT_SWITCHER))]).unwrap();
+        let all = parse_all(&[
+            ("capture", Some(DEFAULT_CAPTURE)),
+            ("switcher", Some(DEFAULT_SWITCHER)),
+            ("voice", Some(DEFAULT_VOICE)),
+        ])
+        .unwrap();
+        assert_eq!(all.len(), 3, "valid and all different");
         let (c, s) = (all[0].1, all[1].1);
         assert_eq!(c.key, Code::Space);
         assert!(c.mods.contains(Modifiers::SHIFT));
         assert_ne!(c.id(), s.id());
+        let v = all[2].1;
+        assert_eq!(v.key, Code::KeyV);
+        // CommandOrControl: ⌘ on macOS, Ctrl elsewhere
+        let mac = cfg!(target_os = "macos");
+        assert_eq!(label(&v, mac), if mac { "⇧⌘V" } else { "Ctrl+Shift+V" });
     }
 
     #[test]
     fn canonical_round_trips() {
-        for raw in [DEFAULT_CAPTURE, DEFAULT_SWITCHER, "Control+Alt+KeyB", "shift+super+Digit7", "Ctrl+F5"] {
+        for raw in [DEFAULT_CAPTURE, DEFAULT_SWITCHER, DEFAULT_VOICE, "Control+Alt+KeyB", "shift+super+Digit7", "Ctrl+F5"] {
             let a = parse(raw).unwrap();
             let b = parse(&canonical(&a)).unwrap();
             assert_eq!(a.id(), b.id(), "{raw}");

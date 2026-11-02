@@ -17,6 +17,7 @@ pub enum MenuAction {
     NewWindow,
     QuickCapture,
     QuickSwitcher,
+    VoiceCapture,
     Back,
     Forward,
     Reload,
@@ -37,13 +38,14 @@ pub enum MenuAction {
 }
 
 impl MenuAction {
-    pub const ALL: [MenuAction; 23] = [
+    pub const ALL: [MenuAction; 24] = [
         Self::Settings,
         Self::NewIssue,
         Self::NewDoc,
         Self::NewWindow,
         Self::QuickCapture,
         Self::QuickSwitcher,
+        Self::VoiceCapture,
         Self::Back,
         Self::Forward,
         Self::Reload,
@@ -71,6 +73,7 @@ impl MenuAction {
             Self::NewWindow => "new-window",
             Self::QuickCapture => "quick-capture",
             Self::QuickSwitcher => "quick-switcher",
+            Self::VoiceCapture => "voice-capture",
             Self::Back => "back",
             Self::Forward => "forward",
             Self::Reload => "reload",
@@ -159,6 +162,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let settings = item(app, MenuAction::Settings, "Settings…")?;
     let capture = item(app, MenuAction::QuickCapture, "Quick Capture…")?;
     let switcher = item(app, MenuAction::QuickSwitcher, "Quick Switcher…")?;
+    let voice = item(app, MenuAction::VoiceCapture, "Voice Capture…")?;
 
     let menu = Menu::new(app)?;
 
@@ -196,6 +200,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             &sep()?,
             &capture,
             &switcher,
+            &voice,
             &sep()?,
             &PredefinedMenuItem::close_window(app, None)?,
         ],
@@ -307,21 +312,23 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         inner.server_menu_item = Some(current);
         inner.capture_menu_item = Some(capture);
         inner.switcher_menu_item = Some(switcher);
+        inner.voice_menu_item = Some(voice);
     }
     refresh_shortcut_labels(app);
     Ok(())
 }
 
-/// Shows the global shortcuts next to Quick Capture / Quick Switcher (display only: the OS
+/// Shows the global shortcuts next to Quick Capture / Quick Switcher / Voice Capture (display only: the OS
 /// delivers the global shortcut before the menu would see it).
 pub fn refresh_shortcut_labels(app: &AppHandle) {
-    let (prefs, capture, switcher) = {
+    let (prefs, capture, switcher, voice) = {
         let s = state(app);
         let inner = s.lock();
         (
             inner.settings.preferences.clone(),
             inner.capture_menu_item.clone(),
             inner.switcher_menu_item.clone(),
+            inner.voice_menu_item.clone(),
         )
     };
     let accel = |a: Option<&str>| {
@@ -334,6 +341,9 @@ pub fn refresh_shortcut_labels(app: &AppHandle) {
     if let Some(item) = switcher {
         let _ = item.set_accelerator(accel(prefs.switcher_shortcut.as_deref()));
     }
+    if let Some(item) = voice {
+        let _ = item.set_accelerator(accel(prefs.voice_shortcut.as_deref()));
+    }
 }
 
 /// Every menu event of the app menu (tray items are handled in `tray.rs`).
@@ -345,6 +355,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
         MenuAction::Settings => crate::popup::show(app, crate::popup::Popup::Settings),
         MenuAction::QuickCapture => crate::capture::open_quick_capture(app, None),
         MenuAction::QuickSwitcher => crate::popup::show(app, crate::popup::Popup::Switcher),
+        MenuAction::VoiceCapture => crate::voice::start_from_menu(app),
         MenuAction::NewWindow => {
             let current = shell::target_window(app).and_then(|w| w.url().ok());
             let origin = state(app).lock().current_origin();

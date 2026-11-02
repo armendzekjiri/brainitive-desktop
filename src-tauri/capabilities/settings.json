@@ -11,6 +11,8 @@
     "allow-settings-close",
     "allow-settings-set-shortcut",
     "allow-settings-record-shortcut",
-    "allow-settings-set-toggle"
+    "allow-settings-set-toggle",
+    "allow-settings-set-voice-language",
+    "allow-settings-remove-voice-model"
   ]
 }

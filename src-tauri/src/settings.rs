@@ -54,6 +54,13 @@ pub struct Preferences {
     pub ask_where_to_save: bool,
     /// Zoom level of the app windows (1.0 = 100 %).
     pub zoom: f64,
+    /// Voice capture (BRAI-439): off until the user turns it on (Settings, or the first press of
+    /// its shortcut).
+    pub voice_enabled: bool,
+    /// Global voice-capture shortcut (hold to talk); `None` = off.
+    pub voice_shortcut: Option<String>,
+    /// Spoken language: "auto" or a code of `voice::LANGUAGES`.
+    pub voice_language: String,
 }
 
 impl Default for Preferences {
@@ -65,6 +72,9 @@ impl Default for Preferences {
             keep_in_tray: true,
             ask_where_to_save: true,
             zoom: 1.0,
+            voice_enabled: false,
+            voice_shortcut: Some(crate::shortcuts::DEFAULT_VOICE.to_string()),
+            voice_language: crate::voice::AUTO_LANGUAGE.to_string(),
         }
     }
 }
@@ -108,6 +118,9 @@ impl Settings {
             .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
             .map(|mut s| {
                 s.preferences.zoom = clamp_zoom(s.preferences.zoom);
+                if !crate::voice::is_language(&s.preferences.voice_language) {
+                    s.preferences.voice_language = crate::voice::AUTO_LANGUAGE.to_string();
+                }
                 s
             })
             .unwrap_or_default()
@@ -218,6 +231,38 @@ mod tests {
         assert_eq!(s.preferences.capture_shortcut, None);
         assert_eq!(s.preferences.switcher_shortcut, Preferences::default().switcher_shortcut);
         assert_eq!(s.preferences.zoom, 1.25);
+    }
+
+    #[test]
+    fn voice_capture_is_off_by_default_and_old_files_get_its_defaults() {
+        let p = Preferences::default();
+        assert!(!p.voice_enabled);
+        assert_eq!(p.voice_shortcut.as_deref(), Some(crate::shortcuts::DEFAULT_VOICE));
+        assert_eq!(p.voice_language, "auto");
+        // a file from before BRAI-439
+        let s: Settings = serde_json::from_str(r#"{"preferences":{"zoom":1.1}}"#).unwrap();
+        assert!(!s.preferences.voice_enabled);
+        assert_eq!(s.preferences.voice_shortcut, p.voice_shortcut);
+        // an explicit choice is kept
+        let s: Settings = serde_json::from_str(
+            r#"{"preferences":{"voice_enabled":true,"voice_shortcut":null,"voice_language":"sq"}}"#,
+        )
+        .unwrap();
+        assert!(s.preferences.voice_enabled);
+        assert_eq!(s.preferences.voice_shortcut, None);
+        assert_eq!(s.preferences.voice_language, "sq");
+    }
+
+    #[test]
+    fn an_unknown_voice_language_in_the_file_falls_back_to_auto() {
+        let dir = std::env::temp_dir().join(format!("brainitive-desktop-voice-lang-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, br#"{"preferences":{"voice_language":"../../etc"}}"#).unwrap();
+        assert_eq!(Settings::load(&path).preferences.voice_language, "auto");
+        std::fs::write(&path, br#"{"preferences":{"voice_language":"de"}}"#).unwrap();
+        assert_eq!(Settings::load(&path).preferences.voice_language, "de");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

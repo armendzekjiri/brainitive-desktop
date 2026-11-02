@@ -1,5 +1,5 @@
 //! The bundled windows (BRAI-359 quick capture, BRAI-401 quick switcher, the Settings window,
-//! BRAI-366 the offline view).
+//! BRAI-366 the offline view, BRAI-439 the voice-capture indicator).
 //!
 //! They load bundled pages only (`capture.html`, `switcher.html`, `settings.html`, `offline.html`), never the
 //! server. They talk to the server exclusively through their own Rust commands, which use the
@@ -21,10 +21,12 @@ pub enum Popup {
     Settings,
     /// The offline view (BRAI-366): the cached My Day, work, task lists and captures.
     Offline,
+    /// The voice-capture indicator (BRAI-439): level meter, timer, set-up steps.
+    Voice,
 }
 
 impl Popup {
-    pub const ALL: [Popup; 4] = [Popup::Capture, Popup::Switcher, Popup::Settings, Popup::Offline];
+    pub const ALL: [Popup; 5] = [Popup::Capture, Popup::Switcher, Popup::Settings, Popup::Offline, Popup::Voice];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -32,6 +34,7 @@ impl Popup {
             Self::Switcher => "switcher",
             Self::Settings => "settings",
             Self::Offline => "offline",
+            Self::Voice => "voice",
         }
     }
 
@@ -45,6 +48,7 @@ impl Popup {
             Self::Switcher => "switcher.html",
             Self::Settings => "settings.html",
             Self::Offline => "offline.html",
+            Self::Voice => "voice.html",
         }
     }
 
@@ -54,6 +58,7 @@ impl Popup {
             Self::Switcher => "Quick Switcher",
             Self::Settings => "Settings",
             Self::Offline => "Brainitive Offline",
+            Self::Voice => "Voice Capture",
         }
     }
 
@@ -63,11 +68,18 @@ impl Popup {
             Self::Switcher => (660.0, 440.0),
             Self::Settings => (560.0, 640.0),
             Self::Offline => (920.0, 680.0),
+            Self::Voice => (420.0, 200.0),
         }
     }
 
-    /// Spotlight-like: no frame, above other windows, gone when it loses focus.
+    /// Spotlight-like: no frame, above other windows, on every desktop.
     pub fn floating(self) -> bool {
+        matches!(self, Self::Capture | Self::Switcher | Self::Voice)
+    }
+
+    /// Gone when it loses focus. Not the voice indicator: a recording goes on while the user
+    /// clicks elsewhere (its own Stop / Cancel and the shortcut end it).
+    pub fn hides_on_blur(self) -> bool {
         matches!(self, Self::Capture | Self::Switcher)
     }
 }
@@ -89,7 +101,9 @@ pub fn ensure_caller(app: &AppHandle, webview: &Webview, popup: Popup) -> Result
 
 /// Shows (building it on first use) and focuses the window.
 pub fn show(app: &AppHandle, popup: Popup) {
-    let app_was_active = shell::app_window_focused(app);
+    // opened from another bundled window (voice indicator → quick capture): return the focus to
+    // where that one would have
+    let app_was_active = shell::app_window_focused(app) || inherited_return(app, popup);
     match app.get_webview_window(popup.label()) {
         Some(w) => present(app, popup, w, app_was_active),
         None => {
@@ -104,6 +118,15 @@ pub fn show(app: &AppHandle, popup: Popup) {
             });
         }
     }
+}
+
+/// A bundled window that has the focus now hands its "return the focus to the app" over.
+fn inherited_return(app: &AppHandle, popup: Popup) -> bool {
+    Popup::ALL.into_iter().filter(|p| *p != popup).any(|p| {
+        app.get_webview_window(p.label())
+            .is_some_and(|w| w.is_focused().unwrap_or(false))
+            && state(app).lock().popup_return.get(p.label()).copied().unwrap_or(false)
+    })
 }
 
 fn present(app: &AppHandle, popup: Popup, window: WebviewWindow, app_was_active: bool) {
@@ -169,7 +192,7 @@ pub fn hide(app: &AppHandle, popup: Popup) {
 /// `WindowEvent::Focused(false)`: a floating window closes when the user clicks elsewhere
 /// (its text stays for next time).
 pub fn on_focus_lost(app: &AppHandle, label: &str) {
-    if let Some(popup) = Popup::from_label(label).filter(|p| p.floating()) {
+    if let Some(popup) = Popup::from_label(label).filter(|p| p.hides_on_blur()) {
         if let Some(w) = app.get_webview_window(popup.label()) {
             let _ = w.hide();
         }
@@ -226,5 +249,9 @@ mod tests {
         assert_eq!(Popup::from_label("main"), None);
         assert!(Popup::Capture.floating() && Popup::Switcher.floating() && !Popup::Settings.floating());
         assert!(!Popup::Offline.floating());
+        // the voice indicator floats but stays while the user clicks elsewhere
+        assert!(Popup::Voice.floating() && !Popup::Voice.hides_on_blur());
+        assert!(Popup::Capture.hides_on_blur() && Popup::Switcher.hides_on_blur());
+        assert_eq!(Popup::from_label("voice"), Some(Popup::Voice));
     }
 }

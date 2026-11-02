@@ -23,11 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # libasound2-dev: the microphone (cpal / ALSA, voice capture). whisper.cpp needs cmake + a C++
+      # compiler, which all three runners have.
       - name: Linux system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libdbus-1-dev pkg-config libasound2-dev
 
       - uses: actions/setup-node@v4
         with:

@@ -1,0 +1,6 @@
+# whisper.cpp (voice capture, BRAI-439) is compiled by whisper-rs-sys with CMake. ggml's default
+# GGML_NATIVE=ON tunes it for the build machine (-mcpu=native / -march=native): a release built on
+# a newer CPU would crash with an illegal instruction on an older one (e.g. an M1, or an x86 PC
+# without AVX-512). OFF = a portable baseline (Apple Silicon: apple-m1; x86-64: AVX2 + FMA + F16C).
+[env]
+GGML_NATIVE = "OFF"

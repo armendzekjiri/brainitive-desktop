@@ -124,6 +124,7 @@ pub struct Inner {
     pub server_menu_item: Option<MenuItem<Wry>>,
     pub capture_menu_item: Option<MenuItem<Wry>>,
     pub switcher_menu_item: Option<MenuItem<Wry>>,
+    pub voice_menu_item: Option<MenuItem<Wry>>,
     /// Launched at login with "start hidden": the main window stays hidden until the user
     /// opens it (tray, dock, menu, a second launch).
     pub start_hidden: bool,
@@ -200,6 +201,7 @@ impl AppState {
                 server_menu_item: None,
                 capture_menu_item: None,
                 switcher_menu_item: None,
+                voice_menu_item: None,
                 start_hidden: false,
                 focused_app_window: None,
                 app_window_seq: 0,

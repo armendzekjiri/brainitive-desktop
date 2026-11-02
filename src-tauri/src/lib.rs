@@ -35,6 +35,7 @@ pub mod state;
 pub mod switcher;
 pub mod tray;
 pub mod version;
+pub mod voice;
 
 use tauri::{Manager, RunEvent, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -97,9 +98,12 @@ pub fn run() {
             prefs::settings_set_shortcut,
             prefs::settings_record_shortcut,
             prefs::settings_set_toggle,
+            prefs::settings_set_voice_language,
+            prefs::settings_remove_voice_model,
             capture::capture_context,
             capture::capture_submit,
             capture::capture_close,
+            capture::capture_voice,
             switcher::switcher_context,
             switcher::switcher_search,
             switcher::switcher_open,
@@ -115,6 +119,14 @@ pub fn run() {
             offline::offline_sync_now,
             offline::offline_dismiss_problem,
             offline::offline_open_app,
+            voice::voice_view,
+            voice::voice_start,
+            voice::voice_stop,
+            voice::voice_cancel,
+            voice::voice_turn_on,
+            voice::voice_download,
+            voice::voice_open_privacy,
+            voice::voice_close,
         ])
         .setup(|app| {
             // first: everything after this is logged, and a panic leaves a trace
@@ -137,6 +149,8 @@ pub fn run() {
             let data_dir = app.path().app_local_data_dir()?;
             let queue_path = data_dir.join("capture-queue.json");
             app.manage(AppState::new(settings_path, queue_path, data_dir.join("offline")));
+            // voice capture (BRAI-439): its own state; the model lives in <local data>/voice/
+            voice::init(app.handle(), data_dir.clone());
             {
                 let s = state(app.handle());
                 let mut inner = s.lock();

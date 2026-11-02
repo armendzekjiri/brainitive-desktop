@@ -40,6 +40,16 @@ semver = "=1.0.28"
 thiserror = "=2.0.21"
 keyring = "=4.2.0"
 log = "0.4"
+# voice capture (BRAI-439): microphone input and on-device speech-to-text (whisper.cpp, built
+# from source by whisper-rs-sys: needs cmake and libclang). Metal on macOS, see below.
+cpal = "=0.18.2"
+whisper-rs = { version = "=0.16.0", features = ["log_backend"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Metal (GPU) for whisper.cpp on macOS; AVFoundation microphone permission through objc2
+whisper-rs = { version = "=0.16.0", features = ["log_backend", "metal"] }
+objc2 = "=0.6.5"
+block2 = "=0.6.2"
 
 [dev-dependencies]
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros"] }
