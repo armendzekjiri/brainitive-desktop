@@ -23,6 +23,24 @@ const MAX_TITLE: usize = 120;
 const MAX_BODY: usize = 500;
 /// At most this many notifications per minute from the web app.
 const NOTIFY_PER_MINUTE: usize = 20;
+/// At most this many links per minute the web app may open in the browser / mail client.
+const OPEN_EXTERNAL_PER_MINUTE: usize = 10;
+
+/// A sliding one-minute window: records `now` and returns `true` while fewer than `per_minute`
+/// calls happened in the last 60 s; `false` (nothing recorded) once the limit is reached.
+pub fn allow_rate(times: &mut std::collections::VecDeque<Instant>, now: Instant, per_minute: usize) -> bool {
+    while times
+        .front()
+        .is_some_and(|t| now.duration_since(*t) > Duration::from_secs(60))
+    {
+        times.pop_front();
+    }
+    if times.len() >= per_minute {
+        return false;
+    }
+    times.push_back(now);
+    true
+}
 
 fn ensure_current_server(app: &AppHandle, webview: &Webview) -> Result<crate::server::ServerOrigin, String> {
     let origin = state(app).lock().current_origin().ok_or("not connected")?;
@@ -54,21 +72,8 @@ pub fn brainitive_notify(
     if webview.label() != MAIN {
         return Ok(());
     }
-    {
-        let s = state(&app);
-        let mut inner = s.lock();
-        let now = Instant::now();
-        while inner
-            .notify_times
-            .front()
-            .is_some_and(|t| now.duration_since(*t) > Duration::from_secs(60))
-        {
-            inner.notify_times.pop_front();
-        }
-        if inner.notify_times.len() >= NOTIFY_PER_MINUTE {
-            return Err("rate limited".into());
-        }
-        inner.notify_times.push_back(now);
+    if !allow_rate(&mut state(&app).lock().notify_times, Instant::now(), NOTIFY_PER_MINUTE) {
+        return Err("rate limited".into());
     }
     // a link that is not a page of this server (or is one of its auth endpoints) is dropped,
     // the notification still shows
@@ -91,6 +96,14 @@ pub fn brainitive_set_badge(app: AppHandle, webview: Webview, count: i64) -> Res
 pub fn brainitive_open_external(app: AppHandle, webview: Webview, url: String) -> Result<(), String> {
     ensure_current_server(&app, &webview)?;
     let url = links::external_url(&url).ok_or("only http, https and mailto links")?;
+    // a page must not be able to flood the browser with tabs (BRAI-377)
+    if !allow_rate(
+        &mut state(&app).lock().external_times,
+        Instant::now(),
+        OPEN_EXTERNAL_PER_MINUTE,
+    ) {
+        return Err("rate limited".into());
+    }
     shell::open_external(&app, &url);
     Ok(())
 }
@@ -187,6 +200,41 @@ pub fn set_badge(app: &AppHandle, count: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rate_limits_slide_over_one_minute() {
+        let mut times = std::collections::VecDeque::new();
+        let t0 = Instant::now();
+        for i in 0..OPEN_EXTERNAL_PER_MINUTE {
+            assert!(allow_rate(
+                &mut times,
+                t0 + Duration::from_secs(i as u64),
+                OPEN_EXTERNAL_PER_MINUTE
+            ));
+        }
+        assert!(!allow_rate(
+            &mut times,
+            t0 + Duration::from_secs(30),
+            OPEN_EXTERNAL_PER_MINUTE
+        ));
+        assert_eq!(times.len(), OPEN_EXTERNAL_PER_MINUTE, "a refused call is not counted");
+        // the first call leaves the window after 60 s: one more is allowed
+        assert!(allow_rate(
+            &mut times,
+            t0 + Duration::from_secs(61),
+            OPEN_EXTERNAL_PER_MINUTE
+        ));
+        assert!(!allow_rate(
+            &mut times,
+            t0 + Duration::from_secs(61),
+            OPEN_EXTERNAL_PER_MINUTE
+        ));
+        assert!(allow_rate(
+            &mut times,
+            t0 + Duration::from_secs(200),
+            OPEN_EXTERNAL_PER_MINUTE
+        ));
+    }
 
     #[test]
     fn clips_and_strips_control_characters() {

@@ -123,6 +123,8 @@ pub struct Inner {
     pub notifications: HashMap<i32, NotificationTarget>,
     pub next_notification: i32,
     pub notify_times: VecDeque<Instant>,
+    /// `brainitive_open_external` calls of the last minute (BRAI-377).
+    pub external_times: VecDeque<Instant>,
     pub last_external: Option<(Url, Instant)>,
     pub server_menu_item: Option<MenuItem<Wry>>,
     pub capture_menu_item: Option<MenuItem<Wry>>,
@@ -205,6 +207,7 @@ impl AppState {
                 notifications: HashMap::new(),
                 next_notification: 1,
                 notify_times: VecDeque::new(),
+                external_times: VecDeque::new(),
                 last_external: None,
                 server_menu_item: None,
                 capture_menu_item: None,
