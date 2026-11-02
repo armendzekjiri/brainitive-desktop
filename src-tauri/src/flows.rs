@@ -21,7 +21,13 @@ use crate::version::{meets_minimum, APP_VERSION};
 /// What the connect screen shows after "Continue": the server that answered.
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerCheck {
+    /// The origin that answered (after redirects): the one "Use this server" connects to.
     pub origin: ServerOrigin,
+    /// The origin the user entered.
+    pub entered: ServerOrigin,
+    /// The server answered somewhere else than what was entered: the connect screen says so
+    /// and the user confirms that address (BRAI-377).
+    pub redirected: bool,
     pub display_name: String,
     pub name: String,
     pub version: Option<String>,
@@ -114,6 +120,8 @@ pub async fn check_server(app: &AppHandle, input: &str) -> Result<ServerCheck, U
     let min = info.min_versions.as_ref().and_then(|m| m.desktop.clone());
     let check = ServerCheck {
         display_name: final_origin.display_name(),
+        redirected: final_origin != origin,
+        entered: origin,
         origin: final_origin.clone(),
         name: info.name.chars().take(120).collect(),
         version: info.version.clone(),
@@ -125,10 +133,29 @@ pub async fn check_server(app: &AppHandle, input: &str) -> Result<ServerCheck, U
     Ok(check)
 }
 
+/// `use_server` gets the origin the user confirmed (the check's final origin, or a recent
+/// server). When the server now answers somewhere else, that address was never shown: refuse,
+/// and the user checks it again (the connect screen shows where it forwards and asks).
+fn unconfirmed_redirect(confirmed: &ServerOrigin, answered: &ServerOrigin) -> Option<UiError> {
+    (confirmed != answered).then(|| {
+        UiError::new(
+            "redirected",
+            format!(
+                "{} now forwards to {}. Enter the address again to check and confirm it.",
+                confirmed.display_name(),
+                answered.as_str()
+            ),
+        )
+    })
+}
+
 /// "Use this server" (after a check) or a click on a recent server.
 pub async fn use_server(app: &AppHandle, origin: ServerOrigin) -> Result<(), UiError> {
     // always ask the server again: the version rule must hold for recent servers too
     let check = check_server(app, origin.as_str()).await?;
+    if let Some(error) = unconfirmed_redirect(&origin, &check.origin) {
+        return Err(error);
+    }
     if check.app_too_old {
         let update = UpdateRequired::new(
             &check.name,
@@ -599,5 +626,19 @@ pub async fn forget_server(app: &AppHandle, origin: ServerOrigin) {
             ))),
         );
         shell::run_pending_wipes(app).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_server_that_now_answers_elsewhere_needs_a_new_confirm() {
+        let o = |s: &str| ServerOrigin::parse(s).unwrap();
+        assert!(unconfirmed_redirect(&o("https://a.example.com"), &o("https://a.example.com")).is_none());
+        let refused = unconfirmed_redirect(&o("https://a.example.com"), &o("https://b.example.com")).unwrap();
+        assert_eq!(refused.kind, "redirected");
+        assert!(refused.message.contains("https://b.example.com"), "{}", refused.message);
     }
 }

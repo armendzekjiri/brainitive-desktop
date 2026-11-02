@@ -70,6 +70,8 @@ interface UiState {
 
 interface ServerCheck {
     origin: string;
+    entered: string;
+    redirected: boolean;
     display_name: string;
     name: string;
     version: string | null;
@@ -288,6 +290,13 @@ async function check(input: string, button: HTMLButtonElement): Promise<void> {
         $('confirm-name').textContent = result.name;
         $('confirm-origin').textContent = result.origin;
         $('confirm-version').textContent = result.version ? `Brainitive ${result.version}` : 'Brainitive';
+        // the server answered at another address than the one entered: say so before "Use"
+        showError(
+            'confirm-redirect',
+            result.redirected
+                ? `You entered ${result.entered}, but the server answers at ${result.origin}. Use it only if you trust that address.`
+                : null,
+        );
         showError(
             'confirm-too-old',
             result.app_too_old

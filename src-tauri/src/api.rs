@@ -151,6 +151,29 @@ pub struct DeviceDescription {
     pub os_version: Option<String>,
 }
 
+/// Most redirects the instance check follows.
+pub const MAX_REDIRECTS: usize = 5;
+
+/// Why the instance check must not follow a redirect to `next`; `None`: it may. `previous` is
+/// the chain so far, the address the user entered first (reqwest's `Attempt::previous`).
+/// - at most [`MAX_REDIRECTS`] hops, each to an allowed origin (https, or http on loopback);
+/// - never from https down to http, **also not to localhost** (BRAI-377): a server, or whoever
+///   sits in front of it, could otherwise hand the sign-in to a process on this computer. Plain
+///   http hops are only fine while the whole chain is http, i.e. the user entered an
+///   `http://localhost` address themselves.
+pub fn redirect_refusal(previous: &[Url], next: &Url) -> Option<&'static str> {
+    if previous.len() >= MAX_REDIRECTS {
+        return Some("too many redirects");
+    }
+    if ServerOrigin::from_url(next).is_err() {
+        return Some("redirect to a disallowed address");
+    }
+    if next.scheme() == "http" && previous.iter().any(|u| u.scheme() != "http") {
+        return Some("redirect from https to http");
+    }
+    None
+}
+
 #[derive(Clone)]
 pub struct ApiClient {
     /// Token endpoints: no redirects at all (a redirected POST could leak a code or token).
@@ -173,12 +196,9 @@ impl ApiClient {
         let http = base().redirect(redirect::Policy::none()).build().expect("http client");
         let discovery = base()
             .redirect(redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() >= 5 {
-                    attempt.error("too many redirects")
-                } else if ServerOrigin::from_url(attempt.url()).is_err() {
-                    attempt.error("redirect to a disallowed address")
-                } else {
-                    attempt.follow()
+                match redirect_refusal(attempt.previous(), attempt.url()) {
+                    Some(reason) => attempt.error(reason),
+                    None => attempt.follow(),
                 }
             }))
             .build()
@@ -569,6 +589,55 @@ pub fn platform() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_instance_check_never_steps_down_to_http() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        let entered = u("https://brainitive.example.com/api/v1/instance");
+        // https → https elsewhere: followed (the final origin is shown and must be confirmed)
+        assert_eq!(
+            redirect_refusal(
+                std::slice::from_ref(&entered),
+                &u("https://www.brainitive.example.com/api/v1/instance")
+            ),
+            None
+        );
+        // https → http, also to loopback
+        for down in [
+            "http://brainitive.example.com/api/v1/instance",
+            "http://localhost:8000/api/v1/instance",
+            "http://127.0.0.1/api/v1/instance",
+            "http://[::1]:8080/api/v1/instance",
+        ] {
+            assert!(
+                redirect_refusal(std::slice::from_ref(&entered), &u(down)).is_some(),
+                "{down}"
+            );
+        }
+        // the user typed http://localhost: http hops on loopback stay fine…
+        let local = u("http://localhost:8000/api/v1/instance");
+        assert_eq!(
+            redirect_refusal(
+                std::slice::from_ref(&local),
+                &u("http://127.0.0.1:8000/api/v1/instance")
+            ),
+            None
+        );
+        assert_eq!(
+            redirect_refusal(std::slice::from_ref(&local), &u("https://x.example.com/")),
+            None
+        );
+        // …but once the chain went https, never back down
+        assert!(redirect_refusal(&[local.clone(), u("https://x.example.com/")], &local).is_some());
+        // http to a real host is never allowed
+        assert!(redirect_refusal(&[local], &u("http://evil.example.com/")).is_some());
+        // hop limit
+        let chain = vec![entered.clone(); MAX_REDIRECTS];
+        assert_eq!(
+            redirect_refusal(&chain, &u("https://brainitive.example.com/")),
+            Some("too many redirects")
+        );
+    }
+
     use super::*;
     use serde_json::json;
 
