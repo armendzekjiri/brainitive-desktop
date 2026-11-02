@@ -35,10 +35,12 @@ pub enum MenuAction {
     HelpDocs,
     HelpCopyDiagnostics,
     HelpOpenLogs,
+    /// "Check for Updates…", or "Restart to Update (x.y.z)" when one is ready (BRAI-373).
+    CheckForUpdates,
 }
 
 impl MenuAction {
-    pub const ALL: [MenuAction; 24] = [
+    pub const ALL: [MenuAction; 25] = [
         Self::Settings,
         Self::NewIssue,
         Self::NewDoc,
@@ -63,6 +65,7 @@ impl MenuAction {
         Self::HelpDocs,
         Self::HelpCopyDiagnostics,
         Self::HelpOpenLogs,
+        Self::CheckForUpdates,
     ];
 
     pub fn id(self) -> &'static str {
@@ -91,6 +94,7 @@ impl MenuAction {
             Self::HelpDocs => "help-docs",
             Self::HelpCopyDiagnostics => "help-copy-diagnostics",
             Self::HelpOpenLogs => "help-open-logs",
+            Self::CheckForUpdates => "check-for-updates",
         }
     }
 
@@ -163,6 +167,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let capture = item(app, MenuAction::QuickCapture, "Quick Capture…")?;
     let switcher = item(app, MenuAction::QuickSwitcher, "Quick Switcher…")?;
     let voice = item(app, MenuAction::VoiceCapture, "Voice Capture…")?;
+    let updates = item(app, MenuAction::CheckForUpdates, "Check for Updates…")?;
 
     let menu = Menu::new(app)?;
 
@@ -174,6 +179,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             true,
             &[
                 &PredefinedMenuItem::about(app, Some("About Brainitive"), None)?,
+                &updates,
                 &sep()?,
                 &settings,
                 &sep()?,
@@ -301,6 +307,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     )?;
     if !mac {
         help.append(&sep()?)?;
+        help.append(&updates)?;
         help.append(&PredefinedMenuItem::about(app, Some("About Brainitive"), None)?)?;
     }
     menu.append(&help)?;
@@ -313,9 +320,26 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         inner.capture_menu_item = Some(capture);
         inner.switcher_menu_item = Some(switcher);
         inner.voice_menu_item = Some(voice);
+        inner.update_menu_item = Some(updates);
     }
     refresh_shortcut_labels(app);
+    refresh_update_item(app);
     Ok(())
+}
+
+/// The update item follows the updater: disabled while updates are off for this build or a check /
+/// download runs, "Restart to Update (x.y.z)" when an update waits.
+pub fn refresh_update_item(app: &AppHandle) {
+    let (item, text, enabled) = {
+        let s = state(app);
+        let inner = s.lock();
+        let (text, enabled) = crate::updater::menu_item(inner.updater.availability, &inner.updater.status);
+        (inner.update_menu_item.clone(), text, enabled)
+    };
+    if let Some(item) = item {
+        let _ = item.set_text(text);
+        let _ = item.set_enabled(enabled);
+    }
 }
 
 /// Shows the global shortcuts next to Quick Capture / Quick Switcher / Voice Capture (display only: the OS
@@ -420,6 +444,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
             tauri::async_runtime::spawn(async move { crate::diagnostics::copy(&h).await });
         }
         MenuAction::HelpOpenLogs => crate::diagnostics::open_logs_folder(app),
+        MenuAction::CheckForUpdates => crate::updater::on_menu_click(app),
         MenuAction::HelpDocs => {
             if let Ok(url) = url::Url::parse("https://docs.brainitive.app/") {
                 shell::open_external(app, &url);

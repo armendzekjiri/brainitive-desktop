@@ -36,6 +36,9 @@ pub struct Settings {
     /// (LaunchAgent / registry / autostart file) is the truth for it.
     #[serde(default)]
     pub preferences: Preferences,
+    /// Unix seconds of the last update check that got an answer (BRAI-373, shown in Settings).
+    #[serde(default)]
+    pub last_update_check: Option<u64>,
 }
 
 /// What the Settings window changes. Every field has a default, so older files still load.
@@ -61,6 +64,12 @@ pub struct Preferences {
     pub voice_shortcut: Option<String>,
     /// Spoken language: "auto" or a code of `voice::LANGUAGES`.
     pub voice_language: String,
+    /// Look for updates 30 s after start and every 6 hours (BRAI-373). "Check for Updates…"
+    /// works either way.
+    pub auto_update_check: bool,
+    /// Stable (default) or beta ("Get beta updates"); an unknown value in the file is stable.
+    #[serde(deserialize_with = "crate::updater::lenient_channel")]
+    pub update_channel: crate::updater::Channel,
 }
 
 impl Default for Preferences {
@@ -75,6 +84,8 @@ impl Default for Preferences {
             voice_enabled: false,
             voice_shortcut: Some(crate::shortcuts::DEFAULT_VOICE.to_string()),
             voice_language: crate::voice::AUTO_LANGUAGE.to_string(),
+            auto_update_check: true,
+            update_channel: crate::updater::Channel::Stable,
         }
     }
 }
@@ -261,6 +272,32 @@ mod tests {
         assert!(s.preferences.voice_enabled);
         assert_eq!(s.preferences.voice_shortcut, None);
         assert_eq!(s.preferences.voice_language, "sq");
+    }
+
+    #[test]
+    fn update_preferences_default_to_automatic_stable_and_survive_odd_values() {
+        use crate::updater::Channel;
+        let p = Preferences::default();
+        assert!(p.auto_update_check);
+        assert_eq!(p.update_channel, Channel::Stable);
+        // a file from before BRAI-373
+        let s: Settings = serde_json::from_str(r#"{"preferences":{"zoom":1.1}}"#).unwrap();
+        assert!(s.preferences.auto_update_check);
+        assert_eq!(s.preferences.update_channel, Channel::Stable);
+        assert_eq!(s.last_update_check, None);
+        // explicit choices are kept; an unknown channel does not lose the rest of the file
+        let s: Settings = serde_json::from_str(
+            r#"{"current":"brain.example.com","last_update_check":1800000000,"preferences":{"auto_update_check":false,"update_channel":"beta"}}"#,
+        )
+        .unwrap();
+        assert!(!s.preferences.auto_update_check);
+        assert_eq!(s.preferences.update_channel, Channel::Beta);
+        assert_eq!(s.last_update_check, Some(1_800_000_000));
+        let s: Settings =
+            serde_json::from_str(r#"{"current":"brain.example.com","preferences":{"update_channel":"nightly"}}"#)
+                .unwrap();
+        assert_eq!(s.preferences.update_channel, Channel::Stable);
+        assert!(s.current.is_some());
     }
 
     #[test]

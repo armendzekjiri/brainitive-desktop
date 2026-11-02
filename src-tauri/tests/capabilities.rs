@@ -81,6 +81,7 @@ fn no_capability_file_grants_plugins_or_the_bridge() {
                 "opener",
                 "notification",
                 "shell",
+                "updater",
             ] {
                 assert!(!p.starts_with(&format!("{plugin}:")), "{name}: plugin permission {p}");
             }
@@ -134,4 +135,34 @@ fn only_the_voice_indicator_gets_the_voice_commands() {
 fn the_mac_app_explains_why_it_wants_the_microphone() {
     let plist = std::fs::read_to_string(format!("{}/Info.plist", env!("CARGO_MANIFEST_DIR"))).unwrap();
     assert!(plist.contains("<key>NSMicrophoneUsageDescription</key>"));
+}
+
+#[test]
+fn only_the_settings_window_and_the_main_screens_get_the_update_commands() {
+    // BRAI-373: checking / installing an update is a bundled window's command, never a remote
+    // page's, and the updater plugin's own JS commands are granted to nobody (see above)
+    let settings = permissions(&capability("settings"));
+    for p in [
+        "allow-settings-set-update-channel",
+        "allow-settings-check-for-updates",
+        "allow-settings-restart-to-update",
+    ] {
+        assert!(settings.contains(&p.to_string()), "{p}");
+    }
+    let local = permissions(&capability("local"));
+    assert!(local.contains(&"allow-check-for-update".to_string()));
+    assert!(local.contains(&"allow-restart-to-update".to_string()));
+    for name in ["capture", "switcher", "offline", "voice"] {
+        for p in permissions(&capability(name)) {
+            let updater_command = ["for-update", "to-update", "update-channel"]
+                .iter()
+                .any(|u| p.contains(u));
+            assert!(!updater_command, "{name} grants {p}");
+        }
+    }
+    for name in ["local", "settings", "capture", "switcher", "offline", "voice"] {
+        for p in permissions(&capability(name)) {
+            assert!(!p.starts_with("updater:"), "{name} grants the plugin's {p}");
+        }
+    }
 }

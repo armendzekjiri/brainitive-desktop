@@ -87,6 +87,12 @@
     }
   },
   "plugins": {
+    "updater": {
+      "pubkey": "PLACEHOLDER-UPDATER-PUBLIC-KEY-the-updater-stays-off-until-the-owner-pastes-the-real-public-key-from-npx-tauri-signer-generate-see-docs-RELEASING-md",
+      "requireSignedVersion": true,
+      "endpoints": [],
+      "windows": { "installMode": "passive" }
+    },
     "deep-link": {
       "desktop": {
         "schemes": [

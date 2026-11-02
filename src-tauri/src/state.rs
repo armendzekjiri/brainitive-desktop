@@ -125,6 +125,8 @@ pub struct Inner {
     pub capture_menu_item: Option<MenuItem<Wry>>,
     pub switcher_menu_item: Option<MenuItem<Wry>>,
     pub voice_menu_item: Option<MenuItem<Wry>>,
+    /// "Check for Updates…" / "Restart to Update (x.y.z)" (BRAI-373).
+    pub update_menu_item: Option<MenuItem<Wry>>,
     /// Launched at login with "start hidden": the main window stays hidden until the user
     /// opens it (tray, dock, menu, a second launch).
     pub start_hidden: bool,
@@ -154,6 +156,8 @@ pub struct Inner {
     pub downloads: Vec<crate::downloads::Pending>,
     /// Offline mode (BRAI-366): the current server's cache and outbox.
     pub offline: crate::offline::OfflineData,
+    /// Auto-updates (BRAI-373): whether they may run, status, schedule, the waiting update.
+    pub updater: crate::updater::UpdaterState,
 }
 
 /// What a click on one of our notifications opens.
@@ -202,6 +206,7 @@ impl AppState {
                 capture_menu_item: None,
                 switcher_menu_item: None,
                 voice_menu_item: None,
+                update_menu_item: None,
                 start_hidden: false,
                 focused_app_window: None,
                 app_window_seq: 0,
@@ -218,6 +223,7 @@ impl AppState {
                 flushing: false,
                 downloads: Vec::new(),
                 offline: crate::offline::OfflineData::new(offline_dir),
+                updater: Default::default(),
             }),
             session: Session::default(),
             poll_now: tokio::sync::Notify::new(),

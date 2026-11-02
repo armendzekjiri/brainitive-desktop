@@ -20,6 +20,8 @@
     "allow-switch-server",
     "allow-sign-out",
     "allow-forget-server",
-    "allow-dismiss-notice"
+    "allow-dismiss-notice",
+    "allow-check-for-update",
+    "allow-restart-to-update"
   ]
 }

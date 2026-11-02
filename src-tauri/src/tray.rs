@@ -88,6 +88,9 @@ pub enum TrayAction {
     /// The offline window (BRAI-366).
     Offline,
     SyncNow,
+    /// Auto-updates (BRAI-373): check by hand / install the waiting update and restart.
+    CheckForUpdates,
+    RestartToUpdate,
 }
 
 impl TrayAction {
@@ -107,6 +110,8 @@ impl TrayAction {
             Self::Quit => "tray-quit".into(),
             Self::Offline => "tray-offline".into(),
             Self::SyncNow => "tray-sync-now".into(),
+            Self::CheckForUpdates => "tray-check-updates".into(),
+            Self::RestartToUpdate => "tray-restart-update".into(),
         }
     }
 
@@ -128,6 +133,8 @@ impl TrayAction {
             "tray-quit" => Self::Quit,
             "tray-offline" => Self::Offline,
             "tray-sync-now" => Self::SyncNow,
+            "tray-check-updates" => Self::CheckForUpdates,
+            "tray-restart-update" => Self::RestartToUpdate,
             _ => return None,
         })
     }
@@ -316,6 +323,43 @@ pub fn model(
     out
 }
 
+/// Adds the update line above "Open Brainitive" (BRAI-373): "Restart to Update (x.y.z)" when an
+/// update waits, else "Check for Updates…" (greyed while a check or download runs). Nothing when
+/// updates are off for this build (placeholder key, development build).
+pub fn add_update_entry(
+    entries: &mut Vec<Entry>,
+    availability: crate::updater::Availability,
+    status: &crate::updater::Status,
+) {
+    if !availability.is_available() {
+        return;
+    }
+    let (text, enabled) = crate::updater::menu_item(availability, status);
+    let action = match (enabled, status.is_ready()) {
+        (false, _) => None,
+        (true, true) => Some(TrayAction::RestartToUpdate),
+        (true, false) => Some(TrayAction::CheckForUpdates),
+    };
+    let entry = Entry::Item {
+        action,
+        text,
+        accelerator: None,
+    };
+    let open = entries
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                Entry::Item {
+                    action: Some(TrayAction::Open),
+                    ..
+                }
+            )
+        })
+        .unwrap_or(entries.len());
+    entries.insert(open, entry);
+}
+
 fn build_items(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Vec<Box<dyn IsMenuItem<Wry>>>> {
     let mut items: Vec<Box<dyn IsMenuItem<Wry>>> = Vec::new();
     for e in entries {
@@ -387,7 +431,7 @@ fn tray(app: &AppHandle) -> Option<TrayIcon<Wry>> {
 /// Rebuilds the menu, tooltip and (macOS) the count next to the icon from the current data.
 pub fn refresh(app: &AppHandle) {
     let Some(tray) = tray(app) else { return };
-    let (server, signed_in, data, capture, switcher, voice, offline) = {
+    let (server, signed_in, data, capture, switcher, voice, offline, update_availability, update_status) = {
         let s = state(app);
         let inner = s.lock();
         let accel = |a: Option<&str>| {
@@ -402,9 +446,12 @@ pub fn refresh(app: &AppHandle) {
             accel(inner.settings.preferences.switcher_shortcut.as_deref()),
             accel(inner.settings.preferences.active_voice_shortcut().as_deref()),
             crate::offline::tray_status(&inner),
+            inner.updater.availability,
+            inner.updater.status.clone(),
         )
     };
-    let entries = model(server.as_deref(), signed_in, &data, capture, switcher, voice, &offline);
+    let mut entries = model(server.as_deref(), signed_in, &data, capture, switcher, voice, &offline);
+    add_update_entry(&mut entries, update_availability, &update_status);
     {
         // unchanged: keep the native menu (it may be open right now)
         let s = state(app);
@@ -463,6 +510,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
         }
         TrayAction::Quit => app.exit(0),
         TrayAction::Offline => popup::show(app, Popup::Offline),
+        TrayAction::CheckForUpdates | TrayAction::RestartToUpdate => crate::updater::on_menu_click(app),
         TrayAction::SyncNow => {
             let h = app.clone();
             tauri::async_runtime::spawn(async move { crate::offline::sync_now(&h).await });
@@ -750,6 +798,8 @@ mod tests {
             TrayAction::Quit,
             TrayAction::Offline,
             TrayAction::SyncNow,
+            TrayAction::CheckForUpdates,
+            TrayAction::RestartToUpdate,
         ] {
             assert_eq!(TrayAction::from_id(&a.id()), Some(a));
         }
@@ -942,6 +992,56 @@ mod tests {
             &TrayStatus::default(),
         );
         assert!(!m.contains(&item(TrayAction::SyncNow, "Sync Now")));
+    }
+
+    #[test]
+    fn the_update_line_sits_above_open_and_only_when_updates_can_run() {
+        use crate::updater::{Availability, Status};
+        let base = model(
+            Some("Cloud"),
+            false,
+            &TrayData::default(),
+            None,
+            None,
+            None,
+            &Default::default(),
+        );
+
+        let mut m = base.clone();
+        add_update_entry(&mut m, Availability::PlaceholderKey, &Status::Idle);
+        assert_eq!(m, base, "no update line while the build has no real key");
+        let mut m = base.clone();
+        add_update_entry(&mut m, Availability::DevBuild, &Status::Idle);
+        assert_eq!(m, base);
+
+        let mut m = base.clone();
+        add_update_entry(&mut m, Availability::Available, &Status::Idle);
+        let open = m
+            .iter()
+            .position(|e| *e == item(TrayAction::Open, "Open Brainitive"))
+            .unwrap();
+        assert_eq!(m[open - 1], item(TrayAction::CheckForUpdates, "Check for Updates…"));
+
+        let mut m = base.clone();
+        add_update_entry(&mut m, Availability::Available, &Status::Checking);
+        assert!(m.contains(&label("Checking for Updates…")));
+
+        let mut m = base.clone();
+        add_update_entry(
+            &mut m,
+            Availability::Available,
+            &Status::Ready {
+                version: "1.2.0".into(),
+            },
+        );
+        assert!(m.contains(&item(TrayAction::RestartToUpdate, "Restart to Update (1.2.0)")));
+        assert!(!m.iter().any(|e| matches!(
+            e,
+            Entry::Item {
+                action: Some(TrayAction::CheckForUpdates),
+                ..
+            }
+        )));
     }
 
     #[test]

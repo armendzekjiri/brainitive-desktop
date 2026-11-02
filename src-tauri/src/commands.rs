@@ -50,10 +50,13 @@ pub struct UiState {
     cloud_origin: &'static str,
     /// Debug builds only: the pre-release and local servers as one-click choices.
     presets: Vec<Preset>,
+    /// Auto-updates (BRAI-373): the "Please update" screen offers "Check for update now".
+    updater: crate::updater::View,
 }
 
 #[tauri::command]
 pub fn get_state(app: AppHandle) -> UiState {
+    let updater = crate::updater::view(&app);
     let s = state(&app);
     let inner = s.lock();
     let current_origin = inner.current_origin();
@@ -102,7 +105,52 @@ pub fn get_state(app: AppHandle) -> UiState {
         platform: crate::api::platform(),
         cloud_origin: CLOUD_ORIGIN,
         presets,
+        updater,
     }
+}
+
+/// The main window's bundled screens only (not the server's pages, not another window).
+fn ensure_main_screen(app: &AppHandle, webview: &tauri::Webview) -> Result<(), UiError> {
+    let local = webview
+        .url()
+        .map(|url| {
+            crate::links::is_local_caller(
+                webview.label(),
+                &url,
+                crate::shell::MAIN,
+                &crate::shell::local_origins(app),
+            )
+        })
+        .unwrap_or(false);
+    if local {
+        Ok(())
+    } else {
+        Err(UiError {
+            kind: "not_allowed",
+            message: "not allowed".into(),
+        })
+    }
+}
+
+/// "Check for update now" on the "Please update" screen (BRAI-373). Runs in the background; the
+/// screen follows through `desktop://changed`.
+#[tauri::command]
+pub fn check_for_update(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
+    crate::updater::check_now(&app, crate::updater::Trigger::Window).map_err(|message| UiError {
+        kind: "updates_off",
+        message,
+    })
+}
+
+/// "Restart to Update" on that screen: the user's click installs the waiting update.
+#[tauri::command]
+pub fn restart_to_update(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
+    crate::updater::restart_to_update(&app).map_err(|message| UiError {
+        kind: "no_update",
+        message,
+    })
 }
 
 #[tauri::command]

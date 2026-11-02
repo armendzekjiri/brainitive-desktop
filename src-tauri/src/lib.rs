@@ -34,6 +34,7 @@ pub mod startup;
 pub mod state;
 pub mod switcher;
 pub mod tray;
+pub mod updater;
 pub mod version;
 pub mod voice;
 
@@ -66,6 +67,9 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_notification::init())
+        // auto-updates (BRAI-373): Rust only (`updater.rs`), no webview gets its commands; the
+        // public key is `plugins.updater.pubkey` (a placeholder switches the updater off)
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 // the bundled popups open centred; only app windows keep their size / position
@@ -87,6 +91,8 @@ pub fn run() {
             commands::sign_out,
             commands::forget_server,
             commands::dismiss_notice,
+            commands::check_for_update,
+            commands::restart_to_update,
             bridge::brainitive_notify,
             bridge::brainitive_set_badge,
             bridge::brainitive_open_external,
@@ -100,6 +106,9 @@ pub fn run() {
             prefs::settings_set_toggle,
             prefs::settings_set_voice_language,
             prefs::settings_remove_voice_model,
+            prefs::settings_set_update_channel,
+            prefs::settings_check_for_updates,
+            prefs::settings_restart_to_update,
             capture::capture_context,
             capture::capture_submit,
             capture::capture_close,
@@ -171,6 +180,7 @@ pub fn run() {
             });
             tray::install(&handle)?;
             tray::start_poller(&handle);
+            updater::init(&handle);
             // a directory removal: off the setup path
             let cleaner = handle.clone();
             tauri::async_runtime::spawn_blocking(move || downloads::clean_staging(&cleaner));

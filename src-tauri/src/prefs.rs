@@ -41,6 +41,8 @@ pub struct PrefsView {
     start_hidden: bool,
     /// A global shortcut the OS refused (taken by another app).
     shortcut_problem: Option<String>,
+    /// Auto-updates (BRAI-373): on / off, channel, last check, status.
+    updates: crate::updater::View,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -51,6 +53,7 @@ pub struct Language {
 
 pub fn view(app: &AppHandle) -> PrefsView {
     let voice_model = crate::voice::model_status(app);
+    let updates = crate::updater::view(app);
     let s = state(app);
     let inner = s.lock();
     let prefs = &inner.settings.preferences;
@@ -75,6 +78,7 @@ pub fn view(app: &AppHandle) -> PrefsView {
         launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
         start_hidden: prefs.start_hidden,
         shortcut_problem: inner.hotkey_error.clone(),
+        updates,
     }
 }
 
@@ -196,6 +200,8 @@ pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value:
             "keep_in_tray" => prefs.keep_in_tray = value,
             "ask_where_to_save" => prefs.ask_where_to_save = value,
             "voice_enabled" => prefs.voice_enabled = value,
+            // the loop reads it on its next tick; nothing to start or stop
+            "auto_update_check" => prefs.auto_update_check = value,
             _ => return Err("unknown setting".into()),
         }
         inner.save_settings();
@@ -207,6 +213,33 @@ pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value:
         crate::voice::enabled_changed(&app);
     }
     Ok(view(&app))
+}
+
+/// "Get beta updates" (BRAI-373): `stable` or `beta`.
+#[tauri::command]
+pub fn settings_set_update_channel(
+    app: AppHandle,
+    webview: Webview,
+    channel: crate::updater::Channel,
+) -> Result<PrefsView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    crate::updater::set_channel(&app, channel);
+    Ok(view(&app))
+}
+
+/// "Check now": runs in the background; the window polls `settings_get` for the status.
+#[tauri::command]
+pub fn settings_check_for_updates(app: AppHandle, webview: Webview) -> Result<PrefsView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    crate::updater::check_now(&app, crate::updater::Trigger::Window)?;
+    Ok(view(&app))
+}
+
+/// "Restart to Update": the user's click installs the waiting update and restarts.
+#[tauri::command]
+pub fn settings_restart_to_update(app: AppHandle, webview: Webview) -> Result<(), String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    crate::updater::restart_to_update(&app)
 }
 
 /// The language voice capture listens for ("auto" or one of `voice::LANGUAGES`).

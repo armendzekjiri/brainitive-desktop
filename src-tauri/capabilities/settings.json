@@ -13,6 +13,9 @@
     "allow-settings-record-shortcut",
     "allow-settings-set-toggle",
     "allow-settings-set-voice-language",
-    "allow-settings-remove-voice-model"
+    "allow-settings-remove-voice-model",
+    "allow-settings-set-update-channel",
+    "allow-settings-check-for-updates",
+    "allow-settings-restart-to-update"
   ]
 }

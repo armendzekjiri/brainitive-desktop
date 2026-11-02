@@ -18,6 +18,9 @@ fn main() {
             "sign_out",
             "forget_server",
             "dismiss_notice",
+            // the "Please update" screen (BRAI-373)
+            "check_for_update",
+            "restart_to_update",
             "brainitive_notify",
             "brainitive_set_badge",
             "brainitive_open_external",
@@ -32,6 +35,9 @@ fn main() {
             "settings_set_toggle",
             "settings_set_voice_language",
             "settings_remove_voice_model",
+            "settings_set_update_channel",
+            "settings_check_for_updates",
+            "settings_restart_to_update",
             // the quick-capture window (capabilities/capture.json)
             "capture_context",
             "capture_submit",
