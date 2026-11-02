@@ -185,7 +185,7 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn new() -> Self {
-        let user_agent = format!("BrainitiveDesktop/{APP_VERSION} ({})", platform());
+        let user_agent = crate::msstore::api_user_agent(APP_VERSION, platform(), crate::msstore::STORE_BUILD);
         let base = || {
             reqwest::Client::builder()
                 .user_agent(user_agent.clone())

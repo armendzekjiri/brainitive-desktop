@@ -14,6 +14,9 @@
 //!   "Please update" screen) → download in the background → "Update ready — restart to install".
 //!   Only the user's click on "Restart to Update" installs (signature checked again) and restarts.
 //!
+//! - **Microsoft Store build** (BRAI-442): the plugin is not registered ([`Availability::Store`]);
+//!   every way to ask for an update opens the app's Store page instead.
+//!
 //! Pure logic first (tested below); the runtime part is at the end.
 
 use std::path::PathBuf;
@@ -174,6 +177,8 @@ pub enum Availability {
     PlaceholderKey,
     InvalidKey,
     DevBuild,
+    /// The Microsoft Store build: the Store updates the app, this build has no updater plugin.
+    Store,
     /// Before [`init`] ran.
     #[default]
     NotStarted,
@@ -195,6 +200,7 @@ impl Availability {
                 "This build's update signing key is not valid, so it never downloads or installs updates. Get new versions from brainitive.app/download."
             }
             Self::DevBuild => "Development builds don't update themselves.",
+            Self::Store => "Brainitive from the Microsoft Store is updated by the Store.",
             Self::NotStarted => "Updates are not ready yet.",
         })
     }
@@ -207,6 +213,15 @@ pub fn availability(pubkey: Option<&str>, dev_build: bool) -> Availability {
         KeyStatus::Invalid => Availability::InvalidKey,
         KeyStatus::Valid if dev_build => Availability::DevBuild,
         KeyStatus::Valid => Availability::Available,
+    }
+}
+
+/// The guard of this binary: the Store build never updates itself, whatever the key.
+pub fn build_availability(store_build: bool, pubkey: Option<&str>, dev_build: bool) -> Availability {
+    if store_build {
+        Availability::Store
+    } else {
+        availability(pubkey, dev_build)
     }
 }
 
@@ -322,6 +337,10 @@ impl Status {
 /// The app menu's update item: its text and whether it can be clicked. When an update is ready
 /// it becomes "Restart to Update (x.y.z)" — the only way an update gets installed.
 pub fn menu_item(availability: Availability, status: &Status) -> (String, bool) {
+    // the Store build: the item opens the Store page
+    if availability == Availability::Store {
+        return ("Check for Updates…".into(), true);
+    }
     if !availability.is_available() {
         return ("Check for Updates…".into(), false);
     }
@@ -411,6 +430,8 @@ pub struct Pending {
 #[derive(Debug, Clone, Serialize)]
 pub struct View {
     pub available: bool,
+    /// The Microsoft Store build: Settings and the "Please update" screen point to the Store.
+    pub store: bool,
     pub unavailable_reason: Option<&'static str>,
     pub auto_check: bool,
     pub channel: Channel,
@@ -426,6 +447,7 @@ pub fn view(app: &AppHandle) -> View {
     let availability = inner.updater.availability;
     View {
         available: availability.is_available(),
+        store: availability == Availability::Store,
         unavailable_reason: availability.reason(),
         auto_check: inner.settings.preferences.auto_update_check,
         channel: inner.settings.preferences.update_channel,
@@ -495,7 +517,11 @@ fn staging_dir(app: &AppHandle) -> Option<PathBuf> {
 /// downloaded but never installed, and starts the check loop.
 pub fn init(app: &AppHandle) {
     let pubkey = configured_pubkey(app.config());
-    let availability = availability(pubkey.as_deref(), cfg!(debug_assertions) || tauri::is_dev());
+    let availability = build_availability(
+        crate::msstore::STORE_BUILD,
+        pubkey.as_deref(),
+        cfg!(debug_assertions) || tauri::is_dev(),
+    );
     {
         let s = state(app);
         let mut inner = s.lock();
@@ -557,11 +583,16 @@ fn ui_changed(app: &AppHandle) {
     }
 }
 
-/// "Check for Updates…" (menu, tray, Settings, the "Please update" screen).
+/// "Check for Updates…" (menu, tray, Settings, the "Please update" screen). The Store build
+/// opens the Store page.
 pub fn check_now(app: &AppHandle, trigger: Trigger) -> Result<(), String> {
     {
         let s = state(app);
         let inner = s.lock();
+        if inner.updater.availability == Availability::Store {
+            drop(inner);
+            return open_store_page(app);
+        }
         if let Some(reason) = inner.updater.availability.reason() {
             return Err(reason.to_string());
         }
@@ -811,7 +842,15 @@ pub fn restart_to_update(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// The menu / tray item's click: restart when an update waits, otherwise check.
+/// The app's page in the Microsoft Store app (a constant, never an argument).
+pub fn open_store_page(app: &AppHandle) -> Result<(), String> {
+    tauri_plugin_opener::OpenerExt::opener(app)
+        .open_url(crate::msstore::STORE_URL, None::<&str>)
+        .map_err(|e| format!("The Microsoft Store could not be opened: {e}"))
+}
+
+/// The menu / tray item's click: restart when an update waits, otherwise check (the Store
+/// build: open the Store page).
 pub fn on_menu_click(app: &AppHandle) {
     let ready = state(app).lock().updater.status.is_ready();
     let result = if ready {
@@ -827,7 +866,10 @@ pub fn on_menu_click(app: &AppHandle) {
 /// Settings: another channel. A waiting update of the old channel is dropped, a check or
 /// download still running for it is discarded when it ends ([`UpdaterState::switch_channel`]),
 /// and an automatic check of the new channel runs soon.
-pub fn set_channel(app: &AppHandle, channel: Channel) {
+pub fn set_channel(app: &AppHandle, channel: Channel) -> Result<(), String> {
+    if state(app).lock().updater.availability == Availability::Store {
+        return Err(Availability::Store.reason().unwrap_or_default().to_string());
+    }
     let changed = {
         let s = state(app);
         let mut inner = s.lock();
@@ -846,6 +888,7 @@ pub fn set_channel(app: &AppHandle, channel: Channel) {
         }
         ui_changed(app);
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1378,5 +1421,64 @@ mod tests {
             .block_on(client.get("http://127.0.0.1:9/latest.json").send())
             .unwrap_err();
         assert!(err.is_builder() || err.to_string().contains("scheme"), "{err}");
+    }
+
+    // ---- the Microsoft Store build (BRAI-442) -------------------------------------------------
+
+    #[test]
+    fn the_store_build_never_updates_itself_whatever_the_key() {
+        let key = test_key();
+        let valid = key.pubkey.as_str();
+        assert_eq!(build_availability(true, Some(valid), false), Availability::Store);
+        assert_eq!(build_availability(true, None, false), Availability::Store);
+        assert_eq!(build_availability(true, Some(valid), true), Availability::Store);
+        // the normal build keeps its guard
+        assert_eq!(build_availability(false, Some(valid), false), Availability::Available);
+        assert_eq!(build_availability(false, None, false), Availability::PlaceholderKey);
+        assert!(!Availability::Store.is_available());
+        assert!(Availability::Store.reason().unwrap().contains("Microsoft Store"));
+        // no automatic check ever starts
+        let mut schedule = Schedule::default();
+        schedule.start(0);
+        assert!(!should_auto_check(
+            true,
+            Availability::Store,
+            &Status::Idle,
+            &schedule,
+            1_000_000
+        ));
+    }
+
+    #[test]
+    fn this_binary_is_guarded_by_its_feature() {
+        let key = test_key();
+        let expected = if cfg!(feature = "msstore") {
+            Availability::Store
+        } else {
+            Availability::Available
+        };
+        assert_eq!(
+            build_availability(crate::msstore::STORE_BUILD, Some(key.pubkey.as_str()), false),
+            expected
+        );
+    }
+
+    #[test]
+    fn the_store_build_menu_item_opens_the_store() {
+        // clickable even though nothing is "available": the click opens the Store page
+        for status in [Status::Idle, Status::UpToDate, Status::Failed { message: "x".into() }] {
+            assert_eq!(
+                menu_item(Availability::Store, &status),
+                ("Check for Updates…".into(), true)
+            );
+        }
+        // never "Restart to Update" in the Store build
+        let ready = Status::Ready {
+            version: "9.9.9".into(),
+        };
+        assert_eq!(
+            menu_item(Availability::Store, &ready),
+            ("Check for Updates…".into(), true)
+        );
     }
 }

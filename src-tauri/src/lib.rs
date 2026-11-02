@@ -14,6 +14,7 @@ pub mod leader;
 pub mod links;
 pub mod logging;
 pub mod menu;
+pub mod msstore;
 pub mod new_task;
 pub mod offline;
 pub mod offline_cache;
@@ -51,7 +52,7 @@ use crate::state::{state, AppState};
 
 pub fn run() {
     startup::begin();
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // first: a second launch (or a deep link on Windows / Linux) goes to the running app
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             shell::focus_main(app)
@@ -71,10 +72,13 @@ pub fn run() {
                 .with_handler(hotkeys::on_shortcut)
                 .build(),
         )
-        .plugin(tauri_plugin_notification::init())
-        // auto-updates (BRAI-373): Rust only (`updater.rs`), no webview gets its commands; the
-        // public key is `plugins.updater.pubkey` (a placeholder switches the updater off)
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init());
+    // auto-updates (BRAI-373): Rust only (`updater.rs`), no webview gets its commands; the
+    // public key is `plugins.updater.pubkey` (a placeholder switches the updater off). The
+    // Microsoft Store build has no updater at all: the Store updates it (BRAI-442).
+    #[cfg(not(feature = "msstore"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    let app = builder
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 // the bundled popups open centred; only app windows keep their size / position
@@ -189,10 +193,15 @@ pub fn run() {
                 Err(e) => eprintln!("no log directory: {e}"),
             }
             log::info!(
-                "Brainitive Desktop {} starting ({}, {})",
+                "Brainitive Desktop {} starting ({}, {}{})",
                 version::APP_VERSION,
                 std::env::consts::OS,
-                std::env::consts::ARCH
+                std::env::consts::ARCH,
+                match (msstore::STORE_BUILD, msstore::package_family_name()) {
+                    (false, _) => String::new(),
+                    (true, Some(family)) => format!(", Microsoft Store build, package {family}"),
+                    (true, None) => ", Microsoft Store build, not packaged".to_string(),
+                }
             );
             startup::mark("setup entered");
             let settings_path = app.path().app_config_dir()?.join("settings.json");
@@ -204,8 +213,9 @@ pub fn run() {
             {
                 let s = state(app.handle());
                 let mut inner = s.lock();
-                inner.start_hidden =
-                    prefs::launched_at_login(std::env::args()) && inner.settings.preferences.start_hidden;
+                // the MSIX startup task starts the app without `--autostart` (BRAI-442)
+                let at_login = prefs::launched_at_login(std::env::args()) || msstore::launched_by_startup_task();
+                inner.start_hidden = at_login && inner.settings.preferences.start_hidden;
             }
             startup::mark("settings and queue loaded");
             let handle = app.handle().clone();

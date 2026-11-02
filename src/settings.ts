@@ -69,6 +69,8 @@ type UpdateStatus =
 
 interface Updates {
     available: boolean;
+    /** The Microsoft Store build (BRAI-442): the Store updates the app. */
+    store: boolean;
     unavailable_reason: string | null;
     auto_check: boolean;
     channel: 'stable' | 'beta';
@@ -315,6 +317,8 @@ function renderUpdates(u: Updates): void {
     auto.checked = u.auto_check;
     beta.checked = u.channel === 'beta';
     auto.disabled = beta.disabled = !u.available;
+    // the Microsoft Store build: no channel, no automatic check of our own; the button opens the Store
+    $('update-auto-row').hidden = $('update-beta-row').hidden = u.store;
     $('update-version').textContent = u.current_version;
     const s = u.status;
     const checked = u.last_check ? `Last checked ${new Date(u.last_check * 1000).toLocaleString()}.` : 'Not checked yet.';
@@ -330,8 +334,8 @@ function renderUpdates(u: Updates): void {
     $('update-status').textContent = u.available ? text[s.state] : '';
     const action = $<HTMLButtonElement>('update-action');
     updateReady = u.available && s.state === 'ready';
-    action.textContent = updateReady ? 'Restart to Update' : 'Check now';
-    action.disabled = !u.available || ['checking', 'downloading', 'installing'].includes(s.state);
+    action.textContent = u.store ? 'Open Microsoft Store' : updateReady ? 'Restart to Update' : 'Check now';
+    action.disabled = !u.store && (!u.available || ['checking', 'downloading', 'installing'].includes(s.state));
     // a check or download runs in the background: follow it
     window.clearTimeout(updatePoll);
     if (['checking', 'downloading', 'installing'].includes(s.state)) updatePoll = window.setTimeout(() => void refresh(), 1000);

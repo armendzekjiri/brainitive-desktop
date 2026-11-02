@@ -79,7 +79,8 @@ impl UpdateRequired {
             server_version,
             min_version: min_version.chars().take(40).collect(),
             app_version: crate::version::APP_VERSION,
-            download_url: crate::version::DOWNLOAD_URL,
+            // the Store build: the app's Store page (BRAI-442)
+            download_url: crate::msstore::update_page(crate::msstore::STORE_BUILD, crate::version::DOWNLOAD_URL),
         }
     }
 }
@@ -291,7 +292,12 @@ mod tests {
         assert_eq!(u.display_name, "brain.example.com");
         assert_eq!(u.min_version, "9.0.0");
         assert_eq!(u.app_version, crate::version::APP_VERSION);
-        assert!(u.download_url.starts_with("https://"));
+        // the website's download page; the app's Store page in the Microsoft Store build (BRAI-442)
+        if cfg!(feature = "msstore") {
+            assert_eq!(u.download_url, crate::msstore::STORE_URL);
+        } else {
+            assert!(u.download_url.starts_with("https://"));
+        }
         // a server can't make the screen huge
         let long = "x".repeat(500);
         assert_eq!(UpdateRequired::new(&long, &origin, None, &long).server_name.len(), 120);

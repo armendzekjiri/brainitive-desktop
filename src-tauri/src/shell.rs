@@ -47,7 +47,8 @@ pub const BRIDGE_PERMISSIONS: [&str; 4] = [
     "allow-brainitive-sign-out",
 ];
 
-/// The platform's default user agent + ` BrainitiveDesktop/<version>`. Wry can only replace the
+/// The platform's default user agent + ` BrainitiveDesktop/<version>` (+ ` (MSStore)` in the
+/// Microsoft Store build, BRAI-442). Wry can only replace the
 /// user agent, so the default is spelled out (WKWebView's is frozen; WebView2's Chrome version
 /// is a pinned approximation — see docs/SPIKE.md).
 pub fn user_agent() -> String {
@@ -58,7 +59,10 @@ pub fn user_agent() -> String {
     } else {
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko)"
     };
-    format!("{base} BrainitiveDesktop/{APP_VERSION}")
+    format!(
+        "{base}{}",
+        crate::msstore::webview_ua_marker(APP_VERSION, crate::msstore::STORE_BUILD)
+    )
 }
 
 /// Where the bundled screens are served from: this platform's one Tauri origin
@@ -687,7 +691,12 @@ mod tests {
 
     #[test]
     fn user_agent_carries_the_app_marker() {
-        assert!(user_agent().ends_with(&format!(" BrainitiveDesktop/{APP_VERSION}")));
+        let marker = if cfg!(feature = "msstore") {
+            format!(" BrainitiveDesktop/{APP_VERSION} (MSStore)")
+        } else {
+            format!(" BrainitiveDesktop/{APP_VERSION}")
+        };
+        assert!(user_agent().ends_with(&marker), "{}", user_agent());
         assert!(user_agent().starts_with("Mozilla/5.0 ("));
     }
 

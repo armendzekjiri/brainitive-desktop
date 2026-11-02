@@ -52,6 +52,8 @@ interface UpdateRequired {
 // auto-updates (BRAI-373)
 interface Updater {
     available: boolean;
+    /** The Microsoft Store build (BRAI-442): updates come from the Store. */
+    store: boolean;
     status:
         | { state: 'idle' | 'checking' | 'up_to_date' }
         | { state: 'downloading'; version: string; percent: number | null }
@@ -230,7 +232,13 @@ function renderUpdate(u: UpdateRequired | null): void {
     $('update-app').textContent = u.app_version;
     $('update-min').textContent = `${u.min_version} or later`;
     $('update-server-version').textContent = u.server_version ?? 'unknown';
-    $('update-url').textContent = u.download_url;
+    // the Microsoft Store build (BRAI-442): updates come from the Store, the button opens its page
+    if (state?.updater.store) {
+        $('update-manual').textContent = 'Update Brainitive in the Microsoft Store, then quit and reopen the app.';
+        $('update-download').textContent = 'Open Microsoft Store';
+    } else {
+        $('update-url').textContent = u.download_url;
+    }
     showError('update-error', null);
 }
 

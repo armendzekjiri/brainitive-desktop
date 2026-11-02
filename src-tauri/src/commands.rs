@@ -194,12 +194,13 @@ pub async fn retry_connect(app: AppHandle) -> Result<(), UiError> {
     flows::retry_now(&app).await
 }
 
-/// "Download the update": opens the fixed download page in the browser. The address is a
-/// constant of this app, never an argument.
+/// "Download the update": opens the fixed download page in the browser (the Store build: the
+/// app's page in the Microsoft Store). The address is a constant of this app, never an argument.
 #[tauri::command]
 pub fn open_download_page(app: AppHandle) -> Result<(), UiError> {
+    let page = crate::msstore::update_page(crate::msstore::STORE_BUILD, DOWNLOAD_URL);
     tauri_plugin_opener::OpenerExt::opener(&app)
-        .open_url(DOWNLOAD_URL, None::<&str>)
+        .open_url(page, None::<&str>)
         .map_err(|e| UiError {
             kind: "browser",
             message: format!("The browser could not be opened: {e}"),

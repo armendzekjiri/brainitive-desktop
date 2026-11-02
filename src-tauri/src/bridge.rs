@@ -147,6 +147,10 @@ fn notify(app: &AppHandle, title: &str, body: &str, target: Option<NotificationT
         }
         id
     };
+    // the Microsoft Store build, packaged: a toast from the package's identity (BRAI-442)
+    if crate::msstore::show_toast(app, id, title, body) {
+        return;
+    }
     let result = app.notification().builder().id(id).title(title).body(body).show();
     if let Err(e) = result {
         log::warn!("notification failed: {e}");

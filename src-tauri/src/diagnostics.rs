@@ -147,6 +147,8 @@ pub fn open_logs_folder(app: &AppHandle) {
             .show(|_| {});
         return;
     };
+    // packaged (Microsoft Store build): Explorer sees the package's copy of AppData, not ours
+    let dir = crate::msstore::outside_view(app, dir);
     if let Err(e) = app.opener().open_path(dir.to_string_lossy(), None::<&str>) {
         log::warn!("could not open the log folder: {e}");
     }

@@ -17,6 +17,25 @@ pub fn launched_at_login(mut args: impl Iterator<Item = String>) -> bool {
     args.any(|a| a == AUTOSTART_ARG)
 }
 
+/// "Open Brainitive when you log in": the MSIX startup task when the Microsoft Store build runs
+/// packaged (BRAI-442; a Run key would land in the package's private registry, which Windows
+/// never reads at login), otherwise the autostart plugin's login item.
+fn launch_at_login(app: &AppHandle) -> bool {
+    match crate::msstore::startup_task_state() {
+        Some(task) => task.is_enabled(),
+        None => app.autolaunch().is_enabled().unwrap_or(false),
+    }
+}
+
+fn set_launch_at_login(app: &AppHandle, on: bool) -> Result<(), String> {
+    if let Some(result) = crate::msstore::set_startup_task(on) {
+        return result;
+    }
+    let autolaunch = app.autolaunch();
+    let result = if on { autolaunch.enable() } else { autolaunch.disable() };
+    result.map_err(|e| format!("The login item could not be changed: {e}"))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PrefsView {
     app_version: &'static str,
@@ -105,7 +124,7 @@ pub fn view(app: &AppHandle) -> PrefsView {
         voice_model,
         keep_in_tray: prefs.keep_in_tray,
         ask_where_to_save: prefs.ask_where_to_save,
-        launch_at_login: app.autolaunch().is_enabled().unwrap_or(false),
+        launch_at_login: launch_at_login(app),
         start_hidden: prefs.start_hidden,
         shortcut_problem: inner.hotkey_error.clone(),
         updates,
@@ -268,13 +287,7 @@ pub fn settings_record_shortcut(app: AppHandle, webview: Webview, active: bool) 
 pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value: bool) -> Result<PrefsView, String> {
     popup::ensure_caller(&app, &webview, Popup::Settings)?;
     if key == "launch_at_login" {
-        let autolaunch = app.autolaunch();
-        let result = if value {
-            autolaunch.enable()
-        } else {
-            autolaunch.disable()
-        };
-        result.map_err(|e| format!("The login item could not be changed: {e}"))?;
+        set_launch_at_login(&app, value)?;
         return Ok(view(&app));
     }
     {
@@ -309,7 +322,7 @@ pub fn settings_set_update_channel(
     channel: crate::updater::Channel,
 ) -> Result<PrefsView, String> {
     popup::ensure_caller(&app, &webview, Popup::Settings)?;
-    crate::updater::set_channel(&app, channel);
+    crate::updater::set_channel(&app, channel)?;
     Ok(view(&app))
 }
 

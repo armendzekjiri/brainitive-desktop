@@ -55,6 +55,17 @@ block2 = "=0.6.2"
 # downloads (BRAI-377): setxattr / getxattr for the com.apple.quarantine flag
 libc = "=0.2.191"
 
+# The Microsoft Store build (BRAI-442, docs/MICROSOFT-STORE.md): `--features msstore` with
+# `--config tauri.msstore.conf.json`. Both crates are already in the tree (tauri, notify-rust): the
+# WinRT StartupTask / package APIs and toasts with the package's AUMID.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "=0.62.2", features = ["ApplicationModel", "ApplicationModel_Activation", "Foundation"], optional = true }
+tauri-winrt-notification = { version = "=0.8.1", optional = true }
+
+[features]
+# No updater (the Store updates the app), Store links, the MSIX startup task, package toasts.
+msstore = ["dep:windows", "dep:tauri-winrt-notification"]
+
 [dev-dependencies]
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros"] }
 # updater tests (BRAI-373): a mock app for the plugin, a throwaway minisign key made in the test

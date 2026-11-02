@@ -471,10 +471,12 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "tauri-winrt-notification",
  "thiserror 2.0.21",
  "tokio",
  "url",
  "whisper-rs",
+ "windows",
 ]
 
 [[package]]
