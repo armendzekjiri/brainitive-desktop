@@ -113,6 +113,11 @@ pub struct Inner {
     pub rebuilding: bool,
     /// Last page of the server the main frame showed, to return to after a blocked load.
     pub last_good: Option<Url>,
+    /// App window label → the page its main frame committed last (codex review 6: who may
+    /// navigate it to the bundled screens).
+    pub committed: HashMap<String, Url>,
+    /// App window label → when a native transition to a bundled page was announced (one-shot).
+    pub native_navigation: HashMap<String, Instant>,
     /// When the webview last reached the server's `/login` (sign-in loop detection).
     pub reauth_at: Option<Instant>,
     /// Bumped whenever a sign-in begins or ends (completed sign-in, sign-out, forget): work that
@@ -212,6 +217,8 @@ impl AppState {
                 rebuild: None,
                 rebuilding: false,
                 last_good: None,
+                committed: HashMap::new(),
+                native_navigation: HashMap::new(),
                 reauth_at: None,
                 account_epoch: 0,
                 capabilities: HashSet::new(),
