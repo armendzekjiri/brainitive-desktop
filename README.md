@@ -26,7 +26,7 @@ app. The window title shows where you are: "Brainitive — Cloud", "Brainitive �
 
 - **Brainitive key** — ⌃⌘K (macOS) / Ctrl+Alt+K (Windows, Linux) from any app, then one letter:
   **C** quick capture, **T** new task, **K** quick switcher, **V** voice capture (hold to talk), **O** open Brainitive.
-  A small panel lists the letters; Esc, clicking elsewhere or 3 seconds without a key close it.
+  A small panel lists the letters; Esc or clicking elsewhere closes it.
   Change the key and the letters in Settings → Shortcuts.
 - **Quick capture** — ⇧⌘Space (macOS) / Ctrl+Shift+Space from any app: type, ⌘↩ / Ctrl+↩ to save
   to your inbox. Works offline (sent when you're back).

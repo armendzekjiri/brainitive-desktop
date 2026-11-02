@@ -243,8 +243,8 @@ key **in its own window** (no letter is registered globally) and sends it to `le
 maps it (`Preferences.leader_letters`, default C / T / K / V / O, A–Z, unique, `leader.rs` pure) to
 quick capture, New task, the quick switcher, voice capture or `shell::focus_main`. A file written
 before New task gets T, or N / the first free letter when T is already another action's. The new window is shown
-while the overlay still has the focus, so it inherits where the focus returns. Esc / blur / 3 s
-without a key (a page timer → `leader_close`, which ignores a hidden overlay) close it. The key
+while the overlay still has the focus, so it inherits where the focus returns. It stays open until a letter, Esc
+(`leader_close`, which ignores a hidden overlay) or a click elsewhere (blur) closes it. The key
 pressed again while the overlay is in front counts as its own letter (⌃⌘K K → switcher), else
 closes it.
 

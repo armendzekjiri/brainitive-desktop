@@ -141,7 +141,7 @@ Settings → Shortcuts holds the key, the letters and the optional direct shortc
 | 4A.3 Press the key, then **C**. | Quick capture opens with the text field focused; the panel is gone. Esc in quick capture returns to the app you came from. | [ ] | [ ] | [ ] |
 | 4A.4 Press the key, then **K**. Then press the key and **K** while still holding ⌃⌘ (Ctrl+Alt). | Both open the quick switcher (the key pressed again counts as its letter K). | [ ] | [ ] | [ ] |
 | 4A.5 Main window hidden or behind another app: press the key, then **O**. | The main Brainitive window comes to the front. | [ ] | [ ] | [ ] |
-| 4A.6 Press the key, then wait. | The panel closes by itself after about 3 seconds; the focus goes back to the app you were in. | [ ] | [ ] | [ ] |
+| 4A.6 Press the key, then wait. | The panel stays open; Esc or a click elsewhere closes it and the focus goes back to the app you were in. | [ ] | [ ] | [ ] |
 | 4A.7 Press the key, then Esc; again, then click another app. | Esc closes it; clicking elsewhere closes it. Nothing runs. | [ ] | [ ] | [ ] |
 | 4A.8 Press the key, then a letter that has no action (for example **X**). | The panel says "X does nothing here." and stays a moment; nothing runs. | [ ] | [ ] | [ ] |
 | 4A.9 Voice capture **off**: press the key. | **V** is greyed out with "Off. Turn it on in Settings → Voice capture."; pressing V shows that message, the microphone stays closed. | [ ] | [ ] | [ ] |

@@ -44,7 +44,7 @@ Brainitive key (BRAI-440):
 - **One key, then a letter**: press **⌃⌘K** (macOS) / **Ctrl+Alt+K** (Windows, Linux) in any app and
   a small panel lists what comes next: **C** quick capture, **K** quick switcher (so ⌃⌘K K),
   **V** voice capture — hold V to talk, let go to finish — and **O** to bring Brainitive to the
-  front. Esc, clicking elsewhere or 3 seconds without a key close it. Only the key itself is taken
+  front. Esc or clicking elsewhere closes it. Only the key itself is taken
   from other apps; the letters are read by the panel. Ctrl+Alt+K types no AltGr character on German
   and most European layouts.
 - **Settings → Shortcuts**: change or turn off the Brainitive key, pick another letter (A–Z) for

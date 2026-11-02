@@ -373,11 +373,11 @@ pub fn leader_release(app: AppHandle, webview: Webview, letter: String) -> Resul
     Ok(())
 }
 
-/// Esc, or 3 s without a key.
+/// Esc.
 #[tauri::command]
 pub fn leader_close(app: AppHandle, webview: Webview) -> Result<(), String> {
     popup::ensure_caller(&app, &webview, Popup::Leader)?;
-    // a late timer of a hidden overlay must not move the focus
+    // a late Esc of a hidden overlay must not move the focus
     if visible(&app) {
         popup::dismiss(&app, Popup::Leader);
     }

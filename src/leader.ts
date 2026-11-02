@@ -20,20 +20,11 @@ interface View {
     actions: Action[];
 }
 
-/** Closes by itself after this long without a key. */
-const TIMEOUT_MS = 3000;
-
 const list = $('actions');
 const status = $('status');
 let view: View | null = null;
-let timer: number | undefined;
 /** The voice letter that is held down (its key-up ends the recording). */
 let held: { letter: string; code: string } | null = null;
-
-function arm(): void {
-    window.clearTimeout(timer);
-    timer = window.setTimeout(() => void invoke('leader_close'), TIMEOUT_MS);
-}
 
 function setStatus(message: string, kind: 'muted' | 'error' = 'muted'): void {
     status.textContent = message;
@@ -94,7 +85,6 @@ document.addEventListener('keydown', (e) => {
     // every key is ours while the overlay is open (no beep, no focus moves)
     e.preventDefault();
     if (e.repeat) return;
-    window.clearTimeout(timer);
     if (e.key === 'Escape') {
         void invoke('leader_close');
         return;
@@ -102,7 +92,6 @@ document.addEventListener('keydown', (e) => {
     const letter = letterOf(e);
     if (!letter) {
         // a modifier on its own (⌃⌘ still held or pressed again): keep waiting
-        arm();
         return;
     }
     mark(letter);
@@ -112,7 +101,6 @@ document.addEventListener('keydown', (e) => {
         held = null;
         mark('');
         setStatus(errorMessage(err), 'error');
-        arm();
     });
 });
 
@@ -124,11 +112,5 @@ document.addEventListener('keyup', (e) => {
     void invoke('leader_release', { letter });
 });
 
-window.addEventListener('blur', () => window.clearTimeout(timer));
-
-onShown(() => {
-    void refresh();
-    arm();
-});
+onShown(() => void refresh());
 void refresh();
-arm();
