@@ -77,6 +77,108 @@ pub fn resolve_on_instance(instance: &ServerOrigin, target: &str) -> Option<Url>
     Some(url)
 }
 
+/// Paths a deep link, a notification or a server-provided menu / tray / switcher link may never
+/// open in the app window (BRAI-377): sign-in, sign-out and session plumbing. A
+/// `brainitive://open?url=/app/session/<attacker's code>` would otherwise sign the webview into
+/// someone else's account (login CSRF), and `/login/google` would start OAuth inside the webview.
+/// `(prefix, whole segment)`: `true` matches `/app` and `/app/…` but not `/apps`; `false` is a
+/// plain prefix (`/login*` also covers `/login-as`).
+const DEEP_LINK_DENIED: [(&str, bool); 15] = [
+    ("/app", true),
+    ("/login", false),
+    ("/logout", false),
+    ("/register", false),
+    ("/password", true),
+    ("/auth", true),
+    ("/oauth", true),
+    ("/api", true),
+    ("/forgot-password", true),
+    ("/reset-password", true),
+    ("/confirm-password", true),
+    ("/verify-email", true),
+    ("/email/verification-notification", true),
+    ("/github-app", true),
+    ("/github/app", true),
+];
+
+/// A page of the current server that a deep link (`brainitive://open?url=…`), a web
+/// notification's `url`, a notification click or a link the server hands the tray / menus /
+/// switcher may open: [`resolve_on_instance`], and the path is none of the auth endpoints in
+/// [`DEEP_LINK_DENIED`] — compared after percent-decoding (also double), `\` → `/`, `//` and
+/// dot segments collapsed, and lower-cased, so `/%61pp/session`, `/x/..%2Fapp/session`,
+/// `//App//session` or `/LOGIN` are caught too. The app's own navigation to the one-time
+/// `/app/session/<code>` (from `POST /api/v1/auth/web-session`) uses [`resolve_on_instance`].
+pub fn resolve_deep_link_target(instance: &ServerOrigin, target: &str) -> Option<Url> {
+    let url = resolve_on_instance(instance, target)?;
+    is_deep_link_safe(&url).then_some(url)
+}
+
+/// Whether a page URL is outside the auth endpoints (see [`resolve_deep_link_target`]). A path
+/// that does not decode cleanly is refused.
+pub fn is_deep_link_safe(url: &Url) -> bool {
+    let Some(path) = normalised_path(url.path()) else {
+        return false;
+    };
+    !DEEP_LINK_DENIED.iter().any(|(prefix, segment)| {
+        path.strip_prefix(prefix)
+            .is_some_and(|rest| !*segment || rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
+/// The path the server's router will most likely see: percent-decoded until stable (≤ 3
+/// rounds), backslashes as slashes, `;params` cut, empty and `.` segments dropped, `..` applied,
+/// lower-cased.
+/// `None` for invalid UTF-8, control characters or more than three layers of encoding.
+fn normalised_path(raw: &str) -> Option<String> {
+    let mut path = raw.to_string();
+    let mut stable = false;
+    for _ in 0..=3 {
+        let decoded = percent_decode(&path)?;
+        if decoded == path {
+            stable = true;
+            break;
+        }
+        path = decoded;
+    }
+    if !stable || path.chars().any(char::is_control) {
+        return None;
+    }
+    let path = path.replace('\\', "/").to_lowercase();
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in path.split('/') {
+        // `;params` are cut like servers that know path parameters do (`/app;x/session`)
+        let segment = segment.split(';').next().unwrap_or("");
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            s => segments.push(s),
+        }
+    }
+    Some(format!("/{}", segments.join("/")))
+}
+
+/// `%XX` → byte; a `%` without two hex digits stays as it is. `None` for invalid UTF-8.
+fn percent_decode(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| (b as char).to_digit(16);
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((h * 16 + l) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).ok()
+}
+
 /// A link the app hands to the system browser / mail client: `http`, `https` or `mailto` only.
 pub fn external_url(raw: &str) -> Option<Url> {
     if raw.len() > MAX_URL_LEN {
@@ -162,6 +264,65 @@ pub fn is_local_caller(label: &str, url: &Url, expected_label: &str, local_origi
 /// Whether the main frame may show this page: the bundled screens or the current server.
 pub fn is_app_page(url: &Url, instance: Option<&ServerOrigin>, local_origins: &[String]) -> bool {
     url.as_str() == "about:blank" || is_local(url, local_origins) || instance.is_some_and(|i| i.contains(url))
+}
+
+/// Where Tauri serves the bundled screens on this platform (tauri 2.12.5,
+/// `tauri::protocol::origin`, `useHttpsScheme` off): `http://tauri.localhost` on Windows (and
+/// Android), `tauri://localhost` on macOS / Linux. Only this one origin counts as bundled: on
+/// macOS / Linux `http://tauri.localhost` is just a loopback host name that any local web server
+/// could answer (BRAI-377).
+pub fn bundled_origin(windows: bool) -> &'static str {
+    if windows {
+        "http://tauri.localhost"
+    } else {
+        "tauri://localhost"
+    }
+}
+
+/// What the page-load handler of an app window does (pure part of `shell::on_page_load`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageLoad {
+    /// An app page: nothing to do.
+    Keep,
+    /// A page of the current server finished loading: the main window remembers it as the page
+    /// to go back to.
+    Remember,
+    /// The main frame committed to a page that is no app page (another site, a server redirect
+    /// elsewhere): go back right away, and open `outside` (http / https) in the system browser.
+    Revert { outside: Option<Url> },
+}
+
+/// `started`: `PageLoadEvent::Started` (WebKit: the main frame *committed* the new document),
+/// otherwise `Finished`. Page-load events are main-frame only on every platform, so unlike the
+/// navigation handler they never see iframes: a foreign page here is a top-level load and is
+/// reverted on `Started` already, not only on `Finished` (BRAI-377).
+pub fn decide_page_load(
+    url: &Url,
+    instance: Option<&ServerOrigin>,
+    local_origins: &[String],
+    started: bool,
+) -> PageLoad {
+    if !is_app_page(url, instance, local_origins) {
+        let outside = if started { external_url(url.as_str()) } else { None };
+        return PageLoad::Revert { outside };
+    }
+    if !started && instance.is_some_and(|i| i.contains(url)) {
+        PageLoad::Remember
+    } else {
+        PageLoad::Keep
+    }
+}
+
+/// Where a reverted window goes: the main window to the last good page of the server (or the
+/// bundled screens), an extra window to the server's dashboard.
+pub fn revert_target(main: bool, last_good: Option<&Url>, instance: Option<&ServerOrigin>, local: &Url) -> Url {
+    if main {
+        if let Some(page) = last_good.filter(|p| instance.is_some_and(|i| i.contains(p))) {
+            return page.clone();
+        }
+        return local.clone();
+    }
+    instance.map(|o| o.join("/dashboard")).unwrap_or_else(|| local.clone())
 }
 
 fn is_local(url: &Url, local_origins: &[String]) -> bool {
@@ -310,6 +471,174 @@ mod tests {
             resolve_on_instance(&i, "/../../etc/passwd").unwrap().as_str(),
             "https://brainitive.example.com/etc/passwd"
         );
+    }
+
+    #[test]
+    fn deep_links_never_reach_auth_endpoints() {
+        let i = instance();
+        let ok = |t: &str| resolve_deep_link_target(&i, t).is_some();
+        // ordinary pages
+        for page in [
+            "/workspaces/a/projects/b",
+            "/dashboard",
+            "/my-work?tab=today",
+            "/apps",
+            "/apix",
+            "/applications/1",
+            "/authors",
+            "/workspaces/a/pages/login-notes",
+            "https://brainitive.example.com/notifications",
+        ] {
+            assert!(ok(page), "{page} should open");
+        }
+        // the auth endpoints, plainly and with every disguise
+        for bad in [
+            "/app/session/abc123",
+            "/app",
+            "/app/",
+            "https://brainitive.example.com/app/session/abc",
+            "HTTPS://BRAINITIVE.EXAMPLE.COM/APP/SESSION/abc",
+            "/APP/session/abc",
+            "/App/Session/abc",
+            "/%61pp/session/abc",
+            "/%2561pp/session/abc",
+            "/%252561pp/session/abc",
+            "/app%2Fsession/abc",
+            "/app%2fsession/abc",
+            "/app%5Csession/abc",
+            "/x/..%2Fapp/session/abc",
+            "/x/%2e%2e/app/session/abc",
+            "/x/%2E%2E%2Fapp/session/abc",
+            "/./app/session/abc",
+            "/x/../app/session",
+            "/x/..%5capp/session",
+            "/app/./session/abc",
+            "/app;/session/abc",
+            "/login",
+            "/login/google",
+            "/LOGIN/github/callback",
+            "/loginx",
+            "/logout",
+            "/logout?next=/",
+            "/register",
+            "/register/invite",
+            "/password/reset",
+            "/password",
+            "/auth/callback",
+            "/oauth/authorize",
+            "/api/v1/me",
+            "/API/v1/auth/web-session",
+            "/forgot-password",
+            "/reset-password/tok",
+            "/verify-email/1/abc",
+            "/github-app/callback",
+        ] {
+            assert!(!ok(bad), "{bad} must be refused");
+        }
+        // still only this server
+        assert!(!ok("//evil.com/dashboard"));
+        assert!(!ok("https://evil.com/dashboard"));
+        // undecodable / more than three layers of encoding → refused
+        assert!(!ok("/%ff%fe"));
+        assert!(!ok("/%2525252561pp/x"));
+        assert!(!ok("/a%00b"));
+        // the app's own session link still resolves through the internal path
+        assert!(resolve_on_instance(&i, "/app/session/abc123").is_some());
+        assert!(!is_deep_link_safe(&u("https://brainitive.example.com/app/session/x")));
+        assert!(is_deep_link_safe(&u("https://brainitive.example.com/captures")));
+    }
+
+    #[test]
+    fn path_normalisation() {
+        assert_eq!(normalised_path("/A//b/./c/../D").as_deref(), Some("/a/b/d"));
+        assert_eq!(normalised_path("/../../x").as_deref(), Some("/x"));
+        assert_eq!(normalised_path("/100%").as_deref(), Some("/100%"));
+        assert_eq!(normalised_path("/%zz").as_deref(), Some("/%zz"));
+        assert_eq!(normalised_path("/caf%C3%A9").as_deref(), Some("/café"));
+    }
+
+    #[test]
+    fn the_bundled_origin_is_per_platform() {
+        assert_eq!(bundled_origin(false), "tauri://localhost");
+        assert_eq!(bundled_origin(true), "http://tauri.localhost");
+        // macOS / Linux: http://tauri.localhost is a loopback web server, not the app
+        let mac = vec![bundled_origin(false).to_string()];
+        assert!(!is_app_page(&u("http://tauri.localhost/"), None, &mac));
+        assert!(!is_local_caller(
+            "capture",
+            &u("http://tauri.localhost/capture.html"),
+            "capture",
+            &mac
+        ));
+        assert_eq!(
+            decide_local_navigation(&u("http://tauri.localhost/x"), &mac),
+            Navigation::External(u("http://tauri.localhost/x"))
+        );
+        assert!(is_app_page(&u("tauri://localhost/index.html"), None, &mac));
+        // Windows: tauri:// is nothing
+        let win = vec![bundled_origin(true).to_string()];
+        assert!(is_app_page(&u("http://tauri.localhost/index.html"), None, &win));
+        assert!(!is_app_page(&u("tauri://localhost/index.html"), None, &win));
+        assert!(!is_app_page(&u("https://tauri.localhost/index.html"), None, &win));
+        assert_eq!(
+            decide_navigation(&u("tauri://localhost/index.html"), None, &win),
+            Navigation::Block
+        );
+    }
+
+    #[test]
+    fn foreign_top_level_loads_are_reverted_on_start() {
+        let i = instance();
+        let l = locals();
+        let d = |s: &str, started: bool| decide_page_load(&u(s), Some(&i), &l, started);
+        assert_eq!(
+            d("https://evil.com/phish", true),
+            PageLoad::Revert {
+                outside: Some(u("https://evil.com/phish"))
+            }
+        );
+        // on Finished (the start was missed): back without opening it twice
+        assert_eq!(d("https://evil.com/phish", false), PageLoad::Revert { outside: None });
+        assert_eq!(
+            d("file:///etc/passwd", true),
+            PageLoad::Revert { outside: None },
+            "never handed to the browser"
+        );
+        assert_eq!(
+            d("http://brainitive.example.com/x", true),
+            PageLoad::Revert {
+                outside: Some(u("http://brainitive.example.com/x"))
+            },
+            "the server over plain http is another origin"
+        );
+        assert_eq!(d("https://brainitive.example.com/dashboard", true), PageLoad::Keep);
+        assert_eq!(d("https://brainitive.example.com/dashboard", false), PageLoad::Remember);
+        assert_eq!(d("tauri://localhost/index.html", false), PageLoad::Keep);
+        assert_eq!(d("about:blank", true), PageLoad::Keep);
+        // signed out: the server is no app page
+        assert_eq!(
+            decide_page_load(&u("https://brainitive.example.com/"), None, &l, true),
+            PageLoad::Revert {
+                outside: Some(u("https://brainitive.example.com/"))
+            }
+        );
+    }
+
+    #[test]
+    fn reverts_go_back_to_a_page_of_the_server() {
+        let i = instance();
+        let local = u("tauri://localhost/");
+        let good = u("https://brainitive.example.com/workspaces/a");
+        assert_eq!(revert_target(true, Some(&good), Some(&i), &local), good);
+        assert_eq!(revert_target(true, None, Some(&i), &local), local);
+        // a last page of another server is never the way back
+        let other = u("https://other.example.com/x");
+        assert_eq!(revert_target(true, Some(&other), Some(&i), &local), local);
+        assert_eq!(
+            revert_target(false, Some(&good), Some(&i), &local),
+            u("https://brainitive.example.com/dashboard")
+        );
+        assert_eq!(revert_target(false, None, None, &local), local);
     }
 
     #[test]

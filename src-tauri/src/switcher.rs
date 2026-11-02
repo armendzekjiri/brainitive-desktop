@@ -207,8 +207,8 @@ pub async fn switcher_search(
 pub fn switcher_open(app: AppHandle, webview: Webview, url: String) -> Result<(), UiError> {
     caller(&app, &webview)?;
     let origin = signed_in_origin(&app)?;
-    let page =
-        crate::links::resolve_on_instance(&origin, &url).ok_or_else(|| ui("invalid", "Not a page of this server."))?;
+    let page = crate::links::resolve_deep_link_target(&origin, &url)
+        .ok_or_else(|| ui("invalid", "Not a page of this server."))?;
     popup::hide(&app, Popup::Switcher);
     crate::shell::navigate_to(&app, &origin, page);
     Ok(())

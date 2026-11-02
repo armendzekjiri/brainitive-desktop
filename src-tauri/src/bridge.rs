@@ -70,8 +70,9 @@ pub fn brainitive_notify(
         }
         inner.notify_times.push_back(now);
     }
-    // a link that is not a page of this server is dropped, the notification still shows
-    let target = url.as_deref().and_then(|u| links::resolve_on_instance(&origin, u));
+    // a link that is not a page of this server (or is one of its auth endpoints) is dropped,
+    // the notification still shows
+    let target = url.as_deref().and_then(|u| links::resolve_deep_link_target(&origin, u));
     show_notification(&app, &clip(&title, MAX_TITLE), &clip(&body, MAX_BODY), target);
     Ok(())
 }
@@ -156,7 +157,9 @@ pub fn on_notification_action(app: &AppHandle, action_id: &str, id: Option<i32>)
             // the server may have been switched since the notification was shown
             let current = state(app).lock().current_origin();
             match current {
-                Some(origin) if origin.contains(&page) => shell::navigate_to(app, &origin, page),
+                Some(origin) if origin.contains(&page) && links::is_deep_link_safe(&page) => {
+                    shell::navigate_to(app, &origin, page)
+                }
                 _ => shell::focus_main(app),
             }
         }

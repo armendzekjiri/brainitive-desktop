@@ -474,8 +474,9 @@ pub async fn handle_deep_link(app: &AppHandle, url: Url) {
                 (inner.current_origin(), inner.phase)
             };
             let Some(origin) = origin else { return };
-            let Some(page) = links::resolve_on_instance(&origin, &target) else {
-                log::info!("deep link to another origin ignored");
+            // never the auth endpoints (`/app/session/<code>` would be login CSRF)
+            let Some(page) = links::resolve_deep_link_target(&origin, &target) else {
+                log::info!("deep link to another origin or an auth page ignored");
                 return;
             };
             if phase == Phase::InApp {

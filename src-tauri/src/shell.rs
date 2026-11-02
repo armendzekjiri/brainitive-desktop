@@ -52,14 +52,11 @@ pub fn user_agent() -> String {
     format!("{base} BrainitiveDesktop/{APP_VERSION}")
 }
 
-/// Where the bundled screens are served from (`tauri://localhost`, `http://tauri.localhost`
-/// on Windows, the Vite dev server in `tauri dev`).
+/// Where the bundled screens are served from: this platform's one Tauri origin
+/// (`tauri://localhost` on macOS / Linux, `http://tauri.localhost` on Windows, see
+/// [`links::bundled_origin`]) and the Vite dev server in `tauri dev`.
 pub fn local_origins(app: &AppHandle) -> Vec<String> {
-    let mut origins = vec![
-        "tauri://localhost".to_string(),
-        "http://tauri.localhost".to_string(),
-        "https://tauri.localhost".to_string(),
-    ];
+    let mut origins = vec![links::bundled_origin(cfg!(windows)).to_string()];
     if tauri::is_dev() {
         if let Some(dev) = &app.config().build.dev_url {
             origins.push(links::origin_key(dev));
@@ -74,12 +71,7 @@ pub fn local_url(app: &AppHandle) -> Url {
             return dev.clone();
         }
     }
-    let base = if cfg!(windows) {
-        "http://tauri.localhost/"
-    } else {
-        "tauri://localhost/"
-    };
-    Url::parse(base).expect("static url")
+    Url::parse(&format!("{}/", links::bundled_origin(cfg!(windows)))).expect("static url")
 }
 
 pub fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
@@ -408,7 +400,8 @@ pub fn open_page(app: &AppHandle, path: &str) {
         focus_main(app);
         return;
     };
-    let Some(url) = links::resolve_on_instance(&origin, path) else {
+    // menus use fixed paths, the tray and timer links come from the server: never an auth page
+    let Some(url) = links::resolve_deep_link_target(&origin, path) else {
         return;
     };
     navigate_to(app, &origin, url);
@@ -486,8 +479,10 @@ fn on_navigation(app: &AppHandle, label: &str, url: &Url) -> bool {
         }
         Navigation::Foreign(url) => {
             // Windows reports top-level navigations only → open outside right away. macOS and
-            // Linux also report iframes (YouTube, Figma embeds): allow, the page-load guard
-            // catches a top-level load.
+            // Linux also report iframes (YouTube, Figma embeds), and wry 0.57 hands this handler
+            // the URL only (no WKNavigationAction.targetFrame / WebKitGTK frame name), so a
+            // top-level load can't be told apart here: allow, the page-load guard reverts a
+            // top-level one as soon as it commits (`links::decide_page_load`, BRAI-377).
             if cfg!(windows) {
                 open_external(app, &url);
                 false
@@ -520,33 +515,34 @@ fn on_page_load(app: &AppHandle, window: &WebviewWindow, url: &Url, event: PageL
             "bundled shell loaded"
         });
     }
-    match (event, allowed) {
-        (PageLoadEvent::Started, false) => {
-            // a top-level load of another site: cancel it in the still-current document and
-            // open it in the browser instead (it never gets IPC either way: see capabilities)
+    let started = event == PageLoadEvent::Started;
+    match links::decide_page_load(url, instance.as_ref(), &local_origins(app), started) {
+        links::PageLoad::Revert { outside } => {
+            // The main frame committed to another site (a link the navigation handler had to let
+            // through because macOS / Linux report iframes there too, or a server redirect). It
+            // never gets IPC (see capabilities); stop it and go back at once — on `Started`, not
+            // only after it finished loading — and open it in the browser instead.
             let _ = window.eval("window.stop()");
-            if links::external_url(url.as_str()).is_some() {
-                open_external(app, url);
+            let back = {
+                let last_good = state(app).lock().last_good.clone();
+                links::revert_target(
+                    window.label() == MAIN,
+                    last_good.as_ref(),
+                    instance.as_ref(),
+                    &local_url(app),
+                )
+            };
+            defer_navigate(app, window.label(), back);
+            if let Some(outside) = outside {
+                open_external(app, &outside);
             }
         }
-        (PageLoadEvent::Finished, false) => {
-            // window.stop() came too late (e.g. a server redirect): go back
-            let back = if window.label() == MAIN {
-                state(app).lock().last_good.clone().unwrap_or_else(|| local_url(app))
-            } else {
-                instance
-                    .as_ref()
-                    .map(|o| o.join("/dashboard"))
-                    .unwrap_or_else(|| local_url(app))
-            };
-            let _ = window.navigate(back);
-        }
-        (PageLoadEvent::Finished, true) => {
-            if window.label() == MAIN && instance.is_some_and(|o| o.contains(url)) {
+        links::PageLoad::Remember => {
+            if window.label() == MAIN {
                 state(app).lock().last_good = Some(url.clone());
             }
         }
-        (PageLoadEvent::Started, true) => {}
+        links::PageLoad::Keep => {}
     }
 }
 
