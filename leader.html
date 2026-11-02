@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Brainitive Key</title>
+    <link rel="stylesheet" href="/src/native.css" />
+    <link rel="stylesheet" href="/src/popup.css" />
+    <script type="module" src="/src/leader.ts"></script>
+  </head>
+  <body class="popup">
+    <div class="leader">
+      <header class="popup-head">
+        <img src="/logo.png" alt="" width="18" height="18" />
+        <strong>Brainitive key</strong>
+        <kbd id="leader-key" hidden></kbd>
+        <span class="spacer"></span>
+        <kbd>Esc</kbd>
+      </header>
+      <ul id="actions" class="leader-actions" aria-label="Press a letter"></ul>
+      <p id="status" class="status muted" role="status" aria-live="polite">Press a letter.</p>
+    </div>
+  </body>
+</html>

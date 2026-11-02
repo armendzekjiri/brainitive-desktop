@@ -25,6 +25,10 @@ pub struct PrefsView {
     server: Option<String>,
     signed_in: bool,
     zoom_percent: u32,
+    /// The Brainitive key (BRAI-440): "⌃⌘K"; empty = off.
+    leader_shortcut: String,
+    /// The letter of each action after the Brainitive key.
+    leader_letters: Vec<LetterView>,
     /// "⇧⌘Space" etc.; empty = off.
     capture_shortcut: String,
     switcher_shortcut: String,
@@ -46,6 +50,14 @@ pub struct PrefsView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LetterView {
+    id: &'static str,
+    name: &'static str,
+    letter: char,
+    default: char,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Language {
     code: &'static str,
     name: &'static str,
@@ -63,6 +75,16 @@ pub fn view(app: &AppHandle) -> PrefsView {
         server: inner.current_origin().map(|o| o.display_name()),
         signed_in: inner.phase == Phase::InApp,
         zoom_percent: (prefs.zoom * 100.0).round() as u32,
+        leader_shortcut: crate::shortcuts::label_of(prefs.leader_shortcut.as_deref()),
+        leader_letters: crate::leader::LeaderAction::ALL
+            .into_iter()
+            .map(|a| LetterView {
+                id: a.id(),
+                name: a.name(),
+                letter: prefs.leader_letters.get(a),
+                default: a.default_letter(),
+            })
+            .collect(),
         capture_shortcut: crate::shortcuts::label_of(prefs.capture_shortcut.as_deref()),
         switcher_shortcut: crate::shortcuts::label_of(prefs.switcher_shortcut.as_deref()),
         voice_shortcut: crate::shortcuts::label_of(prefs.voice_shortcut.as_deref()),
@@ -121,8 +143,9 @@ pub enum ShortcutChoice {
     Keys(String),
 }
 
-/// Changes a global shortcut. It is registered right away; when the OS refuses it (another app
-/// has it) the previous shortcuts stay and the error says why.
+/// Changes a global shortcut (`which`: `leader`, `capture`, `switcher`, `voice`). It is
+/// registered right away; when the OS refuses it (another app has it) the previous shortcuts stay
+/// and the error says why.
 #[tauri::command]
 pub fn settings_set_shortcut(
     app: AppHandle,
@@ -130,37 +153,85 @@ pub fn settings_set_shortcut(
     which: String,
     choice: ShortcutChoice,
 ) -> Result<PrefsView, String> {
+    use crate::hotkeys::HotkeyAction;
     popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    let action = match which.as_str() {
+        "leader" => HotkeyAction::Leader,
+        "capture" => HotkeyAction::Capture,
+        "switcher" => HotkeyAction::Switcher,
+        "voice" => HotkeyAction::Voice,
+        _ => return Err("unknown shortcut".into()),
+    };
     let value = match choice {
         ShortcutChoice::Off => None,
-        ShortcutChoice::Default => Some(match which.as_str() {
-            "switcher" => crate::shortcuts::DEFAULT_SWITCHER.to_string(),
-            "voice" => crate::shortcuts::DEFAULT_VOICE.to_string(),
-            _ => crate::shortcuts::DEFAULT_CAPTURE.to_string(),
-        }),
+        ShortcutChoice::Default => Some(
+            match action {
+                HotkeyAction::Leader => crate::shortcuts::DEFAULT_LEADER,
+                HotkeyAction::Capture => crate::shortcuts::DEFAULT_CAPTURE,
+                HotkeyAction::Switcher => crate::shortcuts::DEFAULT_SWITCHER,
+                HotkeyAction::Voice => crate::shortcuts::DEFAULT_VOICE,
+            }
+            .to_string(),
+        ),
         ShortcutChoice::Keys(keys) => Some(
             crate::shortcuts::parse(&keys)
                 .map(|s| crate::shortcuts::canonical(&s))
                 .map_err(|e| e.to_string())?,
         ),
     };
+    let label = crate::shortcuts::label_of(value.as_deref());
     let previous = state(&app).lock().settings.preferences.clone();
     let mut next = previous.clone();
-    match which.as_str() {
-        "capture" => next.capture_shortcut = value,
-        "switcher" => next.switcher_shortcut = value,
-        "voice" => next.voice_shortcut = value,
-        _ => return Err("unknown shortcut".into()),
+    match action {
+        HotkeyAction::Leader => next.leader_shortcut = value,
+        HotkeyAction::Capture => next.capture_shortcut = value,
+        HotkeyAction::Switcher => next.switcher_shortcut = value,
+        HotkeyAction::Voice => next.voice_shortcut = value,
+    }
+    if let Some(other) = crate::hotkeys::conflict(&next, action) {
+        return Err(format!("{} already uses {label}.", other.name()));
     }
     crate::hotkeys::validate(&next)?;
     state(&app).lock().settings.preferences = next;
-    if let Err(e) = crate::hotkeys::apply(&app) {
-        state(&app).lock().settings.preferences = previous;
-        let _ = crate::hotkeys::apply(&app);
-        return Err(e);
+    if let Err(errors) = crate::hotkeys::apply_each(&app) {
+        // only a refusal of the changed shortcut undoes the change (another one may have been
+        // refused since the start, e.g. taken by an app that is still running)
+        if let Some((_, e)) = errors.into_iter().find(|(a, _)| *a == action) {
+            state(&app).lock().settings.preferences = previous;
+            let _ = crate::hotkeys::apply(&app);
+            return Err(e);
+        }
     }
     state(&app).lock().save_settings();
     crate::menu::refresh_shortcut_labels(&app);
+    crate::tray::refresh(&app);
+    Ok(view(&app))
+}
+
+/// The letter of one action after the Brainitive key (`letter`: `None` = its default). A–Z only,
+/// different from the other actions' letters.
+#[tauri::command]
+pub fn settings_set_leader_letter(
+    app: AppHandle,
+    webview: Webview,
+    action: String,
+    letter: Option<String>,
+) -> Result<PrefsView, String> {
+    popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    let action = crate::leader::LeaderAction::from_id(&action).ok_or("unknown action")?;
+    let letter = letter.unwrap_or_else(|| action.default_letter().to_string());
+    {
+        let s = state(&app);
+        let mut inner = s.lock();
+        let next = inner
+            .settings
+            .preferences
+            .leader_letters
+            .with(action, &letter)
+            .map_err(|e| e.to_string())?;
+        inner.settings.preferences.leader_letters = next;
+        inner.save_settings();
+    }
     Ok(view(&app))
 }
 

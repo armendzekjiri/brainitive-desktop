@@ -15,6 +15,8 @@ pub enum MenuAction {
     NewIssue,
     NewDoc,
     NewWindow,
+    /// "Brainitive Key…" (BRAI-440): the overlay, the key shown as its accelerator.
+    BrainitiveKey,
     QuickCapture,
     QuickSwitcher,
     VoiceCapture,
@@ -40,11 +42,12 @@ pub enum MenuAction {
 }
 
 impl MenuAction {
-    pub const ALL: [MenuAction; 25] = [
+    pub const ALL: [MenuAction; 26] = [
         Self::Settings,
         Self::NewIssue,
         Self::NewDoc,
         Self::NewWindow,
+        Self::BrainitiveKey,
         Self::QuickCapture,
         Self::QuickSwitcher,
         Self::VoiceCapture,
@@ -74,6 +77,7 @@ impl MenuAction {
             Self::NewIssue => "new-issue",
             Self::NewDoc => "new-doc",
             Self::NewWindow => "new-window",
+            Self::BrainitiveKey => "brainitive-key",
             Self::QuickCapture => "quick-capture",
             Self::QuickSwitcher => "quick-switcher",
             Self::VoiceCapture => "voice-capture",
@@ -164,6 +168,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let sep = || PredefinedMenuItem::separator(app);
 
     let settings = item(app, MenuAction::Settings, "Settings…")?;
+    let leader = item(app, MenuAction::BrainitiveKey, "Brainitive Key…")?;
     let capture = item(app, MenuAction::QuickCapture, "Quick Capture…")?;
     let switcher = item(app, MenuAction::QuickSwitcher, "Quick Switcher…")?;
     let voice = item(app, MenuAction::VoiceCapture, "Voice Capture…")?;
@@ -204,6 +209,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             &item(app, MenuAction::NewDoc, "New Doc")?,
             &item(app, MenuAction::NewWindow, "New Window")?,
             &sep()?,
+            &leader,
             &capture,
             &switcher,
             &voice,
@@ -317,6 +323,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         let s = state(app);
         let mut inner = s.lock();
         inner.server_menu_item = Some(current);
+        inner.leader_menu_item = Some(leader);
         inner.capture_menu_item = Some(capture);
         inner.switcher_menu_item = Some(switcher);
         inner.voice_menu_item = Some(voice);
@@ -342,14 +349,15 @@ pub fn refresh_update_item(app: &AppHandle) {
     }
 }
 
-/// Shows the global shortcuts next to Quick Capture / Quick Switcher / Voice Capture (display only: the OS
-/// delivers the global shortcut before the menu would see it).
+/// Shows the global shortcuts next to Brainitive Key / Quick Capture / Quick Switcher / Voice
+/// Capture (display only: the OS delivers the global shortcut before the menu would see it).
 pub fn refresh_shortcut_labels(app: &AppHandle) {
-    let (prefs, capture, switcher, voice) = {
+    let (prefs, leader, capture, switcher, voice) = {
         let s = state(app);
         let inner = s.lock();
         (
             inner.settings.preferences.clone(),
+            inner.leader_menu_item.clone(),
             inner.capture_menu_item.clone(),
             inner.switcher_menu_item.clone(),
             inner.voice_menu_item.clone(),
@@ -359,6 +367,9 @@ pub fn refresh_shortcut_labels(app: &AppHandle) {
         a.and_then(|a| crate::shortcuts::parse(a).ok())
             .map(|s| crate::shortcuts::canonical(&s))
     };
+    if let Some(item) = leader {
+        let _ = item.set_accelerator(accel(prefs.leader_shortcut.as_deref()));
+    }
     if let Some(item) = capture {
         let _ = item.set_accelerator(accel(prefs.capture_shortcut.as_deref()));
     }
@@ -377,6 +388,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
     };
     match action {
         MenuAction::Settings => crate::popup::show(app, crate::popup::Popup::Settings),
+        MenuAction::BrainitiveKey => crate::leader::show(app),
         MenuAction::QuickCapture => crate::capture::open_quick_capture(app, None),
         MenuAction::QuickSwitcher => crate::popup::show(app, crate::popup::Popup::Switcher),
         MenuAction::VoiceCapture => crate::voice::start_from_menu(app),

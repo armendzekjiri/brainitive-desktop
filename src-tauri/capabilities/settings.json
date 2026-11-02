@@ -10,6 +10,7 @@
     "allow-settings-reset-zoom",
     "allow-settings-close",
     "allow-settings-set-shortcut",
+    "allow-settings-set-leader-letter",
     "allow-settings-record-shortcut",
     "allow-settings-set-toggle",
     "allow-settings-set-voice-language",

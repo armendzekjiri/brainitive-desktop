@@ -32,7 +32,8 @@
         "capture",
         "switcher",
         "offline",
-        "voice"
+        "voice",
+        "leader"
       ]
     }
   },

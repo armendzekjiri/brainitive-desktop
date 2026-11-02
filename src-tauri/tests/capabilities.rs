@@ -32,7 +32,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         .collect();
     assert_eq!(
         enabled,
-        ["local", "settings", "capture", "switcher", "offline", "voice"]
+        ["local", "settings", "capture", "switcher", "offline", "voice", "leader"]
     );
 
     for (name, window, prefix) in [
@@ -41,6 +41,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         ("switcher", "switcher", "allow-switcher-"),
         ("offline", "offline", "allow-offline-"),
         ("voice", "voice", "allow-voice-"),
+        ("leader", "leader", "allow-leader-"),
     ] {
         let cap = capability(name);
         assert_eq!(cap["identifier"], name);
@@ -69,7 +70,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
 
 #[test]
 fn no_capability_file_grants_plugins_or_the_bridge() {
-    for name in ["local", "settings", "capture", "switcher", "offline", "voice"] {
+    for name in ["local", "settings", "capture", "switcher", "offline", "voice", "leader"] {
         for p in permissions(&capability(name)) {
             assert!(!p.contains("brainitive-"), "{name}: bridge command {p}");
             for plugin in [
@@ -93,7 +94,7 @@ fn no_capability_file_grants_plugins_or_the_bridge() {
 #[test]
 fn every_command_of_a_capability_is_in_the_app_manifest() {
     let build = std::fs::read_to_string(format!("{}/build.rs", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    for name in ["local", "settings", "capture", "switcher", "offline", "voice"] {
+    for name in ["local", "settings", "capture", "switcher", "offline", "voice", "leader"] {
         for p in permissions(&capability(name)) {
             if let Some(cmd) = p.strip_prefix("allow-") {
                 let cmd = cmd.replace('-', "_");
@@ -105,7 +106,7 @@ fn every_command_of_a_capability_is_in_the_app_manifest() {
 
 #[test]
 fn only_the_offline_window_gets_the_offline_commands() {
-    for name in ["local", "settings", "capture", "switcher", "voice"] {
+    for name in ["local", "settings", "capture", "switcher", "voice", "leader"] {
         for p in permissions(&capability(name)) {
             assert!(!p.starts_with("allow-offline-"), "{name} grants {p}");
         }
@@ -118,7 +119,7 @@ fn only_the_offline_window_gets_the_offline_commands() {
 
 #[test]
 fn only_the_voice_indicator_gets_the_voice_commands() {
-    for name in ["local", "settings", "capture", "switcher", "offline"] {
+    for name in ["local", "settings", "capture", "switcher", "offline", "leader"] {
         for p in permissions(&capability(name)) {
             assert!(!p.starts_with("allow-voice-"), "{name} grants {p}");
         }
@@ -152,7 +153,7 @@ fn only_the_settings_window_and_the_main_screens_get_the_update_commands() {
     let local = permissions(&capability("local"));
     assert!(local.contains(&"allow-check-for-update".to_string()));
     assert!(local.contains(&"allow-restart-to-update".to_string()));
-    for name in ["capture", "switcher", "offline", "voice"] {
+    for name in ["capture", "switcher", "offline", "voice", "leader"] {
         for p in permissions(&capability(name)) {
             let updater_command = ["for-update", "to-update", "update-channel"]
                 .iter()
@@ -160,9 +161,31 @@ fn only_the_settings_window_and_the_main_screens_get_the_update_commands() {
             assert!(!updater_command, "{name} grants {p}");
         }
     }
-    for name in ["local", "settings", "capture", "switcher", "offline", "voice"] {
+    for name in ["local", "settings", "capture", "switcher", "offline", "voice", "leader"] {
         for p in permissions(&capability(name)) {
             assert!(!p.starts_with("updater:"), "{name} grants the plugin's {p}");
         }
     }
+}
+
+#[test]
+fn the_brainitive_key_overlay_gets_its_four_commands_only() {
+    // BRAI-440: no events, no server, no other window's commands; the letters' actions run in Rust
+    let leader = capability("leader");
+    assert_eq!(
+        permissions(&leader),
+        [
+            "allow-leader-view",
+            "allow-leader-press",
+            "allow-leader-release",
+            "allow-leader-close"
+        ]
+    );
+    for name in ["local", "settings", "capture", "switcher", "offline", "voice"] {
+        for p in permissions(&capability(name)) {
+            assert!(!p.starts_with("allow-leader-"), "{name} grants {p}");
+        }
+    }
+    // the indicator's own key-up command (hold the letter to talk) stays with the indicator
+    assert!(permissions(&capability("voice")).contains(&"allow-voice-release".to_string()));
 }

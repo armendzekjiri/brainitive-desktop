@@ -31,6 +31,7 @@ fn main() {
             "settings_reset_zoom",
             "settings_close",
             "settings_set_shortcut",
+            "settings_set_leader_letter",
             "settings_record_shortcut",
             "settings_set_toggle",
             "settings_set_voice_language",
@@ -69,6 +70,12 @@ fn main() {
             "voice_download",
             "voice_open_privacy",
             "voice_close",
+            "voice_release",
+            // the Brainitive key overlay (capabilities/leader.json, BRAI-440)
+            "leader_view",
+            "leader_press",
+            "leader_release",
+            "leader_close",
         ])),
     )
     .expect("failed to run tauri-build");

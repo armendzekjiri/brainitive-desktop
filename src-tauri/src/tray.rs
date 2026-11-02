@@ -72,6 +72,8 @@ pub struct TrayData {
 /// What a click on a tray item does.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrayAction {
+    /// The Brainitive key overlay (BRAI-440).
+    Leader,
     Capture,
     Switcher,
     /// Voice capture (BRAI-439).
@@ -96,6 +98,7 @@ pub enum TrayAction {
 impl TrayAction {
     pub fn id(&self) -> String {
         match self {
+            Self::Leader => "tray-leader".into(),
             Self::Capture => "tray-capture".into(),
             Self::Switcher => "tray-switcher".into(),
             Self::Voice => "tray-voice".into(),
@@ -120,6 +123,7 @@ impl TrayAction {
             return is_work_id(work).then(|| Self::ToggleDay(work.to_string()));
         }
         Some(match id {
+            "tray-leader" => Self::Leader,
             "tray-capture" => Self::Capture,
             "tray-switcher" => Self::Switcher,
             "tray-voice" => Self::Voice,
@@ -323,6 +327,31 @@ pub fn model(
     out
 }
 
+/// Adds "Brainitive Key…" with the key (BRAI-440) above Quick Capture, while the key is on.
+pub fn add_leader_entry(entries: &mut Vec<Entry>, leader: Option<String>) {
+    let Some(leader) = leader else { return };
+    let at = entries
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                Entry::Item {
+                    action: Some(TrayAction::Capture),
+                    ..
+                }
+            )
+        })
+        .unwrap_or(entries.len());
+    entries.insert(
+        at,
+        Entry::Item {
+            action: Some(TrayAction::Leader),
+            text: "Brainitive Key…".into(),
+            accelerator: Some(leader),
+        },
+    );
+}
+
 /// Adds the update line above "Open Brainitive" (BRAI-373): "Restart to Update (x.y.z)" when an
 /// update waits, else "Check for Updates…" (greyed while a check or download runs). Nothing when
 /// updates are off for this build (placeholder key, development build).
@@ -431,7 +460,7 @@ fn tray(app: &AppHandle) -> Option<TrayIcon<Wry>> {
 /// Rebuilds the menu, tooltip and (macOS) the count next to the icon from the current data.
 pub fn refresh(app: &AppHandle) {
     let Some(tray) = tray(app) else { return };
-    let (server, signed_in, data, capture, switcher, voice, offline, update_availability, update_status) = {
+    let (server, signed_in, data, leader, capture, switcher, voice, offline, update_availability, update_status) = {
         let s = state(app);
         let inner = s.lock();
         let accel = |a: Option<&str>| {
@@ -442,6 +471,7 @@ pub fn refresh(app: &AppHandle) {
             inner.current_origin().map(|o| o.display_name()),
             inner.phase == Phase::InApp,
             inner.tray_data.clone(),
+            accel(inner.settings.preferences.leader_shortcut.as_deref()),
             accel(inner.settings.preferences.capture_shortcut.as_deref()),
             accel(inner.settings.preferences.switcher_shortcut.as_deref()),
             accel(inner.settings.preferences.active_voice_shortcut().as_deref()),
@@ -451,6 +481,7 @@ pub fn refresh(app: &AppHandle) {
         )
     };
     let mut entries = model(server.as_deref(), signed_in, &data, capture, switcher, voice, &offline);
+    add_leader_entry(&mut entries, leader);
     add_update_entry(&mut entries, update_availability, &update_status);
     {
         // unchanged: keep the native menu (it may be open right now)
@@ -497,6 +528,7 @@ pub fn reset(app: &AppHandle) {
 pub fn on_menu_event(app: &AppHandle, id: &str) {
     let Some(action) = TrayAction::from_id(id) else { return };
     match action {
+        TrayAction::Leader => crate::leader::show(app),
         TrayAction::Capture => popup::show(app, Popup::Capture),
         TrayAction::Switcher => popup::show(app, Popup::Switcher),
         TrayAction::Voice => crate::voice::start_from_menu(app),
@@ -856,6 +888,7 @@ mod tests {
     #[test]
     fn action_ids_round_trip() {
         for a in [
+            TrayAction::Leader,
             TrayAction::Capture,
             TrayAction::Switcher,
             TrayAction::Voice,
@@ -940,6 +973,52 @@ mod tests {
         // voice capture is offered even signed out (the text waits in quick capture)
         assert!(m.iter().any(
             |e| matches!(e, Entry::Item { action: Some(TrayAction::Voice), text, .. } if text == "Voice Capture…")
+        ));
+    }
+
+    #[test]
+    fn the_brainitive_key_sits_above_quick_capture_while_it_is_on() {
+        let base = model(
+            Some("Cloud"),
+            true,
+            &TrayData::default(),
+            None,
+            None,
+            None,
+            &Default::default(),
+        );
+        let mut off = base.clone();
+        add_leader_entry(&mut off, None);
+        assert_eq!(off, base);
+        let mut on = base.clone();
+        add_leader_entry(&mut on, Some("control+super+KeyK".into()));
+        assert_eq!(on.len(), base.len() + 1);
+        let at = on
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    Entry::Item {
+                        action: Some(TrayAction::Leader),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            on[at],
+            Entry::Item {
+                action: Some(TrayAction::Leader),
+                text: "Brainitive Key…".into(),
+                accelerator: Some("control+super+KeyK".into())
+            }
+        );
+        assert!(matches!(
+            &on[at + 1],
+            Entry::Item {
+                action: Some(TrayAction::Capture),
+                ..
+            }
         ));
     }
 

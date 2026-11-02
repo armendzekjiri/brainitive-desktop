@@ -282,3 +282,50 @@ kbd.on-accent {
 .capture-row .mic {
     flex: none;
 }
+
+/* the Brainitive key overlay (BRAI-440) */
+.leader {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    height: 100%;
+    padding: 14px 16px 10px;
+}
+
+.leader-actions {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.leader-actions li {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 8px;
+    border-radius: 8px;
+}
+
+.leader-actions li kbd {
+    min-width: 1.9em;
+    text-align: center;
+    font-size: 14px;
+    color: var(--text);
+}
+
+.leader-actions li.pressed {
+    background: var(--accent-soft);
+}
+
+.leader-actions li.off {
+    opacity: 0.55;
+}
+
+.leader-actions .hint {
+    margin-left: auto;
+    font-size: 11px;
+    text-align: right;
+}

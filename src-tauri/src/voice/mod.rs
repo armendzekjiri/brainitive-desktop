@@ -97,6 +97,11 @@ pub struct VoiceView {
     screen: Screen,
     /// "⇧⌘V"; empty when the shortcut is off.
     shortcut: String,
+    /// "Hold ⇧⌘V" / "Press ⌃⌘K, then hold V" (BRAI-440): how to start, for the intro / ready texts.
+    how_to_start: String,
+    /// "V" while a recording started with the Brainitive key's letter is held: its key-up in
+    /// this window ends it (`voice_release`). Empty otherwise.
+    release_key: String,
     platform: &'static str,
     model_name: &'static str,
     model_mb: u64,
@@ -119,6 +124,8 @@ struct Inner {
     loader: Option<(u64, JoinHandle<Result<whisper::Model, String>>)>,
     /// A model download in progress: its cancel flag and progress.
     download: Option<(Arc<AtomicBool>, u64)>,
+    /// The Brainitive key's letter held for the current recording (BRAI-440).
+    release_letter: Option<char>,
 }
 
 /// Managed by Tauri next to `AppState` (its own lock: the audio callbacks and transcription
@@ -150,6 +157,7 @@ pub fn init(app: &AppHandle, data_dir: PathBuf) {
             capture: None,
             loader: None,
             download: None,
+            release_letter: None,
         }),
         data_dir,
     });
@@ -164,7 +172,37 @@ pub fn on_hotkey(app: &AppHandle, pressed: bool) {
     } else if voice(app).lock().recorder.busy() {
         feed(app, Input::HotkeyDown);
     } else {
-        begin(app, true);
+        begin(app, true, None);
+    }
+}
+
+/// The Brainitive key's voice letter went down in its overlay (BRAI-440): like the direct
+/// shortcut, held to talk; its key-up arrives through [`leader_released`].
+pub fn start_from_leader(app: &AppHandle, letter: char) {
+    let (busy, repeat) = {
+        let v = voice(app);
+        let inner = v.lock();
+        let held = inner.recorder.phase() == Phase::Recording
+            && inner.recorder.mode() == recorder::Mode::Hold
+            && inner.release_letter == Some(letter);
+        (inner.recorder.busy(), held)
+    };
+    if repeat {
+        // the held key repeating: not a second press
+    } else if busy {
+        feed(app, Input::HotkeyDown);
+    } else {
+        begin(app, true, Some(letter));
+    }
+}
+
+/// The held letter went up (in the overlay or in the indicator, whichever has the focus).
+pub fn leader_released(app: &AppHandle, letter: char) {
+    let held = voice(app).lock().release_letter == Some(letter);
+    if held {
+        feed(app, Input::HotkeyUp { at: Instant::now() });
+        // a short tap latched toggle mode: the hint changes from "let go" to "↩ to finish"
+        emit_view(app);
     }
 }
 
@@ -174,12 +212,14 @@ pub fn start_from_menu(app: &AppHandle) {
     if voice(app).lock().recorder.busy() {
         feed(app, Input::Stop);
     } else {
-        begin(app, false);
+        begin(app, false, None);
     }
 }
 
 /// Everything a start needs, in order: turned on, model there, microphone allowed, then record.
-fn begin(app: &AppHandle, hold: bool) {
+/// `release`: the Brainitive key's letter that is held (its key-up comes from a window, not the
+/// global shortcut).
+fn begin(app: &AppHandle, hold: bool, release: Option<char>) {
     let enabled = state(app).lock().settings.preferences.voice_enabled;
     if !enabled {
         return show(app, Screen::Intro);
@@ -203,10 +243,17 @@ fn begin(app: &AppHandle, hold: bool) {
         MicPermission::NotDetermined => ask_permission(app),
         MicPermission::Granted | MicPermission::Unknown => {
             // the guard must be gone before `run` (it locks again): no `if let` on the lock
-            let effect = v.lock().recorder.handle(Input::Start {
-                at: Instant::now(),
-                hold,
-            });
+            let effect = {
+                let mut inner = v.lock();
+                let effect = inner.recorder.handle(Input::Start {
+                    at: Instant::now(),
+                    hold,
+                });
+                if effect.is_some() {
+                    inner.release_letter = release;
+                }
+                effect
+            };
             if let Some(effect) = effect {
                 show_window(app);
                 run(app, effect);
@@ -538,12 +585,7 @@ fn start_download(app: &AppHandle) {
                     .is_some_and(|w| w.is_visible().unwrap_or(false));
                 set_screen(&app, next_step(&app));
                 if !visible {
-                    let shortcut = shortcut_label(&app);
-                    let body = if shortcut.is_empty() {
-                        "Choose Voice Capture in the menu bar and speak.".to_string()
-                    } else {
-                        format!("Hold {shortcut} and speak.")
-                    };
+                    let body = format!("{} and speak.", how_to_start(&app));
                     crate::bridge::show_notification(&app, "Voice capture is ready", &body, None);
                 }
             }
@@ -562,12 +604,29 @@ fn shortcut_label(app: &AppHandle) -> String {
     crate::shortcuts::label_of(state(app).lock().settings.preferences.voice_shortcut.as_deref())
 }
 
+/// "Hold ⇧⌘V", else "Press ⌃⌘K, then hold V" (BRAI-440), else the menu.
+fn how_to_start(app: &AppHandle) -> String {
+    let prefs = state(app).lock().settings.preferences.clone();
+    crate::leader::voice_how_to(
+        &crate::shortcuts::label_of(prefs.voice_shortcut.as_deref()),
+        &crate::shortcuts::label_of(prefs.leader_shortcut.as_deref()),
+        prefs.leader_letters.voice,
+    )
+}
+
 fn view(app: &AppHandle) -> VoiceView {
     let shortcut = shortcut_label(app);
-    let screen = {
+    let how_to_start = how_to_start(app);
+    let (screen, release_key) = {
         let v = voice(app);
         let inner = v.lock();
-        match inner.recorder.phase() {
+        let held = inner.recorder.phase() == Phase::Recording && inner.recorder.mode() == recorder::Mode::Hold;
+        let release_key = inner
+            .release_letter
+            .filter(|_| held)
+            .map(String::from)
+            .unwrap_or_default();
+        let screen = match inner.recorder.phase() {
             Phase::Recording => Screen::Recording {
                 elapsed_ms: inner.recorder.elapsed(Instant::now()).as_millis() as u64,
                 max_ms: MAX_LENGTH.as_millis() as u64,
@@ -575,11 +634,14 @@ fn view(app: &AppHandle) -> VoiceView {
             },
             Phase::Transcribing => Screen::Transcribing,
             _ => inner.screen.clone(),
-        }
+        };
+        (screen, release_key)
     };
     VoiceView {
         screen,
         shortcut,
+        how_to_start,
+        release_key,
         platform: crate::api::platform(),
         model_name: MODEL.name,
         model_mb: MODEL.size.div_ceil(1_000_000),
@@ -617,6 +679,18 @@ pub fn voice_view(app: AppHandle, webview: Webview) -> Result<VoiceView, String>
 pub async fn voice_stop(app: AppHandle, webview: Webview) -> Result<(), String> {
     popup::ensure_caller(&app, &webview, Popup::Voice)?;
     feed(&app, Input::Stop);
+    Ok(())
+}
+
+/// The held Brainitive-key letter went up while this window had the focus (BRAI-440): ends a
+/// held recording (a short tap keeps it running, as with the direct shortcut).
+#[tauri::command]
+pub async fn voice_release(app: AppHandle, webview: Webview) -> Result<(), String> {
+    popup::ensure_caller(&app, &webview, Popup::Voice)?;
+    let letter = voice(&app).lock().release_letter;
+    if let Some(letter) = letter {
+        leader_released(&app, letter);
+    }
     Ok(())
 }
 
@@ -801,6 +875,8 @@ mod tests {
                 hold: true,
             },
             shortcut: "⇧⌘V".into(),
+            how_to_start: "Hold ⇧⌘V".into(),
+            release_key: "V".into(),
             platform: "macos",
             model_name: MODEL.name,
             model_mb: 82,
@@ -811,6 +887,8 @@ mod tests {
         assert_eq!(json["elapsed_ms"], 1500);
         assert_eq!(json["hold"], true);
         assert_eq!(json["shortcut"], "⇧⌘V");
+        assert_eq!(json["how_to_start"], "Hold ⇧⌘V");
+        assert_eq!(json["release_key"], "V");
         let json = serde_json::to_value(Screen::DownloadFailed { message: "x".into() }).unwrap();
         assert_eq!(json["screen"], "download_failed");
         assert_eq!(serde_json::to_value(Screen::Intro).unwrap()["screen"], "intro");

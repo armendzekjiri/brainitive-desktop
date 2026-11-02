@@ -1,5 +1,6 @@
-// The voice-capture indicator (BRAI-439): opened by the voice shortcut (⇧⌘V / Ctrl+Shift+V, held to
-// talk), the tray, the menu or quick capture's microphone button. It only shows what Rust tells it
+// The voice-capture indicator (BRAI-439): opened by the Brainitive key's voice letter (⌃⌘K, then hold
+// V; BRAI-440), the optional direct shortcut (held to talk), the tray, the menu or quick capture's
+// microphone button. It only shows what Rust tells it
 // (`voice://view`, `voice://level`) and asks Rust to start / stop / cancel: the microphone, the audio
 // and the transcription never reach this page.
 
@@ -20,6 +21,10 @@ type Screen =
 
 type View = Screen & {
     shortcut: string;
+    /** "Hold ⇧⌘V" / "Press ⌃⌘K, then hold V". */
+    how_to_start: string;
+    /** The Brainitive key's letter being held ("V"): its key-up here ends the recording. */
+    release_key: string;
     platform: 'macos' | 'windows' | 'linux';
     model_name: string;
     model_mb: number;
@@ -45,7 +50,7 @@ function mb(bytes: number): string {
 function render(v: View): void {
     current = v;
     document.querySelectorAll<HTMLElement>('[data-screen]').forEach((s) => (s.hidden = s.dataset.screen !== v.screen));
-    document.querySelectorAll('.shortcut').forEach((el) => (el.textContent = v.shortcut || 'the shortcut'));
+    document.querySelectorAll('.how-to-start').forEach((el) => (el.textContent = v.how_to_start));
     document.querySelectorAll('.model-mb').forEach((el) => (el.textContent = String(v.model_mb)));
     switch (v.screen) {
         case 'denied':
@@ -65,8 +70,9 @@ function render(v: View): void {
             $('timer').textContent = clock(v.elapsed_ms);
             $('max').textContent = clock(v.max_ms);
             const enter = '↩';
+            const held = v.release_key || v.shortcut;
             $('recording-hint').textContent = v.hold
-                ? `Let go of ${v.shortcut || 'the shortcut'} to finish`
+                ? `Let go of ${held || 'the key'} to finish`
                 : `${enter}${v.shortcut ? ` or ${v.shortcut}` : ''} to finish`;
             setLevel(0);
             break;
@@ -112,7 +118,25 @@ document.querySelectorAll<HTMLButtonElement>('[data-action]').forEach((button) =
     });
 });
 
+/** The held Brainitive-key letter (BRAI-440), by what it types or by its position. */
+function isReleaseKey(e: KeyboardEvent): boolean {
+    const key = current?.release_key;
+    if (!key) return false;
+    return e.code === `Key${key}` || e.key.toUpperCase() === key;
+}
+
+document.addEventListener('keyup', (e) => {
+    if (current?.screen !== 'recording' || !isReleaseKey(e)) return;
+    e.preventDefault();
+    void invoke('voice_release');
+});
+
 document.addEventListener('keydown', (e) => {
+    if (isReleaseKey(e)) {
+        // the letter repeating while it is held: nothing to type here
+        e.preventDefault();
+        return;
+    }
     if (e.key === 'Escape') {
         e.preventDefault();
         void invoke('voice_cancel');

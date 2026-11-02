@@ -14,6 +14,7 @@
     "allow-voice-turn-on",
     "allow-voice-download",
     "allow-voice-open-privacy",
-    "allow-voice-close"
+    "allow-voice-close",
+    "allow-voice-release"
   ]
 }

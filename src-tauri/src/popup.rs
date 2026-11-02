@@ -1,5 +1,6 @@
 //! The bundled windows (BRAI-359 quick capture, BRAI-401 quick switcher, the Settings window,
-//! BRAI-366 the offline view, BRAI-439 the voice-capture indicator).
+//! BRAI-366 the offline view, BRAI-439 the voice-capture indicator, BRAI-440 the Brainitive key
+//! overlay).
 //!
 //! They load bundled pages only (`capture.html`, `switcher.html`, `settings.html`, `offline.html`), never the
 //! server. They talk to the server exclusively through their own Rust commands, which use the
@@ -23,15 +24,18 @@ pub enum Popup {
     Offline,
     /// The voice-capture indicator (BRAI-439): level meter, timer, set-up steps.
     Voice,
+    /// The Brainitive key overlay (BRAI-440): lists the letters, reads the next key.
+    Leader,
 }
 
 impl Popup {
-    pub const ALL: [Popup; 5] = [
+    pub const ALL: [Popup; 6] = [
         Popup::Capture,
         Popup::Switcher,
         Popup::Settings,
         Popup::Offline,
         Popup::Voice,
+        Popup::Leader,
     ];
 
     pub fn label(self) -> &'static str {
@@ -41,6 +45,7 @@ impl Popup {
             Self::Settings => "settings",
             Self::Offline => "offline",
             Self::Voice => "voice",
+            Self::Leader => "leader",
         }
     }
 
@@ -55,6 +60,7 @@ impl Popup {
             Self::Settings => "settings.html",
             Self::Offline => "offline.html",
             Self::Voice => "voice.html",
+            Self::Leader => "leader.html",
         }
     }
 
@@ -65,6 +71,7 @@ impl Popup {
             Self::Settings => "Settings",
             Self::Offline => "Brainitive Offline",
             Self::Voice => "Voice Capture",
+            Self::Leader => "Brainitive Key",
         }
     }
 
@@ -75,12 +82,13 @@ impl Popup {
             Self::Settings => (560.0, 640.0),
             Self::Offline => (920.0, 680.0),
             Self::Voice => (420.0, 200.0),
+            Self::Leader => (340.0, 252.0),
         }
     }
 
     /// Spotlight-like: no frame, above other windows, on every desktop.
     pub fn floating(self) -> bool {
-        matches!(self, Self::Capture | Self::Switcher | Self::Voice)
+        matches!(self, Self::Capture | Self::Switcher | Self::Voice | Self::Leader)
     }
 
     /// Windows that hold the signed-in account's content (typed or transcribed capture text,
@@ -93,7 +101,7 @@ impl Popup {
     /// Gone when it loses focus. Not the voice indicator: a recording goes on while the user
     /// clicks elsewhere (its own Stop / Cancel and the shortcut end it).
     pub fn hides_on_blur(self) -> bool {
-        matches!(self, Self::Capture | Self::Switcher)
+        matches!(self, Self::Capture | Self::Switcher | Self::Leader)
     }
 }
 
@@ -285,5 +293,9 @@ mod tests {
         assert!(Popup::Voice.floating() && !Popup::Voice.hides_on_blur());
         assert!(Popup::Capture.hides_on_blur() && Popup::Switcher.hides_on_blur());
         assert_eq!(Popup::from_label("voice"), Some(Popup::Voice));
+        // the Brainitive key overlay: floats, goes when the focus moves on, holds no account data
+        assert!(Popup::Leader.floating() && Popup::Leader.hides_on_blur());
+        assert!(!Popup::Leader.holds_account_data());
+        assert_eq!(Popup::from_label("leader"), Some(Popup::Leader));
     }
 }

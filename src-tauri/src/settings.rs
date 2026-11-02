@@ -45,9 +45,19 @@ pub struct Settings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
+    /// The Brainitive key (BRAI-440): one global shortcut, then a letter in its overlay;
+    /// `None` = off.
+    pub leader_shortcut: Option<String>,
+    /// The letter of each action after the Brainitive key (A–Z, all different).
+    #[serde(deserialize_with = "crate::leader::lenient_letters")]
+    pub leader_letters: crate::leader::LeaderLetters,
+    /// Which shortcut defaults the file was written with: 0 (missing) = before the Brainitive key,
+    /// see [`Preferences::migrate`].
+    #[serde(default)]
+    pub shortcut_scheme: u32,
     /// Global quick-capture shortcut (accelerator string); `None` = off.
     pub capture_shortcut: Option<String>,
-    /// Global quick-switcher shortcut; `None` = off.
+    /// Direct quick-switcher shortcut; `None` = off (the default since BRAI-440: ⌃⌘K K).
     pub switcher_shortcut: Option<String>,
     /// Launched at login: stay in the tray / menu bar instead of opening the window.
     pub start_hidden: bool,
@@ -60,7 +70,8 @@ pub struct Preferences {
     /// Voice capture (BRAI-439): off until the user turns it on (Settings, or the first press of
     /// its shortcut).
     pub voice_enabled: bool,
-    /// Global voice-capture shortcut (hold to talk); `None` = off.
+    /// Direct voice-capture shortcut (hold to talk); `None` = off (the default since BRAI-440:
+    /// ⌃⌘K, then hold V).
     pub voice_shortcut: Option<String>,
     /// Spoken language: "auto" or a code of `voice::LANGUAGES`.
     pub voice_language: String,
@@ -75,14 +86,17 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            leader_shortcut: Some(crate::shortcuts::DEFAULT_LEADER.to_string()),
+            leader_letters: crate::leader::LeaderLetters::default(),
+            shortcut_scheme: SHORTCUT_SCHEME,
             capture_shortcut: Some(crate::shortcuts::DEFAULT_CAPTURE.to_string()),
-            switcher_shortcut: Some(crate::shortcuts::DEFAULT_SWITCHER.to_string()),
+            switcher_shortcut: None,
             start_hidden: true,
             keep_in_tray: true,
             ask_where_to_save: true,
             zoom: 1.0,
             voice_enabled: false,
-            voice_shortcut: Some(crate::shortcuts::DEFAULT_VOICE.to_string()),
+            voice_shortcut: None,
             voice_language: crate::voice::AUTO_LANGUAGE.to_string(),
             auto_update_check: true,
             update_channel: crate::updater::Channel::Stable,
@@ -90,7 +104,46 @@ impl Default for Preferences {
     }
 }
 
+/// The shortcut defaults of this version: 1 = the Brainitive key (BRAI-440).
+pub const SHORTCUT_SCHEME: u32 = 1;
+/// The quick switcher's default as files before BRAI-440 stored it (untouched, or "Default").
+const OLD_DEFAULT_SWITCHER: &str = "CommandOrControl+Alt+K";
+/// Voice capture's default as files before BRAI-440 stored it.
+const OLD_DEFAULT_VOICE: &str = "CommandOrControl+Shift+KeyV";
+
 impl Preferences {
+    /// Brings a file of an older version to the current shortcut defaults; `true` = changed.
+    ///
+    /// Every field is written to the file, so "never changed" can't be told by a missing field.
+    /// It is told by the **exact string**: a default is stored as its constant
+    /// (`CommandOrControl+Alt+K`), recorded keys always in the canonical form (`alt+super+KeyK`).
+    /// So only the old defaults of the quick switcher and voice capture become Off (the
+    /// Brainitive key does that now); recorded keys and an explicit Off stay. The Brainitive key
+    /// starts on, unless a kept direct shortcut already uses its keys.
+    pub fn migrate(&mut self) -> bool {
+        if self.shortcut_scheme >= SHORTCUT_SCHEME {
+            return false;
+        }
+        if self.switcher_shortcut.as_deref() == Some(OLD_DEFAULT_SWITCHER) {
+            self.switcher_shortcut = None;
+        }
+        if self.voice_shortcut.as_deref() == Some(OLD_DEFAULT_VOICE) {
+            self.voice_shortcut = None;
+        }
+        let parse = |s: &Option<String>| s.as_deref().and_then(|a| crate::shortcuts::parse(a).ok());
+        if let Some(leader) = parse(&self.leader_shortcut) {
+            let taken = [&self.capture_shortcut, &self.switcher_shortcut, &self.voice_shortcut]
+                .into_iter()
+                .filter_map(parse)
+                .any(|s| s.id() == leader.id());
+            if taken {
+                self.leader_shortcut = None;
+            }
+        }
+        self.shortcut_scheme = SHORTCUT_SCHEME;
+        true
+    }
+
     /// The voice shortcut that is **registered**: only while voice capture is on. Off, the keys
     /// belong to other apps (⇧⌘V / Ctrl+Shift+V = paste as plain text, paste in Linux terminals).
     pub fn active_voice_shortcut(&self) -> Option<String> {
@@ -136,6 +189,12 @@ impl Settings {
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
             .map(|mut s| {
+                if s.preferences.migrate() {
+                    log::info!("settings: shortcuts moved to the Brainitive key (BRAI-440)");
+                    if let Err(e) = s.save(path) {
+                        log::warn!("could not save the migrated settings: {e}");
+                    }
+                }
                 s.preferences.zoom = clamp_zoom(s.preferences.zoom);
                 if !crate::voice::is_language(&s.preferences.voice_language) {
                     s.preferences.voice_language = crate::voice::AUTO_LANGUAGE.to_string();
@@ -258,7 +317,8 @@ mod tests {
     fn voice_capture_is_off_by_default_and_old_files_get_its_defaults() {
         let p = Preferences::default();
         assert!(!p.voice_enabled);
-        assert_eq!(p.voice_shortcut.as_deref(), Some(crate::shortcuts::DEFAULT_VOICE));
+        // BRAI-440: no direct shortcut by default (⌃⌘K, then hold V)
+        assert_eq!(p.voice_shortcut, None);
         assert_eq!(p.voice_language, "auto");
         // a file from before BRAI-439
         let s: Settings = serde_json::from_str(r#"{"preferences":{"zoom":1.1}}"#).unwrap();
@@ -272,6 +332,104 @@ mod tests {
         assert!(s.preferences.voice_enabled);
         assert_eq!(s.preferences.voice_shortcut, None);
         assert_eq!(s.preferences.voice_language, "sq");
+    }
+
+    /// A whole `preferences` object as a version before BRAI-440 wrote it.
+    fn old_file(switcher: &str, voice: &str, capture: &str) -> Preferences {
+        let json = format!(
+            r#"{{"capture_shortcut":{capture},"switcher_shortcut":{switcher},"start_hidden":true,"keep_in_tray":true,"ask_where_to_save":true,"zoom":1.0,"voice_enabled":true,"voice_shortcut":{voice},"voice_language":"auto","auto_update_check":true,"update_channel":"stable"}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn new_installs_get_the_brainitive_key_and_capture_only() {
+        let p = Preferences::default();
+        assert_eq!(p.leader_shortcut.as_deref(), Some(crate::shortcuts::DEFAULT_LEADER));
+        assert_eq!(p.leader_letters, crate::leader::LeaderLetters::default());
+        assert_eq!(p.capture_shortcut.as_deref(), Some(crate::shortcuts::DEFAULT_CAPTURE));
+        assert_eq!(p.switcher_shortcut, None);
+        assert_eq!(p.voice_shortcut, None);
+        assert_eq!(p.shortcut_scheme, SHORTCUT_SCHEME);
+        let mut again = p.clone();
+        assert!(!again.migrate(), "nothing to migrate");
+        assert_eq!(again, p);
+        // a written file reads back without a migration
+        let s: Settings = serde_json::from_str(&serde_json::to_string(&Settings::default()).unwrap()).unwrap();
+        assert_eq!(s.preferences.shortcut_scheme, SHORTCUT_SCHEME);
+    }
+
+    #[test]
+    fn migration_turns_off_only_the_old_defaults() {
+        // untouched (or "Default"): the constants as they were stored
+        let mut p = old_file(
+            r#""CommandOrControl+Alt+K""#,
+            r#""CommandOrControl+Shift+KeyV""#,
+            r#""CommandOrControl+Shift+Space""#,
+        );
+        assert_eq!(p.shortcut_scheme, 0, "missing = before BRAI-440");
+        assert!(p.migrate());
+        assert_eq!(p.switcher_shortcut, None);
+        assert_eq!(p.voice_shortcut, None);
+        assert_eq!(p.capture_shortcut.as_deref(), Some("CommandOrControl+Shift+Space"));
+        assert_eq!(p.leader_shortcut.as_deref(), Some(crate::shortcuts::DEFAULT_LEADER));
+        assert!(p.voice_enabled, "other preferences are kept");
+        assert_eq!(p.shortcut_scheme, SHORTCUT_SCHEME);
+        // once only: a later "Default" press (the same string) is not undone at the next start
+        p.voice_shortcut = Some("CommandOrControl+Shift+KeyV".into());
+        assert!(!p.migrate());
+        assert!(p.voice_shortcut.is_some());
+
+        // recorded by the user (canonical form, even on the same keys) and explicit Off: kept
+        let mut p = old_file(r#""alt+super+KeyK""#, "null", r#""control+shift+KeyJ""#);
+        assert!(p.migrate());
+        assert_eq!(p.switcher_shortcut.as_deref(), Some("alt+super+KeyK"));
+        assert_eq!(p.voice_shortcut, None);
+        assert_eq!(p.capture_shortcut.as_deref(), Some("control+shift+KeyJ"));
+        assert!(p.leader_shortcut.is_some());
+    }
+
+    #[test]
+    fn migration_never_gives_the_brainitive_key_keys_the_user_chose_for_another_shortcut() {
+        let leader = crate::shortcuts::parse(crate::shortcuts::DEFAULT_LEADER).unwrap();
+        let recorded = format!("\"{}\"", crate::shortcuts::canonical(&leader));
+        let mut p = old_file(&recorded, "null", r#""CommandOrControl+Shift+Space""#);
+        assert!(p.migrate());
+        assert_eq!(
+            p.leader_shortcut, None,
+            "starts off rather than taking the switcher's keys"
+        );
+        assert!(p.switcher_shortcut.is_some());
+    }
+
+    #[test]
+    fn migration_runs_at_load_and_is_saved() {
+        let dir = std::env::temp_dir().join(format!("brainitive-desktop-migrate-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            br#"{"current":"brain.example.com","preferences":{"switcher_shortcut":"CommandOrControl+Alt+K","voice_shortcut":"CommandOrControl+Shift+KeyV"}}"#,
+        )
+        .unwrap();
+        let s = Settings::load(&path);
+        assert!(s.current.is_some());
+        assert_eq!(s.preferences.switcher_shortcut, None);
+        assert_eq!(s.preferences.voice_shortcut, None);
+        let on_disk: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(on_disk["preferences"]["shortcut_scheme"], SHORTCUT_SCHEME);
+        assert_eq!(on_disk["preferences"]["leader_letters"]["voice"], "V");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn odd_letters_in_the_file_do_not_lose_the_settings() {
+        let s: Settings = serde_json::from_str(
+            r#"{"current":"brain.example.com","preferences":{"leader_letters":{"capture":"??","voice":"V"}}}"#,
+        )
+        .unwrap();
+        assert!(s.current.is_some());
+        assert_eq!(s.preferences.leader_letters, crate::leader::LeaderLetters::default());
     }
 
     #[test]

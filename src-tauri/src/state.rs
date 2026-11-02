@@ -127,6 +127,8 @@ pub struct Inner {
     pub external_times: VecDeque<Instant>,
     pub last_external: Option<(Url, Instant)>,
     pub server_menu_item: Option<MenuItem<Wry>>,
+    /// "Brainitive Key…" (BRAI-440).
+    pub leader_menu_item: Option<MenuItem<Wry>>,
     pub capture_menu_item: Option<MenuItem<Wry>>,
     pub switcher_menu_item: Option<MenuItem<Wry>>,
     pub voice_menu_item: Option<MenuItem<Wry>>,
@@ -210,6 +212,7 @@ impl AppState {
                 external_times: VecDeque::new(),
                 last_external: None,
                 server_menu_item: None,
+                leader_menu_item: None,
                 capture_menu_item: None,
                 switcher_menu_item: None,
                 voice_menu_item: None,

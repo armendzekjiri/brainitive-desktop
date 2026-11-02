@@ -1,5 +1,5 @@
-//! Global shortcuts (BRAI-359 quick capture, BRAI-401 quick switcher): defaults, parsing,
-//! validation and labels. Pure logic; the registration with the OS is in `hotkeys.rs`.
+//! Global shortcuts (BRAI-359 quick capture, BRAI-401 quick switcher, BRAI-440 the Brainitive
+//! key): defaults, parsing, validation and labels. Pure logic; the registration with the OS is in `hotkeys.rs`.
 //!
 //! A global shortcut works in every app, so it must not steal a key the user needs elsewhere:
 //! at least two modifiers (one of them Ctrl / Alt / Cmd) unless it is a function key, and none of
@@ -11,10 +11,23 @@ use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
 /// ⇧⌘Space on macOS, Ctrl+Shift+Space on Windows / Linux.
 pub const DEFAULT_CAPTURE: &str = "CommandOrControl+Shift+Space";
-/// ⌥⌘K on macOS, Ctrl+Alt+K on Windows / Linux ("K" like the web app's ⌘K search).
-pub const DEFAULT_SWITCHER: &str = "CommandOrControl+Alt+K";
-/// ⇧⌘V on macOS, Ctrl+Shift+V on Windows / Linux (voice capture, BRAI-439; held to talk). Not
-/// final: it may move under a "Brainitive key" chord later.
+/// The Brainitive key (BRAI-440): ⌃⌘K on macOS (left hand ⌃⌘, right hand K), Ctrl+Alt+K on
+/// Windows / Linux. Then one letter in the overlay (`leader.rs`). Ctrl+Alt+K is no AltGr letter on
+/// German and most European layouts (unlike Q, E, M, digits …).
+pub const DEFAULT_LEADER: &str = if cfg!(target_os = "macos") {
+    "Control+Super+KeyK"
+} else {
+    "Control+Alt+KeyK"
+};
+/// The quick switcher's direct shortcut when the user turns it on (off by default since BRAI-440):
+/// ⌥⌘K on macOS, Ctrl+Alt+Shift+K on Windows / Linux (Ctrl+Alt+K is the Brainitive key there).
+pub const DEFAULT_SWITCHER: &str = if cfg!(target_os = "macos") {
+    "Alt+Super+KeyK"
+} else {
+    "Control+Alt+Shift+KeyK"
+};
+/// Voice capture's direct shortcut when the user turns it on (off by default since BRAI-440):
+/// ⇧⌘V on macOS, Ctrl+Shift+V on Windows / Linux (held to talk).
 pub const DEFAULT_VOICE: &str = "CommandOrControl+Shift+KeyV";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -217,9 +230,10 @@ mod tests {
             ("capture", Some(DEFAULT_CAPTURE)),
             ("switcher", Some(DEFAULT_SWITCHER)),
             ("voice", Some(DEFAULT_VOICE)),
+            ("leader", Some(DEFAULT_LEADER)),
         ])
         .unwrap();
-        assert_eq!(all.len(), 3, "valid and all different");
+        assert_eq!(all.len(), 4, "valid and all different");
         let (c, s) = (all[0].1, all[1].1);
         assert_eq!(c.key, Code::Space);
         assert!(c.mods.contains(Modifiers::SHIFT));
@@ -291,6 +305,26 @@ mod tests {
             ("c", Some("Control+Alt+KeyJ")),
         ];
         assert_eq!(parse_all(&three).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn the_brainitive_key_per_platform() {
+        let leader = parse(DEFAULT_LEADER).unwrap();
+        assert_eq!(leader.key, Code::KeyK);
+        if cfg!(target_os = "macos") {
+            assert_eq!(label(&leader, true), "⌃⌘K");
+        } else {
+            assert_eq!(label(&leader, false), "Ctrl+Alt+K");
+        }
+        // both OS forms are valid shortcuts and render per platform
+        let mac = parse("Control+Super+KeyK").unwrap();
+        assert_eq!(label(&mac, true), "⌃⌘K");
+        assert_eq!(label(&mac, false), "Ctrl+Win+K");
+        let other = parse("Control+Alt+KeyK").unwrap();
+        assert_eq!(label(&other, false), "Ctrl+Alt+K");
+        assert_eq!(label(&other, true), "⌃⌥K");
+        // the suggested direct switcher keys never equal the Brainitive key
+        assert_ne!(parse(DEFAULT_SWITCHER).unwrap().id(), leader.id());
     }
 
     #[test]

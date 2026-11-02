@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod downloads;
 pub mod flows;
 pub mod hotkeys;
+pub mod leader;
 pub mod links;
 pub mod logging;
 pub mod menu;
@@ -103,6 +104,7 @@ pub fn run() {
             prefs::settings_reset_zoom,
             prefs::settings_close,
             prefs::settings_set_shortcut,
+            prefs::settings_set_leader_letter,
             prefs::settings_record_shortcut,
             prefs::settings_set_toggle,
             prefs::settings_set_voice_language,
@@ -137,6 +139,11 @@ pub fn run() {
             voice::voice_download,
             voice::voice_open_privacy,
             voice::voice_close,
+            voice::voice_release,
+            leader::leader_view,
+            leader::leader_press,
+            leader::leader_release,
+            leader::leader_close,
         ])
         .setup(|app| {
             // first: everything after this is logged, and a panic leaves a trace
