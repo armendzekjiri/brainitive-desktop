@@ -356,11 +356,12 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      # "installers-*": the draft release picks it up with the other installers
+      # not "installers-*": an unsigned MSIX can't be installed by users, so it is never attached
+      # to the GitHub release; it is downloaded from this run and uploaded to Partner Center
       - name: Upload the MSIX
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: installers-msstore
+          name: msstore-package
           path: ${{ steps.msix.outputs.msix }}
           if-no-files-found: error
           retention-days: 14
@@ -376,15 +377,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # Runs when the installers built; the Store package must have built too, unless its job was
-  # skipped (a pre-release tag).
+  # Runs when the installers built. The Store package (msstore job) is separate: a failure there
+  # never blocks the GitHub release, and the MSIX is not attached to it.
   release:
     name: Draft release
     if: >-
       !cancelled() && github.ref_type == 'tag' && github.event_name == 'push' &&
-      needs.build.result == 'success' &&
-      (needs.msstore.result == 'success' || needs.msstore.result == 'skipped')
-    needs: [build, msstore]
+      needs.build.result == 'success'
+    needs: [build]
     runs-on: ubuntu-22.04
     permissions:
       contents: write

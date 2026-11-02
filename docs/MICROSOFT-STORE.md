@@ -58,7 +58,7 @@ on manual runs (Actions → Build → Run workflow). No secrets.
 
    | Artifact | Content | Goes to |
    | --- | --- | --- |
-   | `installers-msstore` | `Brainitive_<X.Y.Z>_x64.msix` (**unsigned**) | Partner Center; also attached to the draft release (with `SHA256SUMS`) |
+   | `msstore-package` | `Brainitive_<X.Y.Z>_x64.msix` (**unsigned**) | Partner Center only; never attached to the GitHub release (users can't install an unsigned MSIX) |
    | `msstore-sideload-test` | `Brainitive_<X.Y.Z>_x64_sideload-test.msix` + `Brainitive_sideload-test.cer` | your test PC only |
    | `msstore-wack-report` | `wack-report.xml` (when WACK ran) | reading |
 
@@ -150,8 +150,8 @@ The Store runs the same checks in certification; run them before each submission
 Partner Center → Apps and games → **Brainitive** (Store ID `9N08DHPCF7WB`):
 
 1. **Start your submission** (first time) or **Update** on the last published submission.
-2. **Packages**: drag in the **unsigned** `Brainitive_<X.Y.Z>_x64.msix` from the `installers-msstore`
-   artifact (or the draft release). Never the `_sideload-test` copy: its signature is ours, not
+2. **Packages**: drag in the **unsigned** `Brainitive_<X.Y.Z>_x64.msix` from the `msstore-package`
+   artifact of the Build run. Never the `_sideload-test` copy: its signature is ours, not
    Microsoft's, and the Store rejects it. Partner Center checks the identity (Name, Publisher,
    version); a mismatch is shown right there.
    - Device family availability: **Windows 10/11 Desktop** only.

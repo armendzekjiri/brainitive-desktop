@@ -642,7 +642,7 @@ no secrets): `node --test scripts/`, `cargo test` / `clippy` with `--features ms
 src-tauri/tauri.msstore.conf.json` → `src-tauri/target/msix/package/` (`Brainitive.exe`, the
 rendered `AppxManifest.xml`, `Assets/` from `scripts/msix-assets.mjs`, `resources.pri` from
 `makepri`) → `makeappx pack` (schema-validated) → `Brainitive_<X.Y.Z>_x64.msix`, **unsigned** (the
-Store signs it). It is uploaded as `installers-msstore`, so the draft release attaches it; the
+Store signs it). It is uploaded as the workflow artifact `msstore-package` and never attached to the release; the
 self-signed sideload copy + `.cer` go to `msstore-sideload-test`; WACK runs when the image has
 `appcert.exe` (informational, report artifact `msstore-wack-report`). `ci.yml` runs the msstore
 clippy / tests on Windows for every PR.
