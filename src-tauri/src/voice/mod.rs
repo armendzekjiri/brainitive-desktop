@@ -183,7 +183,9 @@ fn begin(app: &AppHandle, hold: bool) {
         MicPermission::Denied | MicPermission::Restricted => show(app, denied()),
         MicPermission::NotDetermined => ask_permission(app),
         MicPermission::Granted | MicPermission::Unknown => {
-            if let Some(effect) = v.lock().recorder.handle(Input::Start { at: Instant::now(), hold }) {
+            // the guard must be gone before `run` (it locks again): no `if let` on the lock
+            let effect = v.lock().recorder.handle(Input::Start { at: Instant::now(), hold });
+            if let Some(effect) = effect {
                 show_window(app);
                 run(app, effect);
             }
