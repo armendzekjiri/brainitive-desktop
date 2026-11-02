@@ -494,6 +494,59 @@ impl Outbox {
         Ok(())
     }
 
+    /// The `done` a new change of `work_id` is based on: what the server will have once the
+    /// changes already sent are applied (the cache doesn't show them yet), or the base of the
+    /// unsent change it will be folded into.
+    pub fn base_done(&self, work_id: &str, cached: bool) -> bool {
+        let mut value = cached;
+        for e in &self.entries {
+            if let Change::WorkDone {
+                work_id: w,
+                done,
+                base_done,
+                ..
+            } = &e.change
+            {
+                if w == work_id {
+                    if e.attempts == 0 {
+                        return *base_done;
+                    }
+                    value = *done;
+                }
+            }
+        }
+        value
+    }
+
+    /// Like [`Self::base_done`] for a task's title and done.
+    pub fn task_base(&self, task_id: u64, cached_title: &str, cached_done: bool) -> (String, bool) {
+        let mut value = (cached_title.to_string(), cached_done);
+        for e in &self.entries {
+            if let Change::TaskUpdate {
+                task_id: t,
+                title,
+                done,
+                base_title,
+                base_done,
+                ..
+            } = &e.change
+            {
+                if *t == task_id {
+                    if e.attempts == 0 {
+                        return (base_title.clone(), *base_done);
+                    }
+                    if let Some(title) = title {
+                        value.0 = title.clone();
+                    }
+                    if let Some(done) = done {
+                        value.1 = *done;
+                    }
+                }
+            }
+        }
+        value
+    }
+
     fn unsent(&self, pred: impl Fn(&Change) -> bool) -> Option<usize> {
         self.entries.iter().position(|e| e.attempts == 0 && pred(&e.change))
     }
@@ -782,6 +835,30 @@ mod tests {
         })
         .unwrap();
         assert_eq!(o.len(), 1);
+    }
+
+    #[test]
+    fn a_new_change_is_based_on_what_was_already_sent() {
+        let mut o = Outbox::default();
+        assert!(!o.base_done("issue:1", false), "nothing waiting: the cache");
+        o.push(done("issue:1", true, false)).unwrap();
+        assert!(!o.base_done("issue:1", false), "unsent: folded in, same base");
+        o.entries[0].attempts = 1;
+        assert!(o.base_done("issue:1", false), "sent, answer lost: the server may have it done");
+
+        let update = |title: Option<&str>, d: Option<bool>| Change::TaskUpdate {
+            task_list_id: 1,
+            task_id: 5,
+            title: title.map(str::to_string),
+            done: d,
+            base_title: "Old".into(),
+            base_done: false,
+        };
+        assert_eq!(o.task_base(5, "Old", false), ("Old".to_string(), false));
+        o.push(update(Some("New"), None)).unwrap();
+        assert_eq!(o.task_base(5, "Old", false), ("Old".to_string(), false));
+        o.entries[1].attempts = 1;
+        assert_eq!(o.task_base(5, "Old", false), ("New".to_string(), false));
     }
 
     #[test]

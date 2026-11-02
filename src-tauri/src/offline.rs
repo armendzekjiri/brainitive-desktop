@@ -653,17 +653,7 @@ pub fn offline_set_done(app: AppHandle, webview: Webview, work_id: String, done:
     record(&app, |data| {
         let work = cached_work(data, &work_id)?;
         // the value the server had when the user ticked it: an unsent change is folded in
-        let base_done = data
-            .outbox
-            .entries
-            .iter()
-            .find_map(|e| match &e.change {
-                Change::WorkDone {
-                    work_id: w, base_done, ..
-                } if *w == work_id && e.attempts == 0 => Some(*base_done),
-                _ => None,
-            })
-            .unwrap_or(work.done);
+        let base_done = data.outbox.base_done(&work_id, work.done);
         Ok(Some(Change::WorkDone {
             title: work.label(),
             work_id,
@@ -730,20 +720,7 @@ pub fn offline_update_task(
             .and_then(|c| c.task(id))
             .ok_or_else(|| ui("not_found", "This task is not on this computer."))?;
         // an unsent change of the same task keeps its base (the server's value)
-        let (base_title, base_done) = data
-            .outbox
-            .entries
-            .iter()
-            .find_map(|e| match &e.change {
-                Change::TaskUpdate {
-                    task_id: t,
-                    base_title,
-                    base_done,
-                    ..
-                } if *t == id && e.attempts == 0 => Some((base_title.clone(), *base_done)),
-                _ => None,
-            })
-            .unwrap_or((task.title.clone(), task.done));
+        let (base_title, base_done) = data.outbox.task_base(id, &task.title, task.done);
         Ok(Some(Change::TaskUpdate {
             task_list_id,
             task_id: id,
