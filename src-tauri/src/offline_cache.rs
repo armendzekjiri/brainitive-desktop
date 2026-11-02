@@ -68,6 +68,20 @@ pub struct Cache {
     /// `kind:id` → record.
     #[serde(default)]
     pub records: BTreeMap<String, Record>,
+    /// Whether the server takes the client-gaps sync types (`timer.*`, `notification.read`,
+    /// `notifications.read_all`, `issue.create` with description / type), learned from
+    /// `GET /me/timer` ([`extended_sync_of`]). `None`: not known yet → treated as no.
+    #[serde(default)]
+    pub extended_sync: Option<bool>,
+}
+
+/// What a `GET /me/timer` answer says about the server: `today_logged_seconds` came with the
+/// same server release as the timer / notification sync types and `issue.create`'s description
+/// and type (`/api/v1/instance`'s `version` can't tell a build before it from one after). `None`:
+/// not a timer answer.
+pub fn extended_sync_of(timer_body: &Value) -> Option<bool> {
+    timer_body.get("running")?;
+    Some(timer_body.get("today_logged_seconds").is_some_and(Value::is_u64))
 }
 
 /// One change of the feed.
@@ -163,6 +177,7 @@ impl Cache {
             project_ids: Vec::new(),
             synced_at: None,
             records: BTreeMap::new(),
+            extended_sync: None,
         }
     }
 
@@ -288,6 +303,10 @@ impl Cache {
     /// cached one. Without one (`entity: null`: gone or not visible) the optimistic local patch
     /// stays until the next pull.
     pub fn apply_result(&mut self, change: &Change, record_type: Option<&str>, entity: Option<&Value>) {
+        if matches!(change, Change::IssueCreate { .. }) {
+            // a new issue isn't assigned work of this user by itself: the feed brings it if it is
+            return;
+        }
         // optimistic first: the feed re-sends My Day after done changes
         match change {
             Change::WorkDone { work_id, done, .. } => self.set_work_done(work_id, *done),
@@ -611,6 +630,13 @@ pub fn view(cache: &Cache, out: &Outbox) -> View {
                 captured_at: None,
                 pending: true,
             }),
+            // the panel shows these (timer, notifications); a new issue isn't in the offline copy
+            Change::TimerStart { .. }
+            | Change::TimerStop { .. }
+            | Change::TimerDiscard { .. }
+            | Change::NotificationRead { .. }
+            | Change::NotificationsReadAll { .. }
+            | Change::IssueCreate { .. } => {}
         }
     }
     new_captures.reverse();
@@ -1184,12 +1210,55 @@ mod tests {
     }
 
     #[test]
+    fn an_old_server_is_told_by_its_timer_answer() {
+        // the client-gaps release: `today_logged_seconds` on every timer answer
+        assert_eq!(
+            extended_sync_of(&json!({"running": false, "timer": null, "today_logged_seconds": 0})),
+            Some(true)
+        );
+        assert_eq!(
+            extended_sync_of(&json!({"running": true, "timer": {"id": 1}, "today_logged_seconds": 5400})),
+            Some(true)
+        );
+        // an older server: a timer answer without it
+        assert_eq!(
+            extended_sync_of(&json!({"running": true, "timer": {"id": 1}, "activities": []})),
+            Some(false)
+        );
+        assert_eq!(
+            extended_sync_of(&json!({"running": false, "today_logged_seconds": null})),
+            Some(false)
+        );
+        // not a timer answer: nothing learned
+        assert_eq!(extended_sync_of(&json!({"unread_count": 3})), None);
+        assert_eq!(extended_sync_of(&Value::Null), None);
+        // a cache file written before the flag existed reads as "not known" (= no)
+        let old: Cache = serde_json::from_value(json!({"origin": origin()})).unwrap();
+        assert_eq!(old.extended_sync, None);
+    }
+
+    #[test]
+    fn a_new_issue_is_not_cached_as_assigned_work() {
+        let mut c = Cache::new(&origin());
+        let create = Change::IssueCreate {
+            board_id: 1,
+            title: "x".into(),
+            description: None,
+            item_type_id: None,
+            priority_id: None,
+        };
+        c.apply_result(&create, Some("work"), Some(&json!({"id": "issue:9", "title": "x"})));
+        assert!(c.is_empty());
+    }
+
+    #[test]
     fn persists_per_server_without_secrets() {
         let dir = std::env::temp_dir().join(format!("brainitive-cache-{}", std::process::id()));
         let path = dir.join("cache.json");
         let mut c = Cache::new(&origin());
         c.user_id = Some(4);
         c.cursor = Some("c1".into());
+        c.extended_sync = Some(true);
         let mut run = c.start_run();
         c.apply_page(
             &mut run,

@@ -258,7 +258,9 @@ fn notifications_are_worded_like_the_web_bell() {
         {"id": "../../etc", "type": "x", "data": {}, "read": false},
         {"id": "9b1c2d3e-0000-4000-8000-000000000002", "type": "x", "data": {"url": "https://evil.example/x"}, "read": true, "created_at": "nope"}
     ], "next_cursor": null});
-    let v = view::notifications(&body, 4, |url| url.starts_with('/'));
+    let v = view::notifications(&body, 4, &view::PendingReads::default(), |url: &str| {
+        url.starts_with('/')
+    });
     assert_eq!(v.items.len(), 2, "an id that is not a uuid is dropped");
     assert_eq!(v.items[0].body.as_deref(), Some("Fix login"), "no control characters");
     assert!(v.items[0].has_link && !v.items[0].read);
@@ -428,8 +430,251 @@ fn ticks_go_to_the_outbox_offline_and_timer_actions_wait_for_the_server() {
     ] {
         assert!(!view::queue_after(&e), "{e:?}");
     }
-    assert!(view::needs_server(true).is_some());
-    assert!(view::needs_server(false).is_none());
+    // an older server: timer / mark-read are off offline, with a hint
+    assert!(view::needs_server(true, false).is_some());
+    assert!(view::needs_server(false, false).is_none());
+    // a server with the sync types: queued, no hint
+    assert!(view::needs_server(true, true).is_none());
+}
+
+// ── server summary / url, timer total, waiting timer and inbox changes ─────────
+
+#[test]
+fn the_servers_summary_and_url_win_and_older_servers_fall_back() {
+    let id = "9b1c2d3e-0000-4000-8000-000000000001";
+    let data = json!({"actor_name": "Ana", "item_key": "BRAI-12", "item_title": "Fix login", "item_url": "/w/1"});
+    // a newer server: its sentence and its link (absolute, same server)
+    let new = json!({"id": id, "type": "item_assigned", "summary": "Ana assigned you to BRAI-12 \u{7}",
+        "url": "https://brain.example.com/w/12", "data": data, "read": false, "created_at": "2026-11-02T09:00:00Z"});
+    assert_eq!(view::note_text(&new), "Ana assigned you to BRAI-12");
+    assert_eq!(view::note_url(&new).as_deref(), Some("https://brain.example.com/w/12"));
+    // url null: the user can't open it now — no link, not even the payload's
+    let closed =
+        json!({"id": id, "type": "item_assigned", "summary": "Ana assigned you to BRAI-12", "url": null, "data": data});
+    assert_eq!(view::note_url(&closed), None);
+    // an empty summary: the client's wording
+    let blank = json!({"id": id, "type": "item_assigned", "summary": "  ", "url": null, "data": data});
+    assert_eq!(view::note_text(&blank), "Ana assigned you to BRAI-12");
+    // an older server: no summary / url fields → the client's wording and the payload link
+    let old = json!({"id": id, "type": "mentioned", "data": {"actor_name": "Bo", "context_title": "Plan", "context_url": "/p/1"}});
+    assert_eq!(view::note_text(&old), "Bo mentioned you in Plan");
+    assert_eq!(view::note_url(&old).as_deref(), Some("/p/1"));
+
+    let body = json!({"data": [new, old]});
+    let v = view::notifications(&body, 2, &view::PendingReads::default(), |u: &str| {
+        u.starts_with("https://brain.example.com/") || u.starts_with('/')
+    });
+    assert_eq!(v.items[0].text, "Ana assigned you to BRAI-12");
+    assert!(v.items[0].has_link);
+    assert_eq!(
+        view::find_notification(&body, id),
+        Some((false, Some("https://brain.example.com/w/12".into())))
+    );
+    // a row from a sync result replaces the kept one
+    let mut kept = body.clone();
+    view::replace_note(&mut kept, &json!({"id": id, "summary": "x", "url": null, "read": true}));
+    assert_eq!(kept["data"][0]["read"], true);
+    view::replace_note(&mut kept, &json!({"id": "../x", "read": false}));
+    assert_eq!(kept["data"][0]["read"], true, "a bad id changes nothing");
+}
+
+fn note(id: &str, at: &str, read: bool) -> Value {
+    json!({"id": id, "type": "x", "summary": "Hello", "url": null, "data": {}, "read": read, "created_at": at})
+}
+
+#[test]
+fn reads_made_offline_show_as_read_and_pending_and_read_all_uses_the_newest_seen() {
+    let a = "00000000-0000-4000-8000-00000000000a";
+    let b = "00000000-0000-4000-8000-00000000000b";
+    let c = "00000000-0000-4000-8000-00000000000c";
+    let body = json!({"data": [
+        note(c, "2026-11-02T10:00:00.000000Z", false),
+        note(b, "2026-11-02T09:00:00Z", false),
+        note(a, "2026-11-02T08:00:00+01:00", true),
+    ]});
+    // `before` = the newest notification the user saw (fractions / offsets read), else now
+    assert_eq!(view::read_all_before(Some(&body), 0), "2026-11-02T10:00:00Z");
+    assert_eq!(
+        view::read_all_before(Some(&json!({"data": []})), 1_793_612_472),
+        "2026-11-02T09:41:12Z"
+    );
+    assert_eq!(view::read_all_before(None, 1_793_612_472), "2026-11-02T09:41:12Z");
+
+    let mut o = Outbox::default();
+    o.push(Change::NotificationRead {
+        notification_id: b.into(),
+        title: "Hello".into(),
+    })
+    .unwrap();
+    let reads = view::PendingReads::of(&o);
+    let v = view::notifications(&body, 5, &reads, |_: &str| false);
+    assert!(!v.items[0].read && !v.items[0].pending);
+    assert!(
+        v.items[1].read && v.items[1].pending,
+        "read offline: read, waiting to sync"
+    );
+    assert!(v.items[2].read && !v.items[2].pending, "already read on the server");
+    assert_eq!(v.unread, 4);
+    assert_eq!(view::unread_after(5, Some(&body), &reads), 4);
+    assert_eq!(view::unread_after(5, Some(&body), &view::PendingReads::default()), 5);
+
+    // read all up to 09:30: the 10:00 one stays unread
+    o.push(Change::NotificationsReadAll {
+        before: "2026-11-02T09:30:00Z".into(),
+    })
+    .unwrap();
+    let reads = view::PendingReads::of(&o);
+    let v = view::notifications(&body, 2, &reads, |_: &str| false);
+    assert!(!v.items[0].read, "arrived after what the user saw");
+    assert_eq!(v.unread, 1);
+}
+
+#[test]
+fn todays_total_and_the_description_come_with_the_timer_on_newer_servers() {
+    let new = json!({"running": true, "timer": {"id": 5, "started_at": "2026-11-02T09:00:00Z",
+        "description": "Reproduce \nthe bug", "issue": {"key": "BRAI-12", "title": "Fix login"}},
+        "activities": [], "today_logged_seconds": 5400});
+    assert_eq!(view::today_seconds(&new), Some(5400));
+    let t = view::running(&new, view::parse_instant("2026-11-02T09:10:00Z").unwrap(), 0).unwrap();
+    assert_eq!(t.description.as_deref(), Some("Reproduce  the bug"));
+    assert!(!t.pending && !t.started_offline);
+    assert_eq!(view::timer_id(&new), Some(5));
+    // an older server: no total (then `/work-logs`), no description
+    let old = json!({"running": false, "timer": null});
+    assert_eq!(view::today_seconds(&old), None);
+    assert_eq!(view::timer_id(&old), None);
+    assert_eq!(
+        view::timer_id(&json!({"running": false, "timer": {"id": 5}})),
+        None,
+        "not running"
+    );
+}
+
+#[test]
+fn waiting_timer_changes_are_laid_over_the_running_timer() {
+    let now = view::parse_instant("2026-11-02T09:10:00Z").unwrap();
+    let body = json!({"running": true, "timer": {"id": 5, "started_at": "2026-11-02T09:00:00Z",
+        "issue": {"key": "BRAI-12", "title": "Fix login"}}});
+    let running = view::running(&body, now, 0);
+
+    // nothing waiting: as the server has it
+    let none = view::TimerOverlay::of(&Outbox::default());
+    assert_eq!(none.apply(running.clone(), Some(5), now), (running.clone(), None));
+
+    // stopped offline: gone, with a note
+    let mut o = Outbox::default();
+    o.push(Change::TimerStop {
+        timer_id: 5,
+        stopped_at: "2026-11-02T09:09:00Z".into(),
+        activity_id: None,
+        title: "BRAI-12 Fix login".into(),
+    })
+    .unwrap();
+    let (r, note) = view::TimerOverlay::of(&o).apply(running.clone(), Some(5), now);
+    assert!(r.is_none());
+    assert!(note.unwrap().contains("logged once Brainitive is back online"));
+    // another timer's stop doesn't touch this one
+    let (r, note) = view::TimerOverlay::of(&o).apply(running.clone(), Some(6), now);
+    assert!(r.is_some() && note.is_none());
+
+    // then started offline on another issue: shown as running, pending, not stoppable yet
+    o.push(Change::TimerStart {
+        issue_id: 13,
+        description: Some("Docs".into()),
+        started_at: "2026-11-02T09:09:30Z".into(),
+        title: "BRAI-13 Docs".into(),
+    })
+    .unwrap();
+    let (r, _) = view::TimerOverlay::of(&o).apply(running.clone(), Some(5), now);
+    let r = r.unwrap();
+    assert_eq!(r.label, "BRAI-13 Docs");
+    assert_eq!(r.description.as_deref(), Some("Docs"));
+    assert_eq!(r.elapsed_seconds, 30);
+    assert!(r.pending && r.started_offline && !r.has_link);
+    o.entries[1].attempts = 1;
+    let (r, _) = view::TimerOverlay::of(&o).apply(None, None, now);
+    assert!(!r.unwrap().started_offline, "it went out: waiting for its answer");
+
+    // discarded offline
+    let mut o = Outbox::default();
+    o.push(Change::TimerDiscard {
+        timer_id: 5,
+        title: String::new(),
+    })
+    .unwrap();
+    let (r, note) = view::TimerOverlay::of(&o).apply(running, Some(5), now);
+    assert!(r.is_none() && note.unwrap().starts_with("Timer discarded"));
+}
+
+#[test]
+fn a_stop_waiting_for_an_activity_shows_the_choice_while_it_fits() {
+    let needed = crate::outbox::ActivityNeeded {
+        timer_id: 5,
+        stopped_at: "2026-11-02T09:40:00Z".into(),
+        title: "BRAI-12 Fix login".into(),
+        activities: vec![crate::outbox::ActivityChoice {
+            id: 4,
+            name: "Programming".into(),
+        }],
+        default_activity_id: Some(4),
+        message: String::new(),
+    };
+    let same = json!({"running": true, "timer": {"id": 5}});
+    let other = json!({"running": true, "timer": {"id": 6}});
+    let v = view::activity_needed_view(Some(&needed), Some(&same)).unwrap();
+    assert_eq!(v.activities[0].id, 4);
+    assert_eq!(v.label, "BRAI-12 Fix login");
+    assert_eq!(v.message, "Choose what to log this time as.");
+    assert!(
+        view::activity_needed_view(Some(&needed), None).is_some(),
+        "offline: nothing to compare"
+    );
+    assert!(view::activity_needed_view(Some(&needed), Some(&other)).is_none());
+    assert!(view::activity_needed_view(Some(&needed), Some(&json!({"running": false}))).is_none());
+    assert!(view::activity_needed_view(None, Some(&same)).is_none());
+}
+
+#[test]
+fn offline_the_copy_offers_its_open_issues_to_time() {
+    let view_of = |work: Vec<crate::offline_cache::ViewWork>, day: Vec<crate::offline_cache::ViewWork>| {
+        crate::offline_cache::View {
+            has_data: true,
+            user_name: None,
+            synced_at: None,
+            pending: 0,
+            my_day: Some(crate::offline_cache::ViewDay {
+                date: "2026-11-02".into(),
+                items: day,
+            }),
+            work,
+            lists: Vec::new(),
+            captures: Vec::new(),
+            problems: Vec::new(),
+        }
+    };
+    let w = |id: &str, done: bool| crate::offline_cache::ViewWork {
+        id: id.into(),
+        key: Some("K-1".into()),
+        title: "Thing".into(),
+        done,
+        due_date: None,
+        project: None,
+        source: None,
+        pending: false,
+        in_my_day: false,
+    };
+    let v = view_of(
+        vec![
+            w("issue:1", false),
+            w("task:2", false),
+            w("issue:3", true),
+            w("issue:4", false),
+        ],
+        vec![w("issue:4", false)],
+    );
+    let c = view::offline_candidates(&v);
+    let ids: Vec<_> = c.iter().map(|c| (c.id.as_str(), c.in_my_day)).collect();
+    assert_eq!(ids, [("issue:4", true), ("issue:1", false)]);
 }
 
 #[test]

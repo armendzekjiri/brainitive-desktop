@@ -430,3 +430,48 @@ fn the_window_follows_the_page_within_limits() {
     assert_eq!(clamp_height(f64::NAN), MIN_HEIGHT);
     assert_eq!(clamp_height(f64::INFINITY), MIN_HEIGHT);
 }
+
+#[test]
+fn offline_the_same_create_goes_to_the_outbox_with_description_and_type() {
+    let (p, c) = (projects(), config());
+    let mut i = input("  Fix the login  ");
+    i.description = "Steps:\n- open".into();
+    i.priority_id = Some(8);
+    i.type_id = Some(2);
+    let d = draft(&i, &p, Some(&c)).unwrap();
+    let change = offline_change(&d);
+    assert_eq!(
+        change,
+        crate::outbox::Change::IssueCreate {
+            board_id: 101,
+            title: "Fix the login".into(),
+            description: Some("Steps:\n- open".into()),
+            item_type_id: Some(2),
+            priority_id: Some(8),
+        }
+    );
+    // the sync API's names: `item_type_id`, not `type_id`
+    let j = crate::outbox::Entry::new(change).to_json();
+    assert_eq!(
+        j["data"],
+        json!({"board_id": 101, "title": "Fix the login", "description": "Steps:\n- open", "item_type_id": 2, "priority_id": 8})
+    );
+    let plain = offline_change(&draft(&input("Plain"), &p, Some(&c)).unwrap());
+    assert_eq!(
+        crate::outbox::Entry::new(plain).to_json()["data"],
+        json!({"board_id": 101, "title": "Plain"})
+    );
+}
+
+#[test]
+fn with_an_etag_the_destinations_are_asked_again_on_every_open_else_once_a_minute() {
+    use std::time::Duration;
+    let minute = Duration::from_secs(60);
+    // a newer server (ETag): always revalidated, a 304 costs nothing
+    assert!(stale(false, true, Duration::from_secs(1), minute));
+    // an older server (no ETag): the 1-minute throttle stays
+    assert!(!stale(false, false, Duration::from_secs(30), minute));
+    assert!(stale(false, false, Duration::from_secs(61), minute));
+    // a board turned out gone: always
+    assert!(stale(true, false, Duration::ZERO, minute));
+}

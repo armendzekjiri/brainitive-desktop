@@ -5,9 +5,15 @@
 //!
 //! Each result is handled honestly (`verdict`): applied → done; conflict → done, the server kept
 //! its value and the user's is shown as a problem; deleted / forbidden / invalid → dropped as a
-//! problem that still shows the user's text; waiting → kept (dropped after a few tries);
-//! rate_limited / error → kept, try later. A 4xx is never retried forever. Pure logic; the
+//! problem that still shows the user's text; gone (a timer no longer running, a notification
+//! deleted) → dropped quietly; waiting → kept (dropped after a few tries); rate_limited / error →
+//! kept, try later. A 4xx is never retried forever. Two timer cases are special: a `timer.start`
+//! conflict (another timer runs) is dropped with a problem, and an `invalid` `timer.stop` that
+//! offers activities waits for the user's pick ([`Outbox::activity_needed`]). Pure logic; the
 //! sending is in `offline.rs`.
+//!
+//! The timer, notification and `issue.create` description / type changes need a server with the
+//! v1.49 client-gaps sync types (`offline_cache::Cache::extended_sync`); the callers check that.
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -68,6 +74,71 @@ pub enum Change {
         #[serde(default)]
         intended_type: Option<String>,
     },
+    /// Start the timer on an issue (`timer.start`); `started_at` = the device's clock (ISO).
+    TimerStart {
+        issue_id: u64,
+        #[serde(default)]
+        description: Option<String>,
+        started_at: String,
+        #[serde(default)]
+        title: String,
+    },
+    /// Stop and log the running timer (`timer.stop`).
+    TimerStop {
+        timer_id: u64,
+        stopped_at: String,
+        #[serde(default)]
+        activity_id: Option<u64>,
+        #[serde(default)]
+        title: String,
+    },
+    /// Stop without logging (`timer.discard`).
+    TimerDiscard {
+        timer_id: u64,
+        #[serde(default)]
+        title: String,
+    },
+    /// One notification read (`notification.read`).
+    NotificationRead {
+        notification_id: String,
+        #[serde(default)]
+        title: String,
+    },
+    /// "Mark all read" (`notifications.read_all`): only notifications created up to `before`.
+    NotificationsReadAll { before: String },
+    /// A new issue from the New task window (`issue.create`).
+    IssueCreate {
+        board_id: u64,
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        item_type_id: Option<u64>,
+        #[serde(default)]
+        priority_id: Option<u64>,
+    },
+}
+
+/// An activity a stopped timer can be logged as (`activities` of an `invalid` `timer.stop`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityChoice {
+    pub id: u64,
+    pub name: String,
+}
+
+/// A `timer.stop` the server refused for want of an activity: the timer runs on there; the panel
+/// shows the choice and the stop goes out again with the picked `activity_id` (same `stopped_at`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityNeeded {
+    pub timer_id: u64,
+    pub stopped_at: String,
+    #[serde(default)]
+    pub title: String,
+    pub activities: Vec<ActivityChoice>,
+    #[serde(default)]
+    pub default_activity_id: Option<u64>,
+    #[serde(default)]
+    pub message: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +182,9 @@ pub struct Outbox {
     pub entries: Vec<Entry>,
     #[serde(default)]
     pub problems: Vec<Problem>,
+    /// A stop that waits for the user's activity (see [`ActivityNeeded`]).
+    #[serde(default)]
+    pub activity_needed: Option<ActivityNeeded>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -121,6 +195,8 @@ pub enum OutboxError {
     InFlight,
     #[error("That task is not waiting to be created any more.")]
     UnknownRef,
+    #[error("Pick one of the activities shown.")]
+    UnknownActivity,
 }
 
 /// What to do with one change after the server's result.
@@ -131,6 +207,9 @@ pub enum Verdict {
     Conflict,
     /// Dropped: `kind` for the problem.
     Drop(&'static str),
+    /// Dropped without a problem: the timer / notification is no longer there, nothing was
+    /// written (`gone`).
+    Gone,
     /// Kept. `stop`: don't send more now (rate limit, server error).
     Keep {
         stop: bool,
@@ -153,11 +232,49 @@ pub struct SyncResult {
     #[serde(default)]
     pub errors: Option<Value>,
     /// What kind of feed record `entity` is (`work`, `task`, `task_list`, `capture`, `my_day`,
-    /// `comment`; v2).
+    /// `comment`; v2; `timer`, `notification`, `unread_count` with the client-gaps types).
     #[serde(default)]
     pub record_type: Option<String>,
     #[serde(default)]
     pub entity: Option<Value>,
+    /// An `invalid` `timer.stop`: what can be picked (`[{id, name}]`) and the default.
+    #[serde(default)]
+    pub activities: Option<Value>,
+    #[serde(default)]
+    pub default_activity_id: Option<u64>,
+}
+
+impl SyncResult {
+    /// The live state this result carries (`timer`, `notification`, `unread_count`), shown by
+    /// the tray and the panel.
+    pub fn live_state(&self) -> Option<(&str, &Value)> {
+        let kind = self.record_type.as_deref()?;
+        let entity = self.entity.as_ref().filter(|e| e.is_object())?;
+        matches!(kind, "timer" | "notification" | "unread_count").then_some((kind, entity))
+    }
+
+    /// `activities` of an `invalid` `timer.stop`, cleaned (id + name).
+    fn activity_choices(&self) -> Vec<ActivityChoice> {
+        self.activities
+            .as_ref()
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|a| {
+                let name: String = a["name"]
+                    .as_str()?
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(80)
+                    .collect();
+                let name = name.trim().to_string();
+                (!name.is_empty()).then_some(ActivityChoice {
+                    id: a["id"].as_u64()?,
+                    name,
+                })
+            })
+            .collect()
+    }
 }
 
 pub fn verdict(r: &SyncResult) -> Verdict {
@@ -165,6 +282,7 @@ pub fn verdict(r: &SyncResult) -> Verdict {
         "applied" => Verdict::Applied,
         "conflict" => Verdict::Conflict,
         "deleted" => Verdict::Drop("deleted"),
+        "gone" => Verdict::Gone,
         "forbidden" => Verdict::Drop("forbidden"),
         "invalid" => Verdict::Drop("invalid"),
         "waiting" => Verdict::Keep { stop: false },
@@ -191,6 +309,13 @@ pub struct Step {
     pub stop: bool,
     /// The batch was refused as a whole (4xx): send its changes one by one.
     pub split: bool,
+    /// Results whose live state (timer, notification, unread count) the tray / panel show —
+    /// also of changes that were dropped (a refused start brings the timer that runs).
+    pub states: Vec<SyncResult>,
+    /// Dropped quietly (`gone`): what they were, for the log.
+    pub gone: Vec<String>,
+    /// A stop now waits for an activity ([`Outbox::activity_needed`]).
+    pub needs_activity: bool,
 }
 
 /// `issue:12` → `("board", 12)`, `task:7` → `("list", 7)` (the sync API's `work_type`).
@@ -242,6 +367,12 @@ impl Change {
             } => format!("Mark done: {}", quote(base_title)),
             Self::TaskUpdate { base_title, .. } => format!("Change task {}", quote(base_title)),
             Self::CaptureCreate { text, .. } => format!("Capture {}", quote(text)),
+            Self::TimerStart { title, .. } => format!("Start timer: {}", quote(title)),
+            Self::TimerStop { title, .. } => format!("Stop timer: {}", quote(title)),
+            Self::TimerDiscard { title, .. } => format!("Discard timer: {}", quote(title)),
+            Self::NotificationRead { title, .. } => format!("Mark read: {}", quote(title)),
+            Self::NotificationsReadAll { .. } => "Mark all notifications read".to_string(),
+            Self::IssueCreate { title, .. } => format!("New issue {}", quote(title)),
         }
     }
 
@@ -254,6 +385,13 @@ impl Change {
                 Some(u) => format!("{text}\n{u}"),
                 None => text.clone(),
             }),
+            Self::IssueCreate { title, description, .. } => Some(match description {
+                Some(d) => format!("{title}\n\n{d}"),
+                None => title.clone(),
+            }),
+            Self::TimerStart {
+                description: Some(d), ..
+            } => Some(d.clone()),
             _ => None,
         }
     }
@@ -344,6 +482,59 @@ impl Entry {
                 }
                 ("capture.create", None, None, data)
             }
+            Change::TimerStart {
+                issue_id,
+                description,
+                started_at,
+                ..
+            } => {
+                let mut data = json!({ "issue_id": issue_id, "started_at": started_at });
+                if let Some(d) = description {
+                    data["description"] = json!(d);
+                }
+                ("timer.start", None, None, data)
+            }
+            Change::TimerStop {
+                timer_id,
+                stopped_at,
+                activity_id,
+                ..
+            } => {
+                let mut data = json!({ "timer_id": timer_id, "stopped_at": stopped_at });
+                if let Some(a) = activity_id {
+                    data["activity_id"] = json!(a);
+                }
+                ("timer.stop", None, None, data)
+            }
+            Change::TimerDiscard { timer_id, .. } => ("timer.discard", None, None, json!({ "timer_id": timer_id })),
+            Change::NotificationRead { notification_id, .. } => (
+                "notification.read",
+                None,
+                None,
+                json!({ "notification_id": notification_id }),
+            ),
+            Change::NotificationsReadAll { before } => {
+                ("notifications.read_all", None, None, json!({ "before": before }))
+            }
+            Change::IssueCreate {
+                board_id,
+                title,
+                description,
+                item_type_id,
+                priority_id,
+            } => {
+                let mut data = json!({ "board_id": board_id, "title": title });
+                if let Some(d) = description {
+                    data["description"] = json!(d);
+                }
+                if let Some(t) = item_type_id {
+                    data["item_type_id"] = json!(t);
+                }
+                if let Some(p) = priority_id {
+                    data["priority_id"] = json!(p);
+                }
+                ("issue.create", None, None, data)
+            }
         };
         let mut out = json!({ "request_id": self.request_id, "type": kind, "data": data });
         if let Some(t) = target {
@@ -385,6 +576,10 @@ fn problem_message(kind: &str, result: Option<&SyncResult>) -> String {
         .and_then(Value::as_str)
         .map(str::to_string);
     let text = match kind {
+        "timer_running" => format!(
+            "{} Your offline start was not saved.",
+            server.unwrap_or_else(|| "Another timer is already running.".into())
+        ),
         "conflict" => "Changed on the server meanwhile. The server's version was kept.".to_string(),
         "deleted" => server.unwrap_or_else(|| "It was deleted or you can't open it any more.".into()),
         "forbidden" => "You are not allowed to make this change.".to_string(),
@@ -408,7 +603,7 @@ impl Outbox {
 
     /// Atomic (temp file + rename); nothing left → the file goes.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        if self.entries.is_empty() && self.problems.is_empty() {
+        if self.entries.is_empty() && self.problems.is_empty() && self.activity_needed.is_none() {
             return remove_file(path);
         }
         write_atomic(path, &serde_json::to_vec(self).expect("serializable"))
@@ -477,7 +672,30 @@ impl Outbox {
                     return Ok(Some(self.entries[i].request_id.clone()));
                 }
             }
-            Change::TaskCreate { .. } | Change::CaptureCreate { .. } => {}
+            Change::NotificationRead { notification_id, .. } => {
+                if let Some(i) = self.unsent(
+                    |c| matches!(c, Change::NotificationRead { notification_id: n, .. } if n == notification_id),
+                ) {
+                    return Ok(Some(self.entries[i].request_id.clone()));
+                }
+            }
+            Change::NotificationsReadAll { before } => {
+                // a later "mark all read" covers the earlier one: it moves `before` forward
+                if let Some(i) = self.unsent(|c| matches!(c, Change::NotificationsReadAll { .. })) {
+                    if let Change::NotificationsReadAll { before: b } = &mut self.entries[i].change {
+                        if before.as_str() > b.as_str() {
+                            *b = before.clone();
+                        }
+                    }
+                    return Ok(Some(self.entries[i].request_id.clone()));
+                }
+            }
+            Change::TaskCreate { .. }
+            | Change::CaptureCreate { .. }
+            | Change::TimerStart { .. }
+            | Change::TimerStop { .. }
+            | Change::TimerDiscard { .. }
+            | Change::IssueCreate { .. } => {}
         }
         if self.entries.len() >= MAX_ENTRIES {
             return Err(OutboxError::Full);
@@ -567,6 +785,54 @@ impl Outbox {
         value
     }
 
+    /// The timer started offline that waits in the outbox (the last one), and whether it already
+    /// went out (its answer lost: it can't be taken back any more).
+    pub fn pending_start(&self) -> Option<(&Entry, bool)> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|e| matches!(e.change, Change::TimerStart { .. }))
+            .map(|e| (e, e.attempts > 0))
+    }
+
+    /// Discard of a timer started offline that wasn't sent yet: the start is taken back.
+    /// `false` when there is none (or it went out already).
+    pub fn cancel_unsent_start(&mut self) -> bool {
+        match self.unsent(|c| matches!(c, Change::TimerStart { .. })) {
+            Some(i) => {
+                self.entries.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The user picked an activity for the stop that waited for one: the stop goes out again
+    /// (a new change, same `stopped_at`) with it.
+    pub fn resend_stop(&mut self, activity_id: u64) -> Result<Option<String>, OutboxError> {
+        let needed = self.activity_needed.as_ref().ok_or(OutboxError::UnknownActivity)?;
+        if !needed.activities.iter().any(|a| a.id == activity_id) {
+            return Err(OutboxError::UnknownActivity);
+        }
+        let change = Change::TimerStop {
+            timer_id: needed.timer_id,
+            stopped_at: needed.stopped_at.clone(),
+            activity_id: Some(activity_id),
+            title: needed.title.clone(),
+        };
+        let id = self.push(change)?;
+        self.activity_needed = None;
+        Ok(id)
+    }
+
+    /// The stop that waited for an activity is no longer needed (`timer_id` stopped another way
+    /// or isn't running; `None`: whatever it was).
+    pub fn clear_activity_needed(&mut self, timer_id: Option<u64>) {
+        if timer_id.is_none() || self.activity_needed.as_ref().map(|n| n.timer_id) == timer_id {
+            self.activity_needed = None;
+        }
+    }
+
     fn unsent(&self, pred: impl Fn(&Change) -> bool) -> Option<usize> {
         self.entries.iter().position(|e| e.attempts == 0 && pred(&e.change))
     }
@@ -616,10 +882,20 @@ impl Outbox {
                 // no answer for it: keep it for the next sync
                 continue;
             };
+            if result.live_state().is_some() {
+                step.states.push(result.clone());
+            }
             match verdict(result) {
                 Verdict::Applied => {
                     let entry = self.entries.remove(i);
                     step.done.push((entry, result.clone()));
+                }
+                Verdict::Conflict if matches!(self.entries[i].change, Change::TimerStart { .. }) => {
+                    // another timer runs: this start is dropped; its entity (the running timer)
+                    // is shown through `states`
+                    let entry = self.entries.remove(i);
+                    self.add_problem(&entry, "timer_running", Some(result));
+                    step.problems += 1;
                 }
                 Verdict::Conflict => {
                     let entry = self.entries.remove(i);
@@ -627,10 +903,35 @@ impl Outbox {
                     step.problems += 1;
                     step.done.push((entry, result.clone()));
                 }
+                Verdict::Drop("invalid") if self.waits_for_activity(i, result) => {
+                    let entry = self.entries.remove(i);
+                    if let Change::TimerStop {
+                        timer_id,
+                        stopped_at,
+                        title,
+                        ..
+                    } = entry.change
+                    {
+                        let message = problem_message("invalid", Some(result));
+                        self.activity_needed = Some(ActivityNeeded {
+                            timer_id,
+                            stopped_at,
+                            title,
+                            activities: result.activity_choices(),
+                            default_activity_id: result.default_activity_id,
+                            message,
+                        });
+                    }
+                    step.needs_activity = true;
+                }
                 Verdict::Drop(kind) => {
                     let entry = self.entries.remove(i);
                     self.add_problem(&entry, kind, Some(result));
                     step.problems += 1;
+                }
+                Verdict::Gone => {
+                    let entry = self.entries.remove(i);
+                    step.gone.push(entry.change.describe());
                 }
                 Verdict::Keep { stop } => {
                     if result.status == "waiting" && self.entries[i].attempts >= MAX_WAITING {
@@ -643,6 +944,11 @@ impl Outbox {
             }
         }
         step
+    }
+
+    /// An `invalid` `timer.stop` that offers activities to pick from.
+    fn waits_for_activity(&self, i: usize, result: &SyncResult) -> bool {
+        matches!(self.entries[i].change, Change::TimerStop { .. }) && !result.activity_choices().is_empty()
     }
 
     /// The whole batch failed. Offline / server trouble / signed out: keep everything, stop.
@@ -695,6 +1001,28 @@ pub fn parse_results(body: &Value) -> Vec<SyncResult> {
             .collect()
     })
     .unwrap_or_default()
+}
+
+/// Unix seconds → `2026-11-02T09:41:12Z` (the sync API's device times).
+pub fn iso_utc(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let rest = secs.rem_euclid(86_400);
+    // the civil date from days since 1970-01-01 (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        rest / 3600,
+        (rest % 3600) / 60,
+        rest % 60
+    )
 }
 
 pub fn now() -> u64 {
@@ -952,6 +1280,7 @@ mod tests {
         assert_eq!(verdict(&result("a", "applied", 200)), Verdict::Applied);
         assert_eq!(verdict(&result("a", "conflict", 409)), Verdict::Conflict);
         assert_eq!(verdict(&result("a", "deleted", 410)), Verdict::Drop("deleted"));
+        assert_eq!(verdict(&result("a", "gone", 410)), Verdict::Gone, "dropped quietly");
         assert_eq!(verdict(&result("a", "forbidden", 403)), Verdict::Drop("forbidden"));
         assert_eq!(verdict(&result("a", "invalid", 422)), Verdict::Drop("invalid"));
         assert_eq!(verdict(&result("a", "waiting", 424)), Verdict::Keep { stop: false });
@@ -1081,6 +1410,323 @@ mod tests {
         assert_eq!(r[0].entity, Some(json!({"id": "issue:1"})));
         assert_eq!(parse_results(&body["data"]).len(), 1);
         assert!(parse_results(&json!({"message": "x"})).is_empty());
+    }
+
+    #[test]
+    fn timer_inbox_and_issue_changes_become_the_new_sync_types() {
+        let j = Entry::new(Change::TimerStart {
+            issue_id: 412,
+            description: Some("Reproduce the bug".into()),
+            started_at: "2026-11-02T08:58:00Z".into(),
+            title: "WEB-12 Fix login".into(),
+        })
+        .to_json();
+        assert_eq!(j["type"], "timer.start");
+        assert_eq!(
+            j["data"],
+            json!({"issue_id": 412, "description": "Reproduce the bug", "started_at": "2026-11-02T08:58:00Z"})
+        );
+        assert!(j.get("target").is_none() && j.get("base").is_none());
+        let j = Entry::new(Change::TimerStart {
+            issue_id: 412,
+            description: None,
+            started_at: "2026-11-02T08:58:00Z".into(),
+            title: String::new(),
+        })
+        .to_json();
+        assert_eq!(
+            j["data"],
+            json!({"issue_id": 412, "started_at": "2026-11-02T08:58:00Z"})
+        );
+
+        let stop = |activity_id| Change::TimerStop {
+            timer_id: 77,
+            stopped_at: "2026-11-02T09:40:00Z".into(),
+            activity_id,
+            title: "x".into(),
+        };
+        let j = Entry::new(stop(None)).to_json();
+        assert_eq!(j["type"], "timer.stop");
+        assert_eq!(j["data"], json!({"timer_id": 77, "stopped_at": "2026-11-02T09:40:00Z"}));
+        let j = Entry::new(stop(Some(4))).to_json();
+        assert_eq!(
+            j["data"],
+            json!({"timer_id": 77, "stopped_at": "2026-11-02T09:40:00Z", "activity_id": 4})
+        );
+
+        let j = Entry::new(Change::TimerDiscard {
+            timer_id: 77,
+            title: "x".into(),
+        })
+        .to_json();
+        assert_eq!(
+            (j["type"].clone(), j["data"].clone()),
+            (json!("timer.discard"), json!({"timer_id": 77}))
+        );
+
+        let j = Entry::new(Change::NotificationRead {
+            notification_id: "9b2c-41".into(),
+            title: "Ada assigned you".into(),
+        })
+        .to_json();
+        assert_eq!(j["type"], "notification.read");
+        assert_eq!(j["data"], json!({"notification_id": "9b2c-41"}));
+
+        let j = Entry::new(Change::NotificationsReadAll {
+            before: "2026-11-02T09:41:12Z".into(),
+        })
+        .to_json();
+        assert_eq!(j["type"], "notifications.read_all");
+        assert_eq!(j["data"], json!({"before": "2026-11-02T09:41:12Z"}));
+
+        let j = Entry::new(Change::IssueCreate {
+            board_id: 9,
+            title: "Offline task".into(),
+            description: Some("**Steps**".into()),
+            item_type_id: Some(2),
+            priority_id: Some(3),
+        })
+        .to_json();
+        assert_eq!(j["type"], "issue.create");
+        assert_eq!(
+            j["data"],
+            json!({"board_id": 9, "title": "Offline task", "description": "**Steps**", "item_type_id": 2, "priority_id": 3})
+        );
+        let j = Entry::new(Change::IssueCreate {
+            board_id: 9,
+            title: "Plain".into(),
+            description: None,
+            item_type_id: None,
+            priority_id: None,
+        })
+        .to_json();
+        assert_eq!(
+            j["data"],
+            json!({"board_id": 9, "title": "Plain"}),
+            "nothing unset is sent"
+        );
+    }
+
+    #[test]
+    fn reads_fold_and_a_later_read_all_moves_before_forward() {
+        let mut o = Outbox::default();
+        let read = |id: &str| Change::NotificationRead {
+            notification_id: id.into(),
+            title: String::new(),
+        };
+        let a = o.push(read("a")).unwrap();
+        assert_eq!(o.push(read("a")).unwrap(), a, "read twice = once");
+        o.push(read("b")).unwrap();
+        let all = |before: &str| Change::NotificationsReadAll { before: before.into() };
+        let r = o.push(all("2026-11-02T09:00:00Z")).unwrap();
+        assert_eq!(o.push(all("2026-11-02T10:00:00Z")).unwrap(), r);
+        assert_eq!(o.push(all("2026-11-02T08:00:00Z")).unwrap(), r, "never moves back");
+        assert_eq!(o.len(), 3);
+        assert_eq!(o.entries[2].change, all("2026-11-02T10:00:00Z"));
+        // once it went out, a new "mark all read" is a new change
+        o.entries[2].attempts = 1;
+        o.push(all("2026-11-02T11:00:00Z")).unwrap();
+        assert_eq!(o.len(), 4);
+    }
+
+    #[test]
+    fn a_timer_started_offline_can_be_taken_back_until_it_went_out() {
+        let mut o = Outbox::default();
+        assert!(o.pending_start().is_none());
+        o.push(Change::TimerStart {
+            issue_id: 1,
+            description: None,
+            started_at: "2026-11-02T08:00:00Z".into(),
+            title: "x".into(),
+        })
+        .unwrap();
+        assert_eq!(o.pending_start().map(|(_, sent)| sent), Some(false));
+        o.entries[0].attempts = 1;
+        assert_eq!(o.pending_start().map(|(_, sent)| sent), Some(true));
+        assert!(!o.cancel_unsent_start(), "the server may have it already");
+        o.entries[0].attempts = 0;
+        assert!(o.cancel_unsent_start());
+        assert!(o.is_empty());
+    }
+
+    fn timer_result(id: &str, status: &str, http: u16) -> SyncResult {
+        SyncResult {
+            record_type: Some("timer".into()),
+            ..result(id, status, http)
+        }
+    }
+
+    #[test]
+    fn timer_and_inbox_results_ok_conflict_invalid_with_activities_and_gone() {
+        let mut o = Outbox::default();
+        let push = |o: &mut Outbox, c| o.push(c).unwrap().unwrap();
+        let start = push(
+            &mut o,
+            Change::TimerStart {
+                issue_id: 412,
+                description: None,
+                started_at: "2026-11-02T08:58:00Z".into(),
+                title: "WEB-12 Fix login".into(),
+            },
+        );
+        let stop = push(
+            &mut o,
+            Change::TimerStop {
+                timer_id: 77,
+                stopped_at: "2026-11-02T09:40:00Z".into(),
+                activity_id: None,
+                title: "WEB-9 Docs".into(),
+            },
+        );
+        let read = push(
+            &mut o,
+            Change::NotificationRead {
+                notification_id: "n1".into(),
+                title: "x".into(),
+            },
+        );
+        let all = push(
+            &mut o,
+            Change::NotificationsReadAll {
+                before: "2026-11-02T09:41:12Z".into(),
+            },
+        );
+        let discard = push(
+            &mut o,
+            Change::TimerDiscard {
+                timer_id: 5,
+                title: "old".into(),
+            },
+        );
+        let sent = ids(&o);
+
+        let running = json!({"running": true, "timer": {"id": 76, "started_at": "2026-11-02T08:00:00Z"}, "today_logged_seconds": 5400});
+        let mut conflict = timer_result(&start, "conflict", 409);
+        conflict.entity = Some(running.clone());
+        conflict.message = Some("A timer is already running — stop it first.".into());
+        let mut invalid = result(&stop, "invalid", 422);
+        invalid.errors = Some(json!({"activity_id": ["Pick an activity."]}));
+        invalid.activities =
+            Some(json!([{"id": 4, "name": "Programming"}, {"id": 5, "name": "\u{7}Review "}, {"name": "no id"}]));
+        invalid.default_activity_id = Some(4);
+        let mut gone = result(&read, "gone", 410);
+        gone.record_type = Some("notification".into());
+        let mut applied = result(&all, "applied", 200);
+        applied.record_type = Some("unread_count".into());
+        applied.entity = Some(json!({"unread_count": 1}));
+        let results = vec![conflict, invalid, gone, applied, timer_result(&discard, "gone", 410)];
+        let step = o.apply_results(&sent, &results);
+
+        assert!(o.is_empty(), "every one is settled");
+        // ok: done, its live state goes to the tray / panel
+        assert_eq!(step.done.len(), 1);
+        assert_eq!(step.done[0].0.request_id, all);
+        // conflict: dropped with a clear problem, the running timer is shown
+        assert_eq!(step.problems, 1);
+        assert_eq!(o.problems.len(), 1);
+        assert_eq!(o.problems[0].request_id, start);
+        assert_eq!(o.problems[0].kind, "timer_running");
+        assert_eq!(
+            o.problems[0].message,
+            "A timer is already running — stop it first. Your offline start was not saved."
+        );
+        let states: Vec<_> = step.states.iter().filter_map(SyncResult::live_state).collect();
+        assert_eq!(
+            states,
+            vec![("timer", &running), ("unread_count", &json!({"unread_count": 1}))]
+        );
+        // invalid + activities: waits for the pick, no problem
+        assert!(step.needs_activity);
+        let needed = o.activity_needed.clone().unwrap();
+        assert_eq!(needed.timer_id, 77);
+        assert_eq!(needed.stopped_at, "2026-11-02T09:40:00Z");
+        assert_eq!(needed.default_activity_id, Some(4));
+        assert_eq!(needed.message, "Pick an activity.");
+        assert_eq!(
+            needed.activities,
+            vec![
+                ActivityChoice {
+                    id: 4,
+                    name: "Programming".into()
+                },
+                ActivityChoice {
+                    id: 5,
+                    name: "Review".into()
+                }
+            ]
+        );
+        // gone: dropped quietly, noted for the log
+        assert_eq!(
+            step.gone,
+            vec!["Mark read: “x”".to_string(), "Discard timer: “old”".to_string()]
+        );
+
+        // the pick: the stop goes out again with the activity and the same stopped_at
+        assert_eq!(o.resend_stop(9), Err(OutboxError::UnknownActivity));
+        let again = o.resend_stop(4).unwrap().unwrap();
+        assert_ne!(again, stop, "a new change");
+        assert!(o.activity_needed.is_none());
+        assert_eq!(
+            o.entries[0].to_json()["data"],
+            json!({"timer_id": 77, "stopped_at": "2026-11-02T09:40:00Z", "activity_id": 4})
+        );
+        assert_eq!(o.resend_stop(4), Err(OutboxError::UnknownActivity), "only once");
+
+        // an invalid stop with nothing to pick is a problem like any other
+        let mut o = Outbox::default();
+        let stop = push(
+            &mut o,
+            Change::TimerStop {
+                timer_id: 1,
+                stopped_at: "2026-11-02T09:40:00Z".into(),
+                activity_id: None,
+                title: "x".into(),
+            },
+        );
+        let mut invalid = result(&stop, "invalid", 422);
+        invalid.activities = Some(json!([]));
+        let step = o.apply_results(std::slice::from_ref(&stop), &[invalid]);
+        assert_eq!((step.problems, step.needs_activity), (1, false));
+        assert!(o.activity_needed.is_none());
+    }
+
+    #[test]
+    fn a_stop_waiting_for_an_activity_is_kept_on_disk_and_can_be_cleared() {
+        let dir = std::env::temp_dir().join(format!("brainitive-outbox-activity-{}", std::process::id()));
+        let path = dir.join("outbox.json");
+        let mut o = Outbox {
+            activity_needed: Some(ActivityNeeded {
+                timer_id: 7,
+                stopped_at: "2026-11-02T09:40:00Z".into(),
+                title: "x".into(),
+                activities: vec![ActivityChoice {
+                    id: 1,
+                    name: "Dev".into(),
+                }],
+                default_activity_id: None,
+                message: "Pick an activity.".into(),
+            }),
+            ..Outbox::default()
+        };
+        o.save(&path).unwrap();
+        assert_eq!(Outbox::load(&path), o, "nothing waiting, but a pick is: the file stays");
+        o.clear_activity_needed(Some(8));
+        assert!(o.activity_needed.is_some(), "another timer: kept");
+        o.clear_activity_needed(Some(7));
+        assert!(o.activity_needed.is_none());
+        o.save(&path).unwrap();
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn device_times_are_iso_utc() {
+        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_utc(1_793_612_472), "2026-11-02T09:41:12Z");
+        assert_eq!(iso_utc(951_782_400), "2000-02-29T00:00:00Z");
+        for t in [0_i64, 951_782_400, 1_793_612_472, 4_102_444_799] {
+            assert_eq!(crate::panel::view::parse_instant(&iso_utc(t)), Some(t), "{t}");
+        }
     }
 
     #[test]

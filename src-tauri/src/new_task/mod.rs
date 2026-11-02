@@ -10,8 +10,10 @@
 //! - types / priorities: `GET /api/v1/projects/{id}/config`
 //! - create: `POST /api/v1/boards/{id}/items` with a `request_id` (reused for a retry of the
 //!   same input, so a lost answer never makes a second issue)
-//! - offline: the sync API's `issue.create` has no description / type, so the page offers "Save
-//!   to Inbox instead" (the capture queue)
+//! - offline: on a server with the client-gaps sync types (`offline::extended_sync`) the issue
+//!   goes to the outbox as `issue.create` (with description and type) and is created when the
+//!   server answers; on an older server (or when that fails) the page offers "Save to Inbox
+//!   instead" (the capture queue)
 
 pub mod model;
 
@@ -28,8 +30,9 @@ use crate::server::ServerOrigin;
 use crate::state::{state, Inner, Phase};
 use model::{Config, Created, Memory, Pending, Project, Selection, TaskError, TaskInput};
 
-/// The destinations are fetched again when older than this (opening the window shows the kept
-/// ones at once and refreshes behind them).
+/// Without an ETag (an older server) the destinations are fetched again only when older than
+/// this; with one they are asked again on every open (a 304 when nothing changed). Opening the
+/// window shows the kept ones at once and refreshes behind them.
 const FRESH: Duration = Duration::from_secs(60);
 
 /// What the window keeps between calls, for one server and one sign-in.
@@ -51,6 +54,8 @@ struct Kept {
     at: Instant,
     /// A board turned out to be gone: load the list again on the next view.
     outdated: bool,
+    /// The `GET /capture-destinations` ETag of `projects` (newer servers).
+    etag: Option<String>,
 }
 
 /// One server + one sign-in (`account_epoch` changes on every sign-in / sign-out / switch).
@@ -96,6 +101,7 @@ impl TaskState {
                 configs: HashMap::new(),
                 at: Instant::now(),
                 outdated: false,
+                etag: None,
             }),
             ..Self::default()
         }
@@ -153,14 +159,20 @@ pub struct TaskView {
     selection: Selection,
     /// The kept list is old (or missing): the page asks `task_load`.
     stale: bool,
+    /// Offline, a task is kept and created when the server answers (else: inbox only).
+    queue_offline: bool,
 }
 
 fn view(inner: &mut Inner, ticket: Option<&Ticket>, state_name: &'static str) -> TaskView {
     let shortcut = crate::shortcuts::label_of(inner.settings.preferences.task_shortcut.as_deref());
     let server = ticket.map(|t| inner.settings.label_of(&t.origin));
     let memory = ticket.and_then(|t| memory_of(inner, t));
+    let queue_offline = crate::offline::extended_sync(inner);
     let (projects, stale) = match ticket.and_then(|t| kept(inner, t)) {
-        Some(k) => (k.projects.clone(), k.outdated || k.at.elapsed() > FRESH),
+        Some(k) => (
+            k.projects.clone(),
+            model::stale(k.outdated, k.etag.is_some(), k.at.elapsed(), FRESH),
+        ),
         None => (Vec::new(), true),
     };
     TaskView {
@@ -171,6 +183,7 @@ fn view(inner: &mut Inner, ticket: Option<&Ticket>, state_name: &'static str) ->
         selection: model::pick(&projects, memory.as_ref()),
         projects,
         stale,
+        queue_offline,
     }
 }
 
@@ -203,25 +216,57 @@ pub async fn task_view(app: AppHandle, webview: Webview) -> Result<TaskView, Tas
 pub async fn task_load(app: AppHandle, webview: Webview) -> Result<TaskView, TaskError> {
     caller(&app, &webview)?;
     let ticket = signed_in_ticket(&app).await?;
+    // the list's tag when it is still for this server + sign-in and nothing turned out gone
+    let etag = {
+        let s = state(&app);
+        let mut inner = s.lock();
+        kept(&mut inner, &ticket)
+            .filter(|k| !k.outdated)
+            .and_then(|k| k.etag.clone())
+    };
+    let path = "/api/v1/capture-destinations";
+    let fail = |e: crate::session::CallError| model::call_error(&e, &ticket.origin.display_name());
     let response = state(&app)
         .session
-        .request(&ticket.origin, &ApiRequest::get("/api/v1/capture-destinations"))
+        .request(&ticket.origin, &ApiRequest::get(path).etag(etag.clone()))
         .await
-        .map_err(|e| model::call_error(&e, &ticket.origin.display_name()))?;
-    let projects = model::parse_destinations(&response.body);
+        .map_err(fail)?;
+    let fresh = match crate::api::revalidate(etag.map(|e| (e, serde_json::Value::Null)), response) {
+        crate::api::Revalidated::Cached(_) => None,
+        crate::api::Revalidated::AskAgain => {
+            let r = state(&app)
+                .session
+                .request(&ticket.origin, &ApiRequest::get(path))
+                .await
+                .map_err(fail)?;
+            Some((r.body, r.etag))
+        }
+        crate::api::Revalidated::Fresh { body, etag } => Some((body, etag)),
+    };
     let s = state(&app);
     let mut inner = s.lock();
     if Ticket::now(&inner).as_ref() != Some(&ticket) {
         return Err(TaskError::new("signed_out", "The server or account changed meanwhile."));
     }
-    // the configs are asked again too (types / priorities may have changed)
-    inner.task.kept = Some(Kept {
-        ticket: ticket.clone(),
-        projects,
-        configs: HashMap::new(),
-        at: Instant::now(),
-        outdated: false,
-    });
+    match fresh {
+        // unchanged (304): the kept list and its project configs stay
+        None => {
+            if let Some(k) = kept(&mut inner, &ticket) {
+                k.at = Instant::now();
+            }
+        }
+        // the configs are asked again too (types / priorities may have changed)
+        Some((body, etag)) => {
+            inner.task.kept = Some(Kept {
+                ticket: ticket.clone(),
+                projects: model::parse_destinations(&body),
+                configs: HashMap::new(),
+                at: Instant::now(),
+                outdated: false,
+                etag,
+            });
+        }
+    }
     Ok(view(&mut inner, Some(&ticket), "ready"))
 }
 
@@ -289,6 +334,8 @@ pub struct CreatedView {
     title: String,
     /// "Open" works (the server sent the issue's page).
     can_open: bool,
+    /// Kept offline: created when the server answers (`issue.create` in the outbox).
+    pending: bool,
 }
 
 /// Creates the issue (`POST /boards/{id}/items`). The ids must be of the kept answers.
@@ -317,6 +364,13 @@ pub async fn task_create(app: AppHandle, webview: Webview, input: TaskInput) -> 
     )
     .error_body();
     let result = state(&app).session.request(&ticket.origin, &request).await;
+    if let Err(e @ crate::session::CallError::Offline(_)) = &result {
+        // offline: kept and created later where the server takes `issue.create` with a
+        // description and a type; else (an older server, a full outbox) the inbox is offered
+        if crate::offline::extended_sync(&state(&app).lock()) {
+            return queue_create(&app, &ticket, &draft).map_err(|_| model::call_error(e, &server));
+        }
+    }
     let s = state(&app);
     let mut inner = s.lock();
     let response = match result {
@@ -354,6 +408,39 @@ pub async fn task_create(app: AppHandle, webview: Webview, input: TaskInput) -> 
         can_open: inner.task.created.is_some(),
         key: created.key,
         title: created.title,
+        pending: false,
+    })
+}
+
+/// The create while offline: `issue.create` in the outbox (sent as soon as the server answers).
+/// The choice is remembered like an online create; there is nothing to open yet.
+fn queue_create(app: &AppHandle, ticket: &Ticket, draft: &model::Draft) -> Result<CreatedView, ()> {
+    let change = model::offline_change(draft);
+    let title = draft.body["title"].as_str().unwrap_or_default().to_string();
+    if let Err(e) = crate::offline::queue(app, change) {
+        log::info!("new task not queued: {}", e.message);
+        return Err(());
+    }
+    let s = state(app);
+    let mut inner = s.lock();
+    // the REST request id is not reused: the outbox has its own
+    inner.task.pending = None;
+    inner.task.created = None;
+    if Ticket::now(&inner).as_ref() == Some(ticket) {
+        let memory = Memory {
+            project_id: Some(draft.project_id),
+            board_id: Some(draft.board_id),
+            type_id: draft.type_id,
+            at: crate::outbox::now(),
+        };
+        model::remember(&mut inner.settings.preferences.new_task, ticket.origin.as_str(), memory);
+        inner.save_settings();
+    }
+    Ok(CreatedView {
+        key: None,
+        title,
+        can_open: false,
+        pending: true,
     })
 }
 

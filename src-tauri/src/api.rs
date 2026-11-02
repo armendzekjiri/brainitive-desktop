@@ -481,6 +481,32 @@ impl ApiResponse {
     }
 }
 
+/// What the answer to a GET sent with `If-None-Match` means for the kept copy.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Revalidated {
+    /// 304 and a body is kept: use it.
+    Cached(Value),
+    /// 304 without a kept body (should not happen): ask again without the tag.
+    AskAgain,
+    /// A new body, with the tag to send next time (`None`: the server sends none — an older
+    /// server; then nothing is kept and the next call asks in full).
+    Fresh { body: Value, etag: Option<String> },
+}
+
+/// Pure: `cached` = the tag + body kept from the last answer of the same server and path.
+pub fn revalidate(cached: Option<(String, Value)>, response: ApiResponse) -> Revalidated {
+    if response.not_modified() {
+        return match cached {
+            Some((_, body)) => Revalidated::Cached(body),
+            None => Revalidated::AskAgain,
+        };
+    }
+    Revalidated::Fresh {
+        etag: response.etag.filter(|e| !e.trim().is_empty()),
+        body: response.body,
+    }
+}
+
 impl Default for ApiClient {
     fn default() -> Self {
         Self::new()
@@ -613,6 +639,39 @@ pub fn platform() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_304_reuses_the_kept_body_and_an_old_server_keeps_nothing() {
+        let answer = |status: u16, etag: Option<&str>, body: Value| ApiResponse {
+            status,
+            etag: etag.map(str::to_string),
+            body,
+        };
+        let kept = Some(("\"v1\"".to_string(), json!({"data": [1]})));
+        // unchanged: the kept body, no second request
+        assert_eq!(
+            revalidate(kept.clone(), answer(304, None, Value::Null)),
+            Revalidated::Cached(json!({"data": [1]}))
+        );
+        // a 304 without a kept body: ask again in full
+        assert_eq!(revalidate(None, answer(304, None, Value::Null)), Revalidated::AskAgain);
+        // changed: the new body and its tag
+        assert_eq!(
+            revalidate(kept.clone(), answer(200, Some("\"v2\""), json!({"data": [2]}))),
+            Revalidated::Fresh {
+                body: json!({"data": [2]}),
+                etag: Some("\"v2\"".into())
+            }
+        );
+        // an older server sends no tag (or an empty one): nothing to keep
+        assert_eq!(
+            revalidate(kept, answer(200, Some(" "), json!([]))),
+            Revalidated::Fresh {
+                body: json!([]),
+                etag: None
+            }
+        );
+    }
+
     #[test]
     fn the_instance_check_never_steps_down_to_http() {
         let u = |s: &str| Url::parse(s).unwrap();

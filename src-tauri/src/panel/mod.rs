@@ -149,7 +149,7 @@ pub struct Head {
     unread: u64,
     tab: Tab,
     platform: &'static str,
-    /// Changes without a sync type are off while offline (why).
+    /// Timer / mark-read changes are off while offline on an older server (why).
     offline_hint: Option<&'static str>,
     /// The saved servers for the header's switcher (ids and names only).
     servers: Vec<crate::servers::Choice>,
@@ -162,6 +162,20 @@ fn head(app: &AppHandle) -> Head {
     let offline = is_offline(&inner);
     let loaded = origin.is_some() && inner.offline.origin == origin;
     let pending = if loaded { inner.offline.outbox.len() } else { 0 };
+    let queues = crate::offline::extended_sync(&inner);
+    let reads = if loaded {
+        view::PendingReads::of(&inner.offline.outbox)
+    } else {
+        view::PendingReads::default()
+    };
+    let notes = inner
+        .panel
+        .kept
+        .notes
+        .as_ref()
+        .filter(|_| inner.panel.owner.as_ref().map(|o| &o.origin) == origin.as_ref())
+        .map(|n| &n.body);
+    let unread = view::unread_after(inner.tray_data.unread.unwrap_or(0), notes, &reads);
     Head {
         state: match (&origin, signed_in(inner.phase)) {
             (None, _) => "no_server",
@@ -171,10 +185,10 @@ fn head(app: &AppHandle) -> Head {
         server: origin.map(|o| inner.settings.label_of(&o)),
         status: view::sync_status(offline, inner.offline.syncing, pending),
         pending,
-        unread: inner.tray_data.unread.unwrap_or(0),
+        unread,
         tab: Tab::remembered(&inner.settings.preferences.panel_tab),
         platform: crate::api::platform(),
-        offline_hint: view::needs_server(offline),
+        offline_hint: view::needs_server(offline, queues),
         servers: crate::servers::choices(&inner.settings, cfg!(target_os = "macos")),
     }
 }
@@ -190,6 +204,8 @@ pub struct TabAnswer {
     age: Option<u64>,
     /// From the offline copy (no live answer in this session).
     from_offline_copy: bool,
+    /// Timer / mark-read changes go to the outbox while offline (the server has their sync types).
+    queue_offline: bool,
     today: Option<view::TodayView>,
     my_day: Option<view::MyDayView>,
     assigned: Option<view::AssignedView>,
@@ -223,6 +239,10 @@ fn answer(app: &AppHandle, tab: Tab, error: Option<String>) -> TabAnswer {
         inner.offline.ensure(&origin);
     }
     let pending = view::pending_done(&inner.offline.outbox);
+    let reads = view::PendingReads::of(&inner.offline.outbox);
+    let overlay = view::TimerOverlay::of(&inner.offline.outbox);
+    let queue_offline = crate::offline::extended_sync(&inner);
+    let needed = inner.offline.outbox.activity_needed.clone();
     let offline_view = inner
         .offline
         .cache
@@ -242,6 +262,7 @@ fn answer(app: &AppHandle, tab: Tab, error: Option<String>) -> TabAnswer {
         error,
         age: None,
         from_offline_copy: false,
+        queue_offline,
         today: None,
         my_day: None,
         assigned: None,
@@ -291,10 +312,15 @@ fn answer(app: &AppHandle, tab: Tab, error: Option<String>) -> TabAnswer {
                         .as_ref()
                         .is_some_and(|o| crate::links::resolve_deep_link_target(o, url).is_some())
                 };
-                out.notifications = Some(view::notifications(&n.body, unread, has_link));
+                out.notifications = Some(view::notifications(&n.body, unread, &reads, has_link));
             }
         }
         Tab::Timer => {
+            let running_id = kept
+                .timer
+                .as_ref()
+                .and_then(|t| view::timer_id(&t.body))
+                .or_else(|| timer_fallback.as_ref().and_then(|t| t.id.as_u64()));
             let running = match &kept.timer {
                 Some(t) => {
                     out.age = Some(age(t));
@@ -304,6 +330,9 @@ fn answer(app: &AppHandle, tab: Tab, error: Option<String>) -> TabAnswer {
                 None => timer_fallback.map(|t| view::RunningTimer {
                     key: None,
                     title: t.label.clone(),
+                    description: None,
+                    pending: false,
+                    started_offline: false,
                     elapsed_seconds: t.elapsed_now(),
                     label: t.label,
                     started_at: None,
@@ -313,23 +342,44 @@ fn answer(app: &AppHandle, tab: Tab, error: Option<String>) -> TabAnswer {
                     has_link: t.url.is_some(),
                 }),
             };
-            let (entries, total) = match &kept.entries {
-                Some((e, _)) => {
+            let (running, pending_note) = overlay.apply(running, running_id, now_unix());
+            let today_seconds = kept.timer.as_ref().and_then(|t| view::today_seconds(&t.body));
+            let (entries, total) = match (&kept.entries, today_seconds) {
+                (Some((e, _)), None) => {
                     let (rows, total) = view::entries(&e.body);
                     (Some(rows), total)
                 }
-                None => (None, 0),
+                _ => (None, 0),
             };
-            let candidates = view::candidates(
+            let mut candidates = view::candidates(
                 kept.my_day.as_ref().map(|s| &s.body),
                 kept.work.as_ref().map(|s| &s.body),
             );
-            if running.is_some() || entries.is_some() || kept.timer.is_some() {
+            if kept.my_day.is_none() && kept.work.is_none() {
+                // offline without a live answer this session: the offline copy's open issues
+                if let Some(v) = &offline_view {
+                    candidates = view::offline_candidates(v);
+                }
+            }
+            // the live answer is only compared with while online (offline it may be old)
+            let live = kept.timer.as_ref().filter(|_| !offline).map(|t| &t.body);
+            let activity_needed = view::activity_needed_view(needed.as_ref(), live);
+            if running.is_some()
+                || entries.is_some()
+                || kept.timer.is_some()
+                || pending_note.is_some()
+                || activity_needed.is_some()
+                || (offline && queue_offline && !candidates.is_empty())
+            {
                 out.timer = Some(view::TimerView {
                     running,
                     entries,
                     total_minutes: total,
+                    today_seconds,
                     candidates,
+                    description_supported: queue_offline,
+                    pending_note,
+                    activity_needed,
                 });
             }
         }
@@ -393,19 +443,18 @@ async fn fetch_work(app: &AppHandle, t: &PollTicket) -> Result<(), CallError> {
     let request = ApiRequest::get("/api/v1/me/work")
         .query("status", "open")
         .query("limit", WORK_PAGE);
-    let body = get(app, t, request).await?;
-    keep(app, t, |k| k.work = Some(Stored::new(body)));
+    if let Some(body) = crate::tray::get_cached_request(app, t, request).await? {
+        keep(app, t, |k| k.work = Some(Stored::new(body)));
+    }
     Ok(())
 }
 
 async fn fetch_notes(app: &AppHandle, t: &PollTicket) -> Result<(), CallError> {
-    let body = get(
-        app,
-        t,
-        ApiRequest::get("/api/v1/notifications").query("limit", NOTIFICATIONS),
-    )
-    .await?;
-    keep(app, t, |k| k.notes = Some(Stored::new(body)));
+    // the first page (no cursor) answers an ETag on newer servers
+    let request = ApiRequest::get("/api/v1/notifications").query("limit", NOTIFICATIONS);
+    if let Some(body) = crate::tray::get_cached_request(app, t, request).await? {
+        keep(app, t, |k| k.notes = Some(Stored::new(body)));
+    }
     if let Some(count) = crate::tray::get_cached(app, t, "/api/v1/notifications/unread-count")
         .await?
         .as_ref()
@@ -418,6 +467,7 @@ async fn fetch_notes(app: &AppHandle, t: &PollTicket) -> Result<(), CallError> {
 
 async fn fetch_timer(app: &AppHandle, t: &PollTicket) -> Result<(), CallError> {
     if let Some(body) = crate::tray::get_cached(app, t, "/api/v1/me/timer").await? {
+        crate::offline::note_timer_answer(app, &t.origin, &body);
         if let Some(timer) = crate::tray::parse_timer(&body) {
             let s = state(app);
             let mut inner = s.lock();
@@ -425,6 +475,15 @@ async fn fetch_timer(app: &AppHandle, t: &PollTicket) -> Result<(), CallError> {
                 inner.tray_data.timer = timer;
                 inner.tray_data.timer_known = true;
             }
+        }
+        // a stop that waited for an activity, for a timer that isn't running any more
+        let running = view::timer_id(&body);
+        let stale = crate::offline::read_outbox(app, |o, _| {
+            o.activity_needed.as_ref().is_some_and(|n| Some(n.timer_id) != running)
+        })
+        .unwrap_or(false);
+        if stale {
+            crate::offline::with_outbox(app, |o| o.clear_activity_needed(None));
         }
         keep(app, t, |k| k.timer = Some(Stored::new(body)));
     }
@@ -495,7 +554,15 @@ async fn refresh(app: &AppHandle, tab: Tab) -> Result<(), CallError> {
             if !is_fresh(app, |k| k.timer.as_ref()) {
                 fetch_timer(app, &t).await?;
             }
-            if !is_fresh(app, |k| k.entries.as_ref().map(|(e, _)| e)) {
+            // today's total comes with the timer on newer servers; older ones: `/work-logs`
+            let total_in_timer = {
+                let s = state(app);
+                let mut inner = s.lock();
+                kept_for_current(&mut inner)
+                    .and_then(|k| k.timer.as_ref())
+                    .is_some_and(|t| view::today_seconds(&t.body).is_some())
+            };
+            if !total_in_timer && !is_fresh(app, |k| k.entries.as_ref().map(|(e, _)| e)) {
                 fetch_entries(app, &t).await?;
             }
             // what a timer can be started on
@@ -541,9 +608,41 @@ fn online_ticket(app: &AppHandle) -> Result<PollTicket, UiError> {
     let s = state(app);
     let inner = s.lock();
     if is_offline(&inner) {
-        return Err(ui("offline", view::needs_server(true).unwrap_or_default()));
+        return Err(ui("offline", view::needs_server(true, false).unwrap_or_default()));
     }
     PollTicket::now(&inner).ok_or_else(|| ui("signed_out", "Sign in to Brainitive first."))
+}
+
+/// Where a timer / mark-read change goes.
+enum Route {
+    /// The server now.
+    Api(PollTicket),
+    /// The outbox: offline, and the server has the sync type for it.
+    Outbox,
+}
+
+fn route(app: &AppHandle) -> Result<Route, UiError> {
+    let s = state(app);
+    let inner = s.lock();
+    if is_offline(&inner) {
+        if signed_in(inner.phase) && crate::offline::extended_sync(&inner) {
+            return Ok(Route::Outbox);
+        }
+        return Err(ui("offline", view::needs_server(true, false).unwrap_or_default()));
+    }
+    PollTicket::now(&inner)
+        .map(Route::Api)
+        .ok_or_else(|| ui("signed_out", "Sign in to Brainitive first."))
+}
+
+/// A call that failed because the server can't be reached goes to the outbox instead, when the
+/// server has the sync type for it.
+fn queue_instead(app: &AppHandle, e: &CallError) -> bool {
+    if !view::queue_after(e) {
+        return false;
+    }
+    crate::offline::note_poll(app, &Err(e.clone()));
+    crate::offline::extended_sync(&state(app).lock())
 }
 
 /// The panel's page reads everything again (data, unread count, sync status).
@@ -702,7 +801,7 @@ pub enum OpenTarget {
 #[tauri::command]
 pub async fn panel_open(app: AppHandle, webview: Webview, target: OpenTarget) -> Result<(), UiError> {
     caller(&app, &webview)?;
-    let mut mark_read = None;
+    let mut mark_read: Option<(String, String)> = None;
     let path = {
         let s = state(&app);
         let mut inner = s.lock();
@@ -731,7 +830,12 @@ pub async fn panel_open(app: AppHandle, webview: Webview, target: OpenTarget) ->
                     .and_then(|n| view::find_notification(&n.body, id))
                     .ok_or_else(|| ui("not_found", "Unknown notification."))?;
                 if !read {
-                    mark_read = Some(id.clone());
+                    let title = kept
+                        .notes
+                        .as_ref()
+                        .map(|n| view::note_title(&n.body, id))
+                        .unwrap_or_default();
+                    mark_read = Some((id.clone(), title));
                 }
                 url.unwrap_or_else(|| "/notifications".into())
             }
@@ -757,15 +861,32 @@ pub async fn panel_open(app: AppHandle, webview: Webview, target: OpenTarget) ->
     } else {
         crate::shell::focus_main(&app);
     }
-    if let Some(id) = mark_read {
-        if let Ok(t) = online_ticket(&app) {
-            read_one(&app, &t, &id).await;
+    if let Some((id, title)) = mark_read {
+        match route(&app) {
+            Ok(Route::Api(t)) => read_one(&app, &t, &id, &title).await,
+            Ok(Route::Outbox) => queue_read(&app, &id, &title),
+            Err(_) => {}
         }
     }
     Ok(())
 }
 
-async fn read_one(app: &AppHandle, t: &PollTicket, id: &str) {
+/// A notification read offline: `notification.read` in the outbox.
+fn queue_read(app: &AppHandle, id: &str, title: &str) {
+    if !view::is_notification_id(id) {
+        return;
+    }
+    let change = crate::outbox::Change::NotificationRead {
+        notification_id: id.to_string(),
+        title: title.to_string(),
+    };
+    if let Err(e) = crate::offline::queue(app, change) {
+        log::info!("notification read not queued: {}", e.message);
+    }
+    changed(app);
+}
+
+async fn read_one(app: &AppHandle, t: &PollTicket, id: &str, title: &str) {
     if !view::is_notification_id(id) {
         return;
     }
@@ -782,6 +903,7 @@ async fn read_one(app: &AppHandle, t: &PollTicket, id: &str) {
             }
             changed(app);
         }
+        Err(e) if queue_instead(app, &e) => queue_read(app, id, title),
         Err(e) => log::info!("notification not marked read: {e}"),
     }
 }
@@ -789,13 +911,31 @@ async fn read_one(app: &AppHandle, t: &PollTicket, id: &str) {
 #[tauri::command]
 pub async fn panel_mark_all_read(app: AppHandle, webview: Webview) -> Result<(), UiError> {
     caller(&app, &webview)?;
-    let t = online_ticket(&app)?;
+    // offline: only what the user saw (newest shown), so a later one stays unread
+    let before = {
+        let s = state(&app);
+        let mut inner = s.lock();
+        let kept = kept_for_current(&mut inner);
+        view::read_all_before(kept.and_then(|k| k.notes.as_ref()).map(|n| &n.body), now_unix())
+    };
+    let queue = |app: &AppHandle| -> Result<(), UiError> {
+        crate::offline::queue(
+            app,
+            crate::outbox::Change::NotificationsReadAll { before: before.clone() },
+        )?;
+        changed(app);
+        Ok(())
+    };
+    let t = match route(&app)? {
+        Route::Api(t) => t,
+        Route::Outbox => return queue(&app),
+    };
     let request = ApiRequest::post("/api/v1/notifications/read-all", json!({}));
-    state(&app)
-        .session
-        .request(&t.origin, &request)
-        .await
-        .map_err(|e| ui("server", call_message(&e)))?;
+    match state(&app).session.request(&t.origin, &request).await {
+        Ok(_) => {}
+        Err(e) if queue_instead(&app, &e) => return queue(&app),
+        Err(e) => return Err(ui("server", call_message(&e))),
+    }
     keep(&app, &t, |k| {
         if let Some(n) = k.notes.as_mut() {
             view::mark_read(&mut n.body, None);
@@ -804,6 +944,48 @@ pub async fn panel_mark_all_read(app: AppHandle, webview: Webview) -> Result<(),
     set_unread(&app, &t, 0);
     changed(&app);
     Ok(())
+}
+
+/// The live state a sync result brings (`timer`, `notification`, `unread_count`): the tray, the
+/// badge and the panel show what the server has now (also for a refused offline start: the timer
+/// that runs).
+pub fn apply_sync_states(app: &AppHandle, origin: &ServerOrigin, states: &[crate::outbox::SyncResult]) {
+    if states.is_empty() {
+        return;
+    }
+    let Some(t) = ticket(app).filter(|t| &t.origin == origin) else {
+        return;
+    };
+    for r in states {
+        let Some((kind, entity)) = r.live_state() else { continue };
+        match kind {
+            "timer" => {
+                crate::offline::note_timer_answer(app, origin, entity);
+                let running = view::timer_id(entity);
+                let stale = crate::offline::read_outbox(app, |o, _| {
+                    o.activity_needed.as_ref().is_some_and(|n| Some(n.timer_id) != running)
+                })
+                .unwrap_or(false);
+                if stale {
+                    crate::offline::with_outbox(app, |o| o.clear_activity_needed(None));
+                }
+                timer_changed(app, &t, entity.clone());
+            }
+            "notification" => keep(app, &t, |k| {
+                if let Some(n) = k.notes.as_mut() {
+                    view::replace_note(&mut n.body, entity);
+                }
+            }),
+            "unread_count" => {
+                if let Some(count) = crate::tray::parse_unread(entity) {
+                    set_unread(app, &t, count);
+                }
+            }
+            _ => {}
+        }
+    }
+    state(app).poll_now.notify_one();
+    changed(app);
 }
 
 /// After a timer change: the tray shows it, today's entries are asked again.
@@ -825,26 +1007,89 @@ fn timer_changed(app: &AppHandle, t: &PollTicket, body: Value) {
     changed(app);
 }
 
-/// Start a timer on an issue the panel offered (My Day / assigned).
-#[tauri::command]
-pub async fn panel_timer_start(app: AppHandle, webview: Webview, work_id: String) -> Result<(), UiError> {
-    caller(&app, &webview)?;
-    let t = online_ticket(&app)?;
-    let offered = {
-        let s = state(&app);
-        let mut inner = s.lock();
-        let kept = kept_for_current(&mut inner).cloned().unwrap_or_default();
-        view::candidates(
-            kept.my_day.as_ref().map(|s| &s.body),
-            kept.work.as_ref().map(|s| &s.body),
-        )
-        .iter()
-        .any(|c| c.id == work_id)
-    };
-    if !offered {
-        return Err(ui("not_found", "Pick an issue from the list."));
+/// The label of `work_id` when the panel offered it to start a timer on (My Day / assigned, or
+/// the offline copy's open issues when nothing live was loaded).
+fn offered(app: &AppHandle, work_id: &str) -> Option<String> {
+    let s = state(app);
+    let mut inner = s.lock();
+    let offline_view = inner
+        .offline
+        .cache
+        .as_ref()
+        .filter(|c| !c.is_empty())
+        .map(|c| crate::offline_cache::view(c, &inner.offline.outbox));
+    let kept = kept_for_current(&mut inner).cloned().unwrap_or_default();
+    let mut list = view::candidates(
+        kept.my_day.as_ref().map(|s| &s.body),
+        kept.work.as_ref().map(|s| &s.body),
+    );
+    if kept.my_day.is_none() && kept.work.is_none() {
+        list = offline_view.as_ref().map(view::offline_candidates).unwrap_or_default();
     }
-    let request = ApiRequest::post("/api/v1/me/timer/start", json!({ "id": work_id }));
+    list.into_iter().find(|c| c.id == work_id).map(|c| c.label)
+}
+
+/// The timer's optional description: one line, ≤ 255 characters, empty = none.
+fn clean_description(text: Option<String>) -> Option<String> {
+    let text: String = text?.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.chars().take(255).collect())
+}
+
+/// A timer started offline: `timer.start` with the device's clock. Not while another one shows as
+/// running (the server would refuse it as a conflict anyway).
+fn queue_start(app: &AppHandle, work_id: &str, label: &str, description: Option<String>) -> Result<(), UiError> {
+    let issue_id = crate::outbox::work_ref(work_id)
+        .filter(|(kind, _)| *kind == "board")
+        .map(|(_, id)| id)
+        .ok_or_else(|| ui("invalid", "Timers run on issues only."))?;
+    let busy = {
+        let s = state(app);
+        let mut inner = s.lock();
+        let overlay = view::TimerOverlay::of(&inner.offline.outbox);
+        let tray = inner.tray_data.timer.as_ref().and_then(|t| t.id.as_u64());
+        let kept = kept_for_current(&mut inner).and_then(|k| k.timer.as_ref().map(|t| view::timer_id(&t.body)));
+        let running = kept.unwrap_or(tray);
+        overlay.start.is_some() || running.is_some_and(|id| !overlay.ended.iter().any(|(t, _)| *t == id))
+    };
+    if busy {
+        return Err(ui("conflict", "Another timer is running. Stop it first."));
+    }
+    crate::offline::queue(
+        app,
+        crate::outbox::Change::TimerStart {
+            issue_id,
+            description,
+            started_at: crate::outbox::iso_utc(now_unix()),
+            title: label.chars().take(crate::outbox::MAX_TITLE).collect(),
+        },
+    )?;
+    changed(app);
+    Ok(())
+}
+
+/// Start a timer on an issue the panel offered (My Day / assigned), with an optional description
+/// (newer servers). Offline on a server that has `timer.start`: queued in the outbox.
+#[tauri::command]
+pub async fn panel_timer_start(
+    app: AppHandle,
+    webview: Webview,
+    work_id: String,
+    description: Option<String>,
+) -> Result<(), UiError> {
+    caller(&app, &webview)?;
+    let label = offered(&app, &work_id).ok_or_else(|| ui("not_found", "Pick an issue from the list."))?;
+    let supported = crate::offline::extended_sync(&state(&app).lock());
+    let description = clean_description(description).filter(|_| supported);
+    let t = match route(&app)? {
+        Route::Api(t) => t,
+        Route::Outbox => return queue_start(&app, &work_id, &label, description),
+    };
+    let mut body = json!({ "id": work_id });
+    if let Some(d) = &description {
+        body["description"] = json!(d);
+    }
+    let request = ApiRequest::post("/api/v1/me/timer/start", body);
     match state(&app).session.request(&t.origin, &request).await {
         Ok(response) => {
             timer_changed(&app, &t, response.body);
@@ -852,8 +1097,62 @@ pub async fn panel_timer_start(app: AppHandle, webview: Webview, work_id: String
         }
         Err(CallError::Server { status: 409, .. }) => Err(ui("conflict", "Another timer is running. Stop it first.")),
         Err(CallError::Server { status: 403, .. }) => Err(ui("forbidden", "You can't log time on this issue.")),
+        Err(e) if queue_instead(&app, &e) => queue_start(&app, &work_id, &label, description),
         Err(e) => Err(ui("server", call_message(&e))),
     }
+}
+
+/// The running timer as the panel knows it: the kept answer, else the poller's (offline), as a
+/// `GET /me/timer`-shaped body. `Err`: only a start made offline runs, which has no id yet.
+fn current_timer(app: &AppHandle) -> Result<Value, UiError> {
+    let s = state(app);
+    let mut inner = s.lock();
+    let start = inner.offline.outbox.pending_start().map(|(_, sent)| sent);
+    let ended: Vec<u64> = view::TimerOverlay::of(&inner.offline.outbox)
+        .ended
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    let tray = inner.tray_data.timer.clone();
+    let kept = kept_for_current(&mut inner).and_then(|k| k.timer.as_ref().map(|t| t.body.clone()));
+    let body = match (kept, tray) {
+        (Some(body), _) => body,
+        (None, Some(t)) => json!({
+            "running": true,
+            "timer": {"id": t.id, "issue": {"title": t.label}},
+            "activity_required": t.activity_required,
+            "default_activity_id": t.default_activity_id,
+        }),
+        (None, None) => Value::Null,
+    };
+    match view::timer_id(&body) {
+        Some(id) if !ended.contains(&id) => Ok(body),
+        _ if start == Some(false) => Err(ui(
+            "pending",
+            "This timer was started offline. Discard it, or stop it once it has synced.",
+        )),
+        _ if start == Some(true) => Err(ui("pending", "This timer is being synced. Try again in a moment.")),
+        _ => Err(ui("not_found", "No timer is running.")),
+    }
+}
+
+/// A stop made offline: `timer.stop` with the device's clock.
+fn queue_stop(app: &AppHandle, timer_id: u64, activity_id: Option<u64>, title: String) -> Result<StopOutcome, UiError> {
+    crate::offline::queue(
+        app,
+        crate::outbox::Change::TimerStop {
+            timer_id,
+            stopped_at: crate::outbox::iso_utc(now_unix()),
+            activity_id,
+            title,
+        },
+    )?;
+    changed(app);
+    Ok(StopOutcome {
+        stopped: true,
+        needs_activity: false,
+        message: "Timer stopped. The time is logged once Brainitive is back online.".into(),
+    })
 }
 
 /// The result of Stop.
@@ -874,17 +1173,20 @@ pub async fn panel_timer_stop(
     activity_id: Option<u64>,
 ) -> Result<StopOutcome, UiError> {
     caller(&app, &webview)?;
-    let t = online_ticket(&app)?;
-    let timer = {
-        let s = state(&app);
-        let mut inner = s.lock();
-        kept_for_current(&mut inner).and_then(|k| k.timer.clone())
-    };
-    let body = timer.map(|s| s.body).unwrap_or(Value::Null);
-    let timer_id = body["timer"]["id"]
-        .as_u64()
-        .filter(|_| body["running"] == true)
-        .ok_or_else(|| ui("not_found", "No timer is running."))?;
+    // a stop refused offline for want of an activity: the pick sends it again (same stop time)
+    let waiting = crate::offline::read_outbox(&app, |o, _| o.activity_needed.clone()).flatten();
+    if let (Some(_), Some(id)) = (&waiting, activity_id) {
+        crate::offline::resend_stop(&app, id)?;
+        changed(&app);
+        return Ok(StopOutcome {
+            stopped: true,
+            needs_activity: false,
+            message: "Logging the time…".into(),
+        });
+    }
+    let body = current_timer(&app)?;
+    let timer_id = view::timer_id(&body).ok_or_else(|| ui("not_found", "No timer is running."))?;
+    let title = view::running(&body, now_unix(), 0).map(|r| r.label).unwrap_or_default();
     let choices = view::activities(&body);
     let activity = match activity_id {
         Some(id) if choices.iter().any(|a| a.id == id) => Some(id),
@@ -901,6 +1203,10 @@ pub async fn panel_timer_stop(
         },
         None => None,
     };
+    let t = match route(&app)? {
+        Route::Api(t) => t,
+        Route::Outbox => return queue_stop(&app, timer_id, activity, title),
+    };
     let mut request = json!({ "timer_id": timer_id });
     if let Some(id) = activity {
         request["activity_id"] = json!(id);
@@ -911,6 +1217,7 @@ pub async fn panel_timer_stop(
         .await
     {
         Ok(response) => {
+            crate::offline::with_outbox(&app, |o| o.clear_activity_needed(Some(timer_id)));
             let message = match response.body["result"].as_str() {
                 Some("logged") => "Time logged.",
                 Some("already_stopped") => "The timer was already stopped.",
@@ -939,6 +1246,7 @@ pub async fn panel_timer_stop(
                 },
             })
         }
+        Err(e) if queue_instead(&app, &e) => queue_stop(&app, timer_id, activity, title),
         Err(e) => Err(ui("server", call_message(&e))),
     }
 }
@@ -947,22 +1255,37 @@ pub async fn panel_timer_stop(
 #[tauri::command]
 pub async fn panel_timer_discard(app: AppHandle, webview: Webview) -> Result<(), UiError> {
     caller(&app, &webview)?;
-    let t = online_ticket(&app)?;
-    let timer_id = {
-        let s = state(&app);
-        let mut inner = s.lock();
-        kept_for_current(&mut inner)
-            .and_then(|k| k.timer.as_ref())
-            .filter(|s| s.body["running"] == true)
-            .and_then(|s| s.body["timer"]["id"].as_u64())
+    // a timer started offline and not sent yet: the start is taken back
+    let unsent = crate::offline::read_outbox(&app, |o, _| o.pending_start().is_some_and(|(_, sent)| !sent));
+    if unsent == Some(true) && crate::offline::with_outbox(&app, |o| o.cancel_unsent_start()) == Some(true) {
+        changed(&app);
+        return Ok(());
     }
-    .ok_or_else(|| ui("not_found", "No timer is running."))?;
+    let body = current_timer(&app)?;
+    let timer_id = view::timer_id(&body).ok_or_else(|| ui("not_found", "No timer is running."))?;
+    let title = view::running(&body, now_unix(), 0).map(|r| r.label).unwrap_or_default();
+    let queue = |app: &AppHandle| -> Result<(), UiError> {
+        crate::offline::queue(
+            app,
+            crate::outbox::Change::TimerDiscard {
+                timer_id,
+                title: title.clone(),
+            },
+        )?;
+        changed(app);
+        Ok(())
+    };
+    let t = match route(&app)? {
+        Route::Api(t) => t,
+        Route::Outbox => return queue(&app),
+    };
     let request = ApiRequest::post("/api/v1/me/timer/discard", json!({ "timer_id": timer_id }));
-    let response = state(&app)
-        .session
-        .request(&t.origin, &request)
-        .await
-        .map_err(|e| ui("server", call_message(&e)))?;
+    let response = match state(&app).session.request(&t.origin, &request).await {
+        Ok(r) => r,
+        Err(e) if queue_instead(&app, &e) => return queue(&app),
+        Err(e) => return Err(ui("server", call_message(&e))),
+    };
+    crate::offline::with_outbox(&app, |o| o.clear_activity_needed(Some(timer_id)));
     let body = if response.body.get("running").is_some() {
         response.body
     } else {

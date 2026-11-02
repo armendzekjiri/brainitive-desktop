@@ -1,6 +1,11 @@
 //! What the menu-bar panel shows (pure): the API answers of `/me/today`, `/me/my-day`, `/me/work`,
 //! `/notifications`, `/me/timer` and `/work-logs` mapped to rows for the page, the offline
-//! fallback from the offline copy, and the decisions (API / outbox / disabled, sync status).
+//! fallback from the offline copy, the waiting outbox changes laid over them (pending badges), and
+//! the decisions (API / outbox / disabled, sync status).
+//!
+//! Older servers: a notification row without `summary` / `url` gets the client's wording and the
+//! payload's link; a timer answer without `today_logged_seconds` gets today's total from
+//! `/work-logs`.
 //!
 //! URLs never go to the page: rows carry `has_link`, and a click comes back as a reference (tab +
 //! id) that Rust resolves against the answer it keeps (`find_*`).
@@ -361,8 +366,10 @@ pub fn assigned(body: &Value, today: Option<&str>, pending: &HashMap<String, boo
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NoteRow {
     pub id: String,
-    /// The worded line ("Ana assigned you to BRAI-12").
+    /// The worded line ("Ana assigned you to BRAI-12"): the server's `summary`, else the client's.
     pub text: String,
+    /// Marked read offline, waiting to sync.
+    pub pending: bool,
     pub body: Option<String>,
     pub key: Option<String>,
     pub context: Option<String>,
@@ -512,31 +519,123 @@ pub fn describe(n: &Value) -> (String, Option<String>, Option<String>, Option<St
     }
 }
 
-/// `GET /notifications` → rows, newest first. Rows without a usable id are left out.
-pub fn notifications(body: &Value, unread: u64, has_link: impl Fn(&str) -> bool) -> NotificationsView {
+/// The line a notification shows: the server's `summary` (the web bell's sentence, plain text),
+/// else — an older server — the client's wording ([`describe`]).
+pub fn note_text(n: &Value) -> String {
+    clean(&n["summary"], MAX_TEXT).unwrap_or_else(|| describe(n).0)
+}
+
+/// Where a notification leads (raw, checked on click): the server's `url` when the row has the
+/// field (`null` = nothing the user can open now), else — an older server — the payload's link.
+pub fn note_url(n: &Value) -> Option<String> {
+    match n.get("url") {
+        Some(Value::String(u)) if !u.trim().is_empty() => Some(u.clone()),
+        Some(_) => None,
+        None => describe(n).4,
+    }
+}
+
+/// Notifications marked read offline, not synced yet: single ones and the newest "mark all read"
+/// (`before`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PendingReads {
+    pub ids: HashSet<String>,
+    pub before: Option<i64>,
+}
+
+impl PendingReads {
+    pub fn of(outbox: &crate::outbox::Outbox) -> Self {
+        let mut out = Self::default();
+        for e in &outbox.entries {
+            match &e.change {
+                crate::outbox::Change::NotificationRead { notification_id, .. } => {
+                    out.ids.insert(notification_id.clone());
+                }
+                crate::outbox::Change::NotificationsReadAll { before } => {
+                    out.before = out.before.max(parse_instant(before));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Whether row `n` (unread on the server) will be read once the outbox is sent.
+    fn covers(&self, n: &Value) -> bool {
+        let id = n["id"].as_str().unwrap_or("");
+        let created = n["created_at"].as_str().and_then(parse_instant);
+        self.ids.contains(id) || matches!((self.before, created), (Some(b), Some(c)) if c <= b)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty() && self.before.is_none()
+    }
+}
+
+/// The unread count with the waiting reads taken off: the server's count minus the shown unread
+/// rows they cover (rows not loaded can't be known, so the count never goes below what is left).
+pub fn unread_after(unread: u64, body: Option<&Value>, reads: &PendingReads) -> u64 {
+    if reads.is_empty() {
+        return unread;
+    }
+    let covered = body
+        .and_then(|b| b["data"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|n| n["read"] != true && reads.covers(n))
+        .count() as u64;
+    unread.saturating_sub(covered)
+}
+
+/// `notifications.read_all`'s `before`: the newest notification the user saw in the panel, so one
+/// that arrived after stays unread; nothing shown → now.
+pub fn read_all_before(body: Option<&Value>, now: i64) -> String {
+    let newest = body
+        .and_then(|b| b["data"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|n| n["created_at"].as_str().and_then(parse_instant))
+        .max();
+    crate::outbox::iso_utc(newest.unwrap_or(now))
+}
+
+/// `GET /notifications` → rows, newest first. Rows without a usable id are left out; reads
+/// waiting in the outbox show as read with a pending badge.
+pub fn notifications(
+    body: &Value,
+    unread: u64,
+    reads: &PendingReads,
+    has_link: impl Fn(&str) -> bool,
+) -> NotificationsView {
     let items = body["data"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|n| {
             let id = n["id"].as_str().filter(|id| is_notification_id(id))?.to_string();
-            let (text, body, key, context, url) = describe(n);
+            let (_, body, key, context, _) = describe(n);
+            let read = n["read"] == true;
+            let pending = !read && reads.covers(n);
             Some(NoteRow {
                 id,
-                text,
+                text: note_text(n),
+                pending,
                 body,
                 key,
                 context,
-                read: n["read"] == true,
+                read: read || pending,
                 created_at: n["created_at"]
                     .as_str()
                     .filter(|c| parse_instant(c).is_some())
                     .map(str::to_string),
-                has_link: url.as_deref().is_some_and(&has_link),
+                has_link: note_url(n).as_deref().is_some_and(&has_link),
             })
         })
         .collect();
-    NotificationsView { items, unread }
+    NotificationsView {
+        items,
+        unread: unread_after(unread, Some(body), reads),
+    }
 }
 
 /// The URL a notification leads to (checked by the caller with `links::resolve_deep_link_target`).
@@ -545,7 +644,30 @@ pub fn find_notification(body: &Value, id: &str) -> Option<(bool, Option<String>
         .as_array()?
         .iter()
         .find(|n| n["id"] == id && is_notification_id(id))
-        .map(|n| (n["read"] == true, describe(n).4))
+        .map(|n| (n["read"] == true, note_url(n)))
+}
+
+/// A notification row as the server has it now (a sync result's `notification` record).
+pub fn replace_note(body: &mut Value, row: &Value) {
+    let Some(id) = row["id"].as_str().filter(|id| is_notification_id(id)) else {
+        return;
+    };
+    if let Some(items) = body["data"].as_array_mut() {
+        for n in items.iter_mut().filter(|n| n["id"] == id) {
+            *n = row.clone();
+        }
+    }
+}
+
+/// The line a waiting change shows in the problem list ("Mark read: …").
+pub fn note_title(body: &Value, id: &str) -> String {
+    body["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|n| n["id"] == id)
+        .map(note_text)
+        .unwrap_or_default()
 }
 
 /// After "read": the row is read in the kept answer too.
@@ -571,6 +693,13 @@ pub struct RunningTimer {
     pub label: String,
     pub key: Option<String>,
     pub title: String,
+    /// What the user is doing (`timer.description`, newer servers).
+    pub description: Option<String>,
+    /// Started offline, waiting to sync.
+    pub pending: bool,
+    /// Started offline and not on the server yet: it can be discarded, not stopped (the stop needs
+    /// the server's timer id).
+    pub started_offline: bool,
     pub started_at: Option<String>,
     /// Seconds at the time of the answer; the page ticks on from there.
     pub elapsed_seconds: u64,
@@ -597,13 +726,29 @@ pub struct Candidate {
     pub in_my_day: bool,
 }
 
+/// A stop the server refused offline for want of an activity: the inline choice.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ActivityNeededView {
+    pub message: String,
+    pub label: String,
+    pub activities: Vec<Activity>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TimerView {
     pub running: Option<RunningTimer>,
-    /// `None`: not loaded (offline without an earlier answer).
+    /// `None`: not loaded (offline without an earlier answer), or the server sends the total
+    /// itself (`today_seconds`).
     pub entries: Option<Vec<EntryRow>>,
     pub total_minutes: u64,
+    /// Seconds logged today, without the running timer (`today_logged_seconds`; newer servers).
+    pub today_seconds: Option<u64>,
     pub candidates: Vec<Candidate>,
+    /// The server takes a description when starting.
+    pub description_supported: bool,
+    /// A stop / discard waits in the outbox ("Stopped — logs when synced").
+    pub pending_note: Option<String>,
+    pub activity_needed: Option<ActivityNeededView>,
 }
 
 /// The running timer of `GET /me/timer`. The elapsed time counts from `started_at` when it can
@@ -632,6 +777,9 @@ pub fn running(body: &Value, now: i64, age_seconds: u64) -> Option<RunningTimer>
         label: label(key.as_deref(), &title),
         key,
         title,
+        description: clean(&t["description"], 255),
+        pending: false,
+        started_offline: false,
         started_at,
         elapsed_seconds: elapsed,
         activity_required: body["activity_required"] == true,
@@ -655,6 +803,120 @@ pub fn activities(body: &Value) -> Vec<Activity> {
             })
         })
         .collect()
+}
+
+/// `today_logged_seconds` of `GET /me/timer` (finished logs of the user's day), `None` on an
+/// older server (then `/work-logs` gives the total).
+pub fn today_seconds(body: &Value) -> Option<u64> {
+    body.get("today_logged_seconds").and_then(Value::as_u64)
+}
+
+/// The id of the running timer in a `GET /me/timer` answer.
+pub fn timer_id(body: &Value) -> Option<u64> {
+    (body["running"] == true)
+        .then(|| body["timer"]["id"].as_u64())
+        .flatten()
+}
+
+/// The waiting timer changes, in order: a start made offline, and the timers stopped / discarded.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TimerOverlay {
+    /// (label, started_at, description, went out already)
+    pub start: Option<(String, String, Option<String>, bool)>,
+    /// Timer ids with a waiting stop (`true`) or discard (`false`).
+    pub ended: Vec<(u64, bool)>,
+}
+
+impl TimerOverlay {
+    pub fn of(outbox: &crate::outbox::Outbox) -> Self {
+        let mut out = Self::default();
+        for e in &outbox.entries {
+            match &e.change {
+                crate::outbox::Change::TimerStart {
+                    title,
+                    started_at,
+                    description,
+                    ..
+                } => out.start = Some((title.clone(), started_at.clone(), description.clone(), e.attempts > 0)),
+                crate::outbox::Change::TimerStop { timer_id, .. } => out.ended.push((*timer_id, true)),
+                crate::outbox::Change::TimerDiscard { timer_id, .. } => out.ended.push((*timer_id, false)),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Lays the waiting changes over the server's running timer (`id`): a stopped / discarded one
+    /// goes (with a note), a start made offline shows as running with a pending badge.
+    pub fn apply(
+        &self,
+        running: Option<RunningTimer>,
+        id: Option<u64>,
+        now: i64,
+    ) -> (Option<RunningTimer>, Option<String>) {
+        let mut note = None;
+        let mut running = running;
+        if let Some((_, stop)) = id.and_then(|id| self.ended.iter().find(|(t, _)| *t == id)) {
+            running = None;
+            note = Some(
+                if *stop {
+                    "Timer stopped. The time is logged once Brainitive is back online."
+                } else {
+                    "Timer discarded. It goes away on the server once Brainitive is back online."
+                }
+                .to_string(),
+            );
+        }
+        if let Some((title, started_at, description, sent)) = &self.start {
+            if running.is_none() {
+                let start = parse_instant(started_at);
+                running = Some(RunningTimer {
+                    label: title.clone(),
+                    key: None,
+                    title: title.clone(),
+                    description: description.clone(),
+                    pending: true,
+                    started_offline: !sent,
+                    started_at: start.map(|_| started_at.clone()),
+                    elapsed_seconds: start.map(|s| (now - s).max(0) as u64).unwrap_or(0),
+                    activity_required: false,
+                    default_activity_id: None,
+                    activities: Vec::new(),
+                    has_link: false,
+                });
+            }
+        }
+        (running, note)
+    }
+}
+
+/// The inline activity choice for a stop that waited for one, while it still fits what the server
+/// shows: the same timer running, or nothing live to compare with (offline / not loaded).
+pub fn activity_needed_view(
+    needed: Option<&crate::outbox::ActivityNeeded>,
+    live_timer: Option<&Value>,
+) -> Option<ActivityNeededView> {
+    let n = needed?;
+    if live_timer.is_some_and(|b| timer_id(b) != Some(n.timer_id)) {
+        return None;
+    }
+    Some(ActivityNeededView {
+        message: if n.message.is_empty() {
+            "Choose what to log this time as.".into()
+        } else {
+            n.message.clone()
+        },
+        label: n.title.chars().take(MAX_TEXT).collect(),
+        activities: n
+            .activities
+            .iter()
+            .map(|a| Activity {
+                id: a.id,
+                name: a.name.clone(),
+                color: None,
+            })
+            .collect(),
+    })
 }
 
 /// `GET /work-logs?from=D&to=D` → today's entries and their total.
@@ -783,10 +1045,27 @@ pub fn queue_after(error: &CallError) -> bool {
     matches!(error, CallError::Offline(_))
 }
 
-/// Changes without a sync type (timer start / stop / discard, marking notifications read) need
-/// the server: disabled offline.
-pub fn needs_server(offline: bool) -> Option<&'static str> {
-    offline.then_some("You're offline. This works again once Brainitive can reach the server.")
+/// Timer start / stop / discard and marking notifications read: queued in the outbox offline when
+/// the server has their sync types (`queues`), else disabled with this hint (an older server).
+pub fn needs_server(offline: bool, queues: bool) -> Option<&'static str> {
+    (offline && !queues).then_some("You're offline. This works again once Brainitive can reach the server.")
+}
+
+/// What a timer can be started on from the offline copy (no live answer this session): its open
+/// issues, My Day first.
+pub fn offline_candidates(view: &offline_cache::View) -> Vec<Candidate> {
+    let mut seen = HashSet::new();
+    let day = view.my_day.iter().flat_map(|d| d.items.iter()).map(|w| (w, true));
+    let work = view.work.iter().map(|w| (w, false));
+    day.chain(work)
+        .filter(|(w, _)| w.id.starts_with("issue:") && is_work_id(&w.id) && !w.done)
+        .filter(|(w, _)| seen.insert(w.id.clone()))
+        .map(|(w, in_my_day)| Candidate {
+            id: w.id.clone(),
+            label: w.label(),
+            in_my_day,
+        })
+        .collect()
 }
 
 /// The dot in the header.

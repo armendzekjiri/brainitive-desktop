@@ -343,6 +343,25 @@ pub fn draft(input: &TaskInput, projects: &[Project], config: Option<&Config>) -
     })
 }
 
+/// The same create for the outbox (`issue.create`, offline): the sync API calls the type
+/// `item_type_id`.
+pub fn offline_change(draft: &Draft) -> crate::outbox::Change {
+    let b = &draft.body;
+    crate::outbox::Change::IssueCreate {
+        board_id: draft.board_id,
+        title: b["title"].as_str().unwrap_or_default().to_string(),
+        description: b["description"].as_str().map(str::to_string),
+        item_type_id: b["type_id"].as_u64(),
+        priority_id: b["priority_id"].as_u64(),
+    }
+}
+
+/// Whether the kept destinations are asked for again: always when the server sent an ETag (a
+/// 304 costs nothing), else (an older server) when older than `fresh`; a board found gone too.
+pub fn stale(outdated: bool, has_etag: bool, age: std::time::Duration, fresh: std::time::Duration) -> bool {
+    outdated || has_etag || age > fresh
+}
+
 /// A create that went out but whose answer said "try again" (offline, server error): the same
 /// input again reuses its `request_id`, so the server answers with the issue it may already
 /// have made instead of a second one.
@@ -515,7 +534,7 @@ pub fn call_error(e: &CallError, server: &str) -> TaskError {
         CallError::SignedOut(_) => TaskError::new("signed_out", format!("Sign in to {server} again.")),
         CallError::Offline(_) => TaskError::new(
             "offline",
-            "You're offline. Issues can't be created offline yet: save it to your inbox instead.",
+            "You're offline, and this server can't keep tasks made offline: save it to your inbox instead.",
         )
         .with_inbox(),
         CallError::Failed(_) => {

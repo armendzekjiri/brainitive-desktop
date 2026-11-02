@@ -558,6 +558,18 @@ async fn flush(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> (usize, us
         let Ok((step, removed)) = applied else {
             return (sent, problems, Some(Stale.into()));
         };
+        for what in &step.gone {
+            log::info!("offline change dropped, no longer there on the server: {what}");
+        }
+        // the timer, a notification, the unread count as the server has them now
+        crate::panel::apply_sync_states(app, origin, &step.states);
+        if step.needs_activity {
+            crate::bridge::show_offline_notification(
+                app,
+                "Choose how to log the time",
+                "The timer you stopped offline needs an activity. Pick one in the menu-bar panel's Timer tab.",
+            );
+        }
         persist(app);
         changed(app);
         sent += step.done.len();
@@ -861,6 +873,101 @@ pub fn offline_dismiss_problem(
     persist(&app);
     changed(&app);
     Ok(window_view(&app))
+}
+
+// ── the client-gaps sync types (timer, notifications, issue.create) ─────────────
+
+/// A `GET /me/timer` answer of `origin` (tray poll, panel): learns whether the server takes the
+/// client-gaps sync types ([`offline_cache::extended_sync_of`]) and keeps it in the offline cache,
+/// so it is known while offline too.
+pub fn note_timer_answer(app: &AppHandle, origin: &ServerOrigin, body: &Value) {
+    let Some(supported) = offline_cache::extended_sync_of(body) else {
+        return;
+    };
+    let learned = {
+        let s = state(app);
+        let mut inner = s.lock();
+        if inner.current_origin().as_ref() != Some(origin) || !signed_in(inner.phase) {
+            return;
+        }
+        inner.offline.ensure(origin);
+        let cache = inner.offline.cache_mut();
+        let learned = cache.extended_sync != Some(supported);
+        cache.extended_sync = Some(supported);
+        learned
+    };
+    if learned {
+        log::info!(
+            "server {} the offline timer / inbox / issue changes",
+            if supported { "takes" } else { "does not take" }
+        );
+        persist(app);
+        changed(app);
+    }
+}
+
+/// Whether the current server takes the client-gaps sync types (unknown = no: an older server
+/// keeps today's behaviour).
+pub fn extended_sync(inner: &Inner) -> bool {
+    let current = inner.current_origin();
+    current.is_some()
+        && inner.offline.origin == current
+        && inner.offline.cache.as_ref().and_then(|c| c.extended_sync) == Some(true)
+}
+
+/// Queues a change of the panel / New task window (checked by the caller) and sends it as soon
+/// as the server answers. Returns its request id (`None`: it cancelled an earlier one).
+pub fn queue(app: &AppHandle, change: Change) -> Result<Option<String>, UiError> {
+    let id = {
+        let s = state(app);
+        let mut inner = s.lock();
+        let origin = inner
+            .current_origin()
+            .filter(|_| signed_in(inner.phase))
+            .ok_or_else(|| ui("signed_out", "Sign in to a server first."))?;
+        let data = &mut inner.offline;
+        data.ensure(&origin);
+        if data.outbox.user_id.is_none() {
+            data.outbox.user_id = data.cache.as_ref().and_then(|c| c.user_id);
+        }
+        data.outbox.push(change).map_err(|e| ui("full", e.to_string()))?
+    };
+    persist(app);
+    changed(app);
+    sync_soon(app);
+    Ok(id)
+}
+
+/// Runs `f` on the current server's outbox (loaded), then saves it and tells the windows.
+pub fn with_outbox<T>(app: &AppHandle, f: impl FnOnce(&mut Outbox) -> T) -> Option<T> {
+    let out = {
+        let s = state(app);
+        let mut inner = s.lock();
+        let origin = inner.current_origin().filter(|_| signed_in(inner.phase))?;
+        inner.offline.ensure(&origin);
+        f(&mut inner.offline.outbox)
+    };
+    persist(app);
+    changed(app);
+    Some(out)
+}
+
+/// The outbox of the current server, read-only (loaded first).
+pub fn read_outbox<T>(app: &AppHandle, f: impl FnOnce(&Outbox, Option<&Cache>) -> T) -> Option<T> {
+    let s = state(app);
+    let mut inner = s.lock();
+    let origin = inner.current_origin().filter(|_| signed_in(inner.phase))?;
+    inner.offline.ensure(&origin);
+    Some(f(&inner.offline.outbox, inner.offline.cache.as_ref()))
+}
+
+/// A pick for a stop that waited for an activity: it goes out again with it.
+pub fn resend_stop(app: &AppHandle, activity_id: u64) -> Result<(), UiError> {
+    let result = with_outbox(app, |o| o.resend_stop(activity_id))
+        .ok_or_else(|| ui("signed_out", "Sign in to a server first."))?;
+    result.map_err(|e| ui("invalid", e.to_string()))?;
+    sync_soon(app);
+    Ok(())
 }
 
 /// A done tick from the menu-bar panel while the server can't be reached: the same `work.done`

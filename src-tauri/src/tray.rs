@@ -824,29 +824,46 @@ impl PollTicket {
 /// GET with the ETag of the last answer: a 304 gives the cached body back. `None`: the answer
 /// came after the ticket expired.
 pub(crate) async fn get_cached(app: &AppHandle, ticket: &PollTicket, path: &str) -> Result<Option<Value>, CallError> {
+    get_cached_request(app, ticket, ApiRequest::get(path)).await
+}
+
+/// [`get_cached`] for a GET with a query (`/me/work?status=open`, `/notifications?limit=25`): the
+/// tag is kept per server, path and query. A server that sends no ETag (an older one) is simply
+/// asked in full every time.
+pub(crate) async fn get_cached_request(
+    app: &AppHandle,
+    ticket: &PollTicket,
+    request: ApiRequest,
+) -> Result<Option<Value>, CallError> {
     let origin = &ticket.origin;
     // keyed by server too: a 304 of one server never gets another server's body
-    let key = etag_key(origin, path);
+    let key = etag_key_of(origin, &request);
     let cached = state(app).lock().etags.get(&key).cloned();
-    let request = ApiRequest::get(path).etag(cached.as_ref().map(|(etag, _)| etag.clone()));
+    let plain = request.clone();
+    let request = request.etag(cached.as_ref().map(|(etag, _)| etag.clone()));
     let response = state(app).session.request(origin, &request).await?;
-    if response.not_modified() {
-        if let Some((_, body)) = cached {
-            return Ok(Some(body));
+    let (body, etag) = match crate::api::revalidate(cached, response) {
+        crate::api::Revalidated::Cached(body) => return Ok(Some(body)),
+        crate::api::Revalidated::AskAgain => {
+            let response = state(app).session.request(origin, &plain).await?;
+            (response.body, response.etag)
         }
-        // a 304 without a cached body (should not happen): ask again without the ETag
-        let response = state(app).session.request(origin, &ApiRequest::get(path)).await?;
-        return Ok(Some(response.body));
-    }
+        crate::api::Revalidated::Fresh { body, etag } => (body, etag),
+    };
     let s = state(app);
     let mut inner = s.lock();
     if !ticket.holds(&inner) {
         return Ok(None);
     }
-    if let Some(etag) = response.etag.clone() {
-        inner.etags.insert(key, (etag, response.body.clone()));
+    match etag {
+        Some(etag) => {
+            inner.etags.insert(key, (etag, body.clone()));
+        }
+        None => {
+            inner.etags.remove(&key);
+        }
     }
-    Ok(Some(response.body))
+    Ok(Some(body))
 }
 
 /// One poll: unread count + timer, My Day when due. Returns whether the server answered.
@@ -872,6 +889,10 @@ async fn poll_once(app: &AppHandle, ticket: &PollTicket, plan: poll::Plan) -> Re
     }
     if plan.timer {
         let body = get_cached(app, ticket, "/api/v1/me/timer").await?;
+        if let Some(b) = &body {
+            // what the server takes offline (timer / inbox / issue sync types)
+            crate::offline::note_timer_answer(app, &ticket.origin, b);
+        }
         if let Some(timer) = body.as_ref().and_then(parse_timer) {
             let s = state(app);
             let mut inner = s.lock();
@@ -984,6 +1005,16 @@ pub type EtagCache = HashMap<String, (String, Value)>;
 /// `https://brain.example.com /api/v1/me/timer`: one entry per server and path.
 pub fn etag_key(origin: &ServerOrigin, path: &str) -> String {
     format!("{} {path}", origin.as_str())
+}
+
+/// [`etag_key`] with the query (another filter or limit is another answer).
+pub fn etag_key_of(origin: &ServerOrigin, request: &ApiRequest) -> String {
+    let mut key = etag_key(origin, &request.path);
+    for (i, (k, v)) in request.query.iter().enumerate() {
+        key.push(if i == 0 { '?' } else { '&' });
+        key.push_str(&format!("{k}={v}"));
+    }
+    key
 }
 
 #[cfg(test)]
@@ -1129,6 +1160,21 @@ mod tests {
         let b = ServerOrigin::parse("b.example.com").unwrap();
         assert_ne!(etag_key(&a, "/api/v1/me/timer"), etag_key(&b, "/api/v1/me/timer"));
         assert_ne!(etag_key(&a, "/api/v1/me/timer"), etag_key(&a, "/api/v1/me/my-day"));
+        let work = ApiRequest::get("/api/v1/me/work").query("status", "open");
+        assert_eq!(
+            etag_key_of(&a, &work),
+            format!("{} /api/v1/me/work?status=open", a.as_str())
+        );
+        assert_ne!(
+            etag_key_of(&a, &work),
+            etag_key_of(&a, &ApiRequest::get("/api/v1/me/work").query("status", "done")),
+            "another filter is another answer"
+        );
+        assert_ne!(etag_key_of(&a, &work), etag_key_of(&b, &work));
+        assert_eq!(
+            etag_key_of(&a, &ApiRequest::get("/api/v1/me/timer")),
+            etag_key(&a, "/api/v1/me/timer")
+        );
     }
 
     #[test]
