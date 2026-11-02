@@ -79,6 +79,14 @@ impl Default for Preferences {
     }
 }
 
+impl Preferences {
+    /// The voice shortcut that is **registered**: only while voice capture is on. Off, the keys
+    /// belong to other apps (⇧⌘V / Ctrl+Shift+V = paste as plain text, paste in Linux terminals).
+    pub fn active_voice_shortcut(&self) -> Option<String> {
+        self.voice_shortcut.clone().filter(|_| self.voice_enabled)
+    }
+}
+
 /// Browser-like zoom steps (View → Zoom In / Zoom Out / Actual Size).
 pub const ZOOM_STEPS: [f64; 11] = [0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
 

@@ -251,8 +251,10 @@ Done / the shortcut again).
   prompt text is `NSMicrophoneUsageDescription` in `src-tauri/Info.plist`; Windows reports a
   blocked microphone as the stream's `PermissionDenied`; denied → the indicator says how to allow
   it and opens the OS privacy page (fixed URLs).
-- **Off by default** (`Preferences.voice_enabled`); the shortcut is registered anyway so the first
-  press shows what it does and **Turn on** (asks for the microphone, downloads the model with
+- **Off by default** (`Preferences.voice_enabled`); the shortcut is registered **only while it is
+  on** (`Preferences::active_voice_shortcut`; turning it on / off re-registers via
+  `voice::enabled_changed`), so it never takes ⇧⌘V / Ctrl+Shift+V from other apps while off. The File
+  menu, the tray and quick capture's mic button show what it does and **Turn on** (asks for the microphone, downloads the model with
   progress). Settings: on / off, the shortcut, the language (auto, English, German, Albanian, …),
   the model and Remove.
 - **Indicator** (`voice.html`, window `voice`, always on top, frameless): intro, permission,

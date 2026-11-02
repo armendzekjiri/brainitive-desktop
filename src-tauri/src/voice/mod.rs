@@ -571,6 +571,7 @@ pub async fn voice_turn_on(app: AppHandle, webview: Webview) -> Result<(), Strin
         inner.save_settings();
     }
     log::info!("voice: turned on");
+    enabled_changed(&app);
     if model::is_ready(&voice(&app).data_dir, &MODEL) {
         set_screen(&app, next_step(&app));
     } else {
@@ -639,6 +640,16 @@ pub fn turned_off(app: &AppHandle) {
         feed(app, Input::Cancel);
     }
     log::info!("voice: turned off");
+}
+
+/// The "voice capture" preference changed: the global voice shortcut is registered only while it
+/// is on, and the menu / tray labels follow.
+pub fn enabled_changed(app: &AppHandle) {
+    if let Err(e) = crate::hotkeys::apply(app) {
+        log::warn!("{e}");
+    }
+    crate::menu::refresh_shortcut_labels(app);
+    crate::tray::refresh(app);
 }
 
 /// "Remove voice model": stops a download, refuses while recording / transcribing.

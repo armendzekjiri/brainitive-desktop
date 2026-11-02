@@ -342,7 +342,7 @@ pub fn refresh_shortcut_labels(app: &AppHandle) {
         let _ = item.set_accelerator(accel(prefs.switcher_shortcut.as_deref()));
     }
     if let Some(item) = voice {
-        let _ = item.set_accelerator(accel(prefs.voice_shortcut.as_deref()));
+        let _ = item.set_accelerator(accel(prefs.active_voice_shortcut().as_deref()));
     }
 }
 

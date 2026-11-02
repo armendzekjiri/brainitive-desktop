@@ -52,9 +52,9 @@ pub fn wanted(prefs: &Preferences) -> Vec<(HotkeyAction, Option<String>)> {
     vec![
         (HotkeyAction::Capture, prefs.capture_shortcut.clone()),
         (HotkeyAction::Switcher, prefs.switcher_shortcut.clone()),
-        // registered while voice capture is off too: the first press explains it and offers to
-        // turn it on
-        (HotkeyAction::Voice, prefs.voice_shortcut.clone()),
+        // only while voice capture is on: off, its keys (paste as plain text) are not taken from
+        // other apps; the intro is reached from the menu, the tray and quick capture's mic button
+        (HotkeyAction::Voice, prefs.active_voice_shortcut()),
     ]
 }
 
@@ -66,6 +66,20 @@ pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
     if let Some(action) = action.filter(|a| pressed || a.wants_release()) {
         action.run(app, pressed);
     }
+}
+
+/// Checks the shortcuts of the preferences as a whole (valid, no duplicates) **including** a
+/// voice shortcut that is not registered because voice capture is off, so a rebinding while off
+/// is refused for the same reasons as one while on.
+pub fn validate(prefs: &Preferences) -> Result<(), String> {
+    let mut all = wanted(prefs);
+    if let Some(slot) = all.iter_mut().find(|(a, _)| *a == HotkeyAction::Voice) {
+        slot.1 = prefs.voice_shortcut.clone();
+    }
+    let list: Vec<(HotkeyAction, Option<&str>)> = all.iter().map(|(a, s)| (*a, s.as_deref())).collect();
+    shortcuts::parse_all(&list)
+        .map(|_| ())
+        .map_err(|(action, e)| format!("{}: {e}", action.name()))
 }
 
 /// Registers the shortcuts of the preferences (replacing the previous ones). The error says
@@ -110,35 +124,57 @@ fn taken(action: HotkeyAction, s: &Shortcut, e: impl std::fmt::Display) -> Strin
 mod tests {
     use super::*;
 
+    fn refs(list: &[(HotkeyAction, Option<String>)]) -> Vec<(HotkeyAction, Option<&str>)> {
+        list.iter().map(|(a, s)| (*a, s.as_deref())).collect()
+    }
+
     #[test]
-    fn voice_capture_is_in_the_registry_with_its_preference() {
-        let prefs = Preferences::default();
+    fn voice_capture_is_registered_only_while_it_is_on() {
+        let mut prefs = Preferences::default();
+        // off (the default): its keys stay with other apps (paste as plain text)
+        assert!(!prefs.voice_enabled);
         let list = wanted(&prefs);
         assert_eq!(
             list.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
             [HotkeyAction::Capture, HotkeyAction::Switcher, HotkeyAction::Voice]
         );
-        assert_eq!(list[2].1.as_deref(), Some(shortcuts::DEFAULT_VOICE));
-        // registered even while voice capture is off (the first press offers to turn it on)
-        assert!(!prefs.voice_enabled);
-        // the defaults are valid and different
-        let refs: Vec<(HotkeyAction, Option<&str>)> = list.iter().map(|(a, s)| (*a, s.as_deref())).collect();
-        assert_eq!(shortcuts::parse_all(&refs).unwrap().len(), 3);
+        assert_eq!(list[2], (HotkeyAction::Voice, None));
+        assert_eq!(shortcuts::parse_all(&refs(&list)).unwrap().len(), 2);
 
-        // off = not registered; rebound = its own keys
-        let mut p = prefs.clone();
-        p.voice_shortcut = None;
-        assert_eq!(wanted(&p)[2], (HotkeyAction::Voice, None));
-        p.voice_shortcut = Some("Control+Alt+KeyV".into());
-        assert_eq!(wanted(&p)[2].1.as_deref(), Some("Control+Alt+KeyV"));
-        // the same keys as quick capture are refused, naming voice capture
+        // on: its own keys, valid and different from the others
+        prefs.voice_enabled = true;
+        let list = wanted(&prefs);
+        assert_eq!(list[2].1.as_deref(), Some(shortcuts::DEFAULT_VOICE));
+        assert_eq!(shortcuts::parse_all(&refs(&list)).unwrap().len(), 3);
+
+        // turned off again: unregistered
+        prefs.voice_enabled = false;
+        assert_eq!(wanted(&prefs)[2].1, None);
+
+        // no shortcut chosen = off; rebound = its own keys
+        prefs.voice_enabled = true;
+        prefs.voice_shortcut = None;
+        assert_eq!(wanted(&prefs)[2], (HotkeyAction::Voice, None));
+        prefs.voice_shortcut = Some("Control+Alt+KeyV".into());
+        assert_eq!(wanted(&prefs)[2].1.as_deref(), Some("Control+Alt+KeyV"));
+    }
+
+    #[test]
+    fn duplicates_are_refused_naming_voice_capture_even_while_it_is_off() {
+        let mut p = Preferences::default();
         p.voice_shortcut = p.capture_shortcut.clone();
-        let list = wanted(&p);
-        let refs: Vec<(HotkeyAction, Option<&str>)> = list.iter().map(|(a, s)| (*a, s.as_deref())).collect();
+        // on: the registered list itself is refused
+        p.voice_enabled = true;
         assert_eq!(
-            shortcuts::parse_all(&refs).unwrap_err(),
+            shortcuts::parse_all(&refs(&wanted(&p))).unwrap_err(),
             (HotkeyAction::Voice, shortcuts::ShortcutError::Duplicate)
         );
+        // off: nothing is registered, but a rebinding is validated the same way
+        p.voice_enabled = false;
+        assert!(shortcuts::parse_all(&refs(&wanted(&p))).is_ok());
+        assert!(validate(&p).unwrap_err().starts_with("Voice capture"));
+        p.voice_shortcut = Some("Control+Alt+KeyV".into());
+        assert!(validate(&p).is_ok());
     }
 
     #[test]

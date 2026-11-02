@@ -148,6 +148,7 @@ pub fn settings_set_shortcut(
         "voice" => next.voice_shortcut = value,
         _ => return Err("unknown shortcut".into()),
     }
+    crate::hotkeys::validate(&next)?;
     state(&app).lock().settings.preferences = next;
     if let Err(e) = crate::hotkeys::apply(&app) {
         state(&app).lock().settings.preferences = previous;
@@ -195,8 +196,11 @@ pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value:
         }
         inner.save_settings();
     }
-    if key == "voice_enabled" && !value {
-        crate::voice::turned_off(&app);
+    if key == "voice_enabled" {
+        if !value {
+            crate::voice::turned_off(&app);
+        }
+        crate::voice::enabled_changed(&app);
     }
     Ok(view(&app))
 }

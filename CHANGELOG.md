@@ -22,7 +22,9 @@ Voice capture (BRAI-439):
 - **On this computer**: the speech is turned into text locally with Whisper (whisper.cpp; Metal on
   Apple Silicon). The audio is kept in memory only — never saved, never sent anywhere — so it works
   the same for Cloud and self-hosted, offline too.
-- **Off by default.** The first press explains it and offers **Turn on**; the speech model (190 MB)
+- **Off by default.** While it is off the shortcut is not registered (⇧⌘V / Ctrl+Shift+V stay
+  "paste as plain text" in your other apps); File → Voice Capture…, the tray and quick capture's
+  microphone button explain it and offer **Turn on**; the speech model (190 MB)
   is downloaded once, with progress and a checksum check. Settings → Voice capture: on / off, the
   shortcut, the language (detect automatically, English, German, Albanian, …) and **Remove voice
   model**.

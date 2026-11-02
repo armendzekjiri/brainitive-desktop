@@ -93,9 +93,9 @@ release 8.58 MB → 10.48 MB (+1.9 MB, +22 %). The model is not in the bundle.
 
 - Hold-to-talk is real (key-up on all three OSes, see plan); a tap < 0.5 s latches toggle mode, so
   the same shortcut also works as press-to-start / press-to-stop.
-- The shortcut is registered while voice capture is off (spec: the first press explains). It takes
-  ⇧⌘V / Ctrl+Shift+V from other apps (paste as plain text; paste in Linux terminals): see SECURITY
-  known gaps — worth revisiting with the "Brainitive key" chord.
+- ~~The shortcut is registered while voice capture is off~~ — changed after the owner's review: it
+  is registered only while voice capture is on (it took ⇧⌘V / Ctrl+Shift+V = paste as plain text
+  from other apps). Discovery while off: File menu, tray, quick capture's mic button (the intro).
 - The model loads while the user speaks and is dropped after each recording (≈ 0.15 s to load
   again; no ~200 MB kept in memory between uses).
 - Silence / < 0.3 s clips are not transcribed (whisper invents "Thank you." on silence).
@@ -118,3 +118,11 @@ release 8.58 MB → 10.48 MB (+1.9 MB, +22 %). The model is not in the bundle.
 - Signed macOS builds need the `com.apple.security.device.audio-input` entitlement (signing isn't
   configured yet).
 - Albanian accuracy (no Albanian `say` voice); Intel Macs.
+
+## Result: hotkey only while on
+
+`hotkeys::wanted` registers the voice shortcut only when `voice_enabled`
+(`Preferences::active_voice_shortcut`); `voice::enabled_changed` re-registers and refreshes the
+menu / tray labels when Settings toggles it or "Turn on" is pressed. A rebinding while off is still
+validated (`hotkeys::validate`: valid keys, no duplicates). SECURITY known-gap entry removed, README
+and changelog updated.

@@ -377,7 +377,7 @@ pub fn refresh(app: &AppHandle) {
             inner.tray_data.clone(),
             accel(inner.settings.preferences.capture_shortcut.as_deref()),
             accel(inner.settings.preferences.switcher_shortcut.as_deref()),
-            accel(inner.settings.preferences.voice_shortcut.as_deref()),
+            accel(inner.settings.preferences.active_voice_shortcut().as_deref()),
             crate::offline::tray_status(&inner),
         )
     };

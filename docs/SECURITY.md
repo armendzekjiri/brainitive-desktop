@@ -140,7 +140,8 @@ redirected somewhere else.
 
 - **Microphone only on purpose**: opened when the user holds / presses the voice shortcut, picks
   Voice Capture in the menu or tray, or clicks the microphone in quick capture — and only after
-  voice capture was turned on (off by default; the first press only explains and offers "Turn on").
+  voice capture was turned on (off by default; while off the shortcut is not registered and the menu, the tray and the
+  microphone button only explain it and offer "Turn on").
   The always-on-top indicator shows a red dot, the level and the timer for the whole recording;
   the stream is closed on release / Done / Esc / the 2-minute cut-off / an error. Nothing listens
   in the background (no wake word, no buffering before the press).
@@ -296,11 +297,11 @@ store is deleted and it leaves the recent list.
 - A captured text queued under a server is sent to whoever is signed in to that server when the
   connection is back (sign-out deletes the queue, so this is only the same user after a session
   expiry).
-- **Voice capture shortcut ⇧⌘V / Ctrl+Shift+V** (BRAI-439) is registered even while voice capture
-  is off (so the first press can explain it), which takes the combination from other apps: "paste
-  as plain text" in browsers, Slack, VS Code, and **paste in most Linux terminals**. The key is
-  not final (a "Brainitive key" chord is planned); until then users can change or turn it off in
-  Settings.
+- **Voice capture shortcut ⇧⌘V / Ctrl+Shift+V** (BRAI-439) takes the combination from other apps
+  ("paste as plain text" in browsers, Slack, VS Code, and **paste in most Linux terminals**) while
+  voice capture is **on** (it is off by default and registered only then; also the menu / tray
+  labels show it only then). The key is not final (a "Brainitive key" chord is planned); users can
+  change it or turn voice capture off in Settings.
 - **Signed macOS builds** with the hardened runtime will need the
   `com.apple.security.device.audio-input` entitlement for the microphone (not set yet: signing is
   not configured; part of the beta checklist).

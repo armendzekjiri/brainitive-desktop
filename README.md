@@ -28,7 +28,7 @@ app. The window title shows where you are: "Brainitive — Cloud", "Brainitive �
   to your inbox. Works offline (sent when you're back).
 - **Voice capture** — hold ⇧⌘V / Ctrl+Shift+V, speak, let go: the text opens in quick capture to
   check and save (a tap starts it, ↩ or the shortcut again finishes; Esc cancels; max 2 minutes).
-  Turn it on in Settings or with the first press; the speech model (190 MB) is downloaded once.
+  Turn it on in Settings, or from File → Voice Capture… / the tray / quick capture's microphone button (the keys are only taken from other apps while it is on); the speech model (190 MB) is downloaded once.
   Speech is turned into text **on your computer** (Whisper); the audio is never saved or sent.
   Pick the language (or auto-detect) and remove the model in Settings → Voice capture.
 - **Quick switcher** — ⌥⌘K / Ctrl+Alt+K: search everything, ↩ opens, ⌘C copies a snippet, ⌘T starts
