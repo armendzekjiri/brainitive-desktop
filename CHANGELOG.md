@@ -5,6 +5,16 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Build and distribution (phase 10, prepared; needs the owner's accounts to sign):
+
+- **CI build** (`.github/workflows/build.yml`): macOS universal `.dmg`, Windows x64 NSIS installer,
+  Linux `.deb` + AppImage on tags `v*` (draft release with `SHA256SUMS`) or by hand; tests only on pull
+  requests. Signing steps run only when their secrets exist.
+- **Signing config, inactive until the secrets are added**: macOS hardened runtime with
+  `entitlements.plist` (microphone, network), minimum macOS 14; notarization through Apple ID or an API key;
+  Windows through Azure Trusted Signing. Per-user NSIS install, WebView2 bootstrapper, `.deb` depends
+  on ALSA. Step by step in `docs/RELEASING.md`.
+
 Also:
 
 - **"Please update" while the app is running**: the server's minimum desktop version is checked

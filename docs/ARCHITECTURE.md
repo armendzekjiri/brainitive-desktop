@@ -345,6 +345,19 @@ OS file drops reach the page; `file:` navigations stay blocked.
 default; the OS login item is read back as the truth. The login item passes `--autostart`; with
 "Start in the menu bar / tray" the main window stays hidden until the user opens it.
 
+## Build and distribution (phase 10)
+
+`.github/workflows/build.yml`: matrix macOS-14 (`--target universal-apple-darwin`, app + dmg),
+Windows 2022 (NSIS), Ubuntu 22.04 (deb + AppImage); each job runs `npm run build`, `cargo test`,
+`cargo clippy -D warnings`, then `tauri build` (not on pull requests). Tags `v*` add a draft GitHub
+release with `SHA256SUMS`. Signing is conditional: a detect step checks for the secrets, then steps
+export `APPLE_*` (Tauri signs + notarizes; `signingIdentity` is null in the config) or write a
+`signCommand` overlay for Azure Trusted Signing (`trusted-signing-cli`) passed with `--config`.
+`bundle` config: `entitlements.plist` (audio-input, network client; no JIT), min macOS 14, NSIS
+`currentUser` + WebView2 download bootstrapper, `.deb` depends `libasound2`. The `brainitive://`
+scheme is registered by the installers / `.desktop` file from `plugins.deep-link`, and by
+`register_all()` in debug builds. Owner steps: `docs/RELEASING.md`.
+
 ## Tests
 
 `cargo test` runs the pure logic (server URL rules, PKCE incl. the RFC 7636 vector, deep links,
