@@ -272,6 +272,7 @@ const KIND_LABEL: Record<string, string> = {
     invalid: 'Not accepted',
     waiting: 'Could not be sent',
     rejected: 'Not accepted',
+    timer_running: 'Another timer is running',
 };
 
 function renderProblems(v: View): void {
