@@ -401,3 +401,96 @@ fn every_server_switching_command_checks_its_caller_first() {
         }
     }
 }
+
+/// The `.rs` files under `dir`, recursively.
+fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+#[test]
+fn every_command_of_the_manifest_checks_its_caller_first() {
+    // codex review 8: every app command (build.rs manifest) starts with an explicit check of the
+    // calling window + origin, next to its capability file — none relies on the ACL alone
+    let root = env!("CARGO_MANIFEST_DIR");
+    let build = std::fs::read_to_string(format!("{root}/build.rs")).unwrap();
+    let list = build
+        .split(".commands(&[")
+        .nth(1)
+        .and_then(|r| r.split("])").next())
+        .unwrap();
+    let manifest: Vec<String> = list
+        .lines()
+        .map(str::trim)
+        .filter(|l| l.starts_with('"'))
+        .map(|l| l.trim_end_matches(',').trim_matches('"').to_string())
+        .collect();
+    assert!(manifest.len() > 90, "{}", manifest.len());
+
+    let mut files = Vec::new();
+    rust_files(std::path::Path::new(&format!("{root}/src")), &mut files);
+    let mut commands = std::collections::HashMap::new();
+    for file in &files {
+        let src = std::fs::read_to_string(file).unwrap();
+        for part in src.split("#[tauri::command]").skip(1) {
+            let after_fn = part.split_once("fn ").map(|(_, r)| r).unwrap_or("");
+            let name = after_fn.split('(').next().unwrap_or("").trim().to_string();
+            let body = after_fn.split_once('{').map(|(_, b)| b).unwrap_or("");
+            let first = body.trim_start().lines().next().unwrap_or("").trim().to_string();
+            let previous = commands.insert(name.clone(), (file.clone(), first));
+            assert!(previous.is_none(), "{name} defined twice");
+        }
+    }
+
+    const CHECKS: [&str; 6] = [
+        "ensure_main_screen(&app, &webview)?;",
+        "if ensure_main_screen(&app, &webview).is_err() {",
+        "popup::ensure_caller(&app, &webview, Popup::",
+        "caller(&app, &webview)?;",
+        "ensure_current_server(&app, &webview)?;",
+        "let origin = ensure_current_server(&app, &webview)?;",
+    ];
+    for name in &manifest {
+        let (file, first) = commands
+            .get(name)
+            .unwrap_or_else(|| panic!("{name} is in build.rs but no #[tauri::command]"));
+        assert!(
+            CHECKS.iter().any(|c| first.starts_with(c)),
+            "{name} ({}) starts with `{first}`, not a caller check",
+            file.display()
+        );
+        // a module's own `caller` helper is the popup check of that window
+        if first.starts_with("caller(") {
+            let src = std::fs::read_to_string(file).unwrap();
+            let helper = src.split("fn caller(").nth(1).unwrap_or("");
+            let helper = helper.split("\n}").next().unwrap_or("");
+            assert!(
+                helper.contains("popup::ensure_caller(app, webview, Popup::"),
+                "{}: caller() is not the popup check",
+                file.display()
+            );
+        }
+    }
+    // and no command exists outside the manifest (it would be unreachable or ungoverned)
+    for name in commands.keys() {
+        assert!(manifest.contains(name), "{name} is a command but not in build.rs");
+    }
+    // the main screens' check: the main window on a bundled origin
+    let commands_rs = std::fs::read_to_string(format!("{root}/src/commands.rs")).unwrap();
+    let check = commands_rs.split("fn ensure_main_screen(").nth(1).unwrap();
+    assert!(check
+        .split("\n}")
+        .next()
+        .unwrap()
+        .contains("crate::links::is_local_caller("));
+    assert!(check.contains("crate::shell::MAIN"));
+    // the bridge's check: an app window on the current origin
+    let bridge = std::fs::read_to_string(format!("{root}/src/bridge.rs")).unwrap();
+    assert!(bridge.contains("if !is_bridge_caller(webview.label(), &url, &origin)"));
+}

@@ -61,7 +61,8 @@ pub struct UiState {
 }
 
 #[tauri::command]
-pub fn get_state(app: AppHandle) -> UiState {
+pub fn get_state(app: AppHandle, webview: tauri::Webview) -> Result<UiState, UiError> {
+    ensure_main_screen(&app, &webview)?;
     let updater = crate::updater::view(&app);
     let s = state(&app);
     let inner = s.lock();
@@ -106,7 +107,7 @@ pub fn get_state(app: AppHandle) -> UiState {
     } else {
         vec![]
     };
-    UiState {
+    Ok(UiState {
         phase: inner.phase,
         notice: inner.notice.clone(),
         problem: inner.problem.clone(),
@@ -118,10 +119,12 @@ pub fn get_state(app: AppHandle) -> UiState {
         cloud_origin: CLOUD_ORIGIN,
         presets,
         updater,
-    }
+    })
 }
 
-/// The main window's bundled screens only (not the server's pages, not another window).
+/// The main window's bundled screens only (not the server's pages, not another window). Every
+/// command of this file starts with it (codex review 8; `tests/capabilities.rs` checks that),
+/// next to `capabilities/local.json`.
 fn ensure_main_screen(app: &AppHandle, webview: &tauri::Webview) -> Result<(), UiError> {
     let local = webview
         .url()
@@ -166,12 +169,14 @@ pub fn restart_to_update(app: AppHandle, webview: tauri::Webview) -> Result<(), 
 }
 
 #[tauri::command]
-pub async fn check_server(app: AppHandle, input: String) -> Result<ServerCheck, UiError> {
+pub async fn check_server(app: AppHandle, webview: tauri::Webview, input: String) -> Result<ServerCheck, UiError> {
+    ensure_main_screen(&app, &webview)?;
     flows::check_server(&app, &input).await
 }
 
 #[tauri::command]
-pub async fn use_server(app: AppHandle, origin: String) -> Result<(), UiError> {
+pub async fn use_server(app: AppHandle, webview: tauri::Webview, origin: String) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     let origin = ServerOrigin::parse(&origin).map_err(|e| UiError {
         kind: "invalid_url",
         message: e.to_string(),
@@ -180,24 +185,29 @@ pub async fn use_server(app: AppHandle, origin: String) -> Result<(), UiError> {
 }
 
 #[tauri::command]
-pub async fn start_sign_in(app: AppHandle) -> Result<String, UiError> {
+pub async fn start_sign_in(app: AppHandle, webview: tauri::Webview) -> Result<String, UiError> {
+    ensure_main_screen(&app, &webview)?;
     flows::start_sign_in(&app).await
 }
 
 #[tauri::command]
-pub fn cancel_sign_in(app: AppHandle) {
+pub fn cancel_sign_in(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     flows::cancel_sign_in(&app);
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn retry_connect(app: AppHandle) -> Result<(), UiError> {
+pub async fn retry_connect(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     flows::retry_now(&app).await
 }
 
 /// "Download the update": opens the fixed download page in the browser (the Store build: the
 /// app's page in the Microsoft Store). The address is a constant of this app, never an argument.
 #[tauri::command]
-pub fn open_download_page(app: AppHandle) -> Result<(), UiError> {
+pub fn open_download_page(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     let page = crate::msstore::update_page(crate::msstore::STORE_BUILD, DOWNLOAD_URL);
     tauri_plugin_opener::OpenerExt::opener(&app)
         .open_url(page, None::<&str>)
@@ -231,7 +241,8 @@ fn usable_server(app: &AppHandle) -> Result<ServerOrigin, UiError> {
 /// "Open offline" (BRAI-366): the bundled offline window with this computer's copy of My Day,
 /// My Work, the kept task lists and captures.
 #[tauri::command]
-pub fn open_offline(app: AppHandle) -> Result<(), UiError> {
+pub fn open_offline(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     usable_server(&app)?;
     crate::popup::show(&app, crate::popup::Popup::Offline);
     Ok(())
@@ -240,15 +251,18 @@ pub fn open_offline(app: AppHandle) -> Result<(), UiError> {
 /// "Use the web app offline": the server's pages from the webview cache / the web app's own
 /// service worker (its opt-in offline mode), no new session.
 #[tauri::command]
-pub fn open_web_offline(app: AppHandle) -> Result<(), UiError> {
+pub fn open_web_offline(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     let origin = usable_server(&app)?;
     crate::shell::enter_app(&app, &origin, origin.join("/dashboard"));
     Ok(())
 }
 
 #[tauri::command]
-pub fn switch_server(app: AppHandle) {
+pub fn switch_server(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     flows::switch_server(&app);
+    Ok(())
 }
 
 /// A saved server on the connect screen ("Your servers", "Back to …"): its id, never an origin.
@@ -261,12 +275,15 @@ pub async fn switch_to_server(app: AppHandle, webview: tauri::Webview, id: Strin
 }
 
 #[tauri::command]
-pub async fn sign_out(app: AppHandle) {
+pub async fn sign_out(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     flows::sign_out(&app).await;
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn forget_server(app: AppHandle, origin: String) -> Result<(), UiError> {
+pub async fn forget_server(app: AppHandle, webview: tauri::Webview, origin: String) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     let origin = ServerOrigin::parse(&origin).map_err(|e| UiError {
         kind: "invalid_url",
         message: e.to_string(),
@@ -276,8 +293,10 @@ pub async fn forget_server(app: AppHandle, origin: String) -> Result<(), UiError
 }
 
 #[tauri::command]
-pub fn dismiss_notice(app: AppHandle) {
+pub fn dismiss_notice(app: AppHandle, webview: tauri::Webview) -> Result<(), UiError> {
+    ensure_main_screen(&app, &webview)?;
     state(&app).lock().notice = None;
+    Ok(())
 }
 
 static CLIENT_ERRORS: std::sync::Mutex<crate::logging::RateLimit> =
@@ -287,8 +306,8 @@ static CLIENT_ERRORS: std::sync::Mutex<crate::logging::RateLimit> =
 /// Local content only (`capabilities/local.json`); the main window only, ≤ 20 per minute,
 /// clipped and redacted like every other log line. Pages of the server can't call it.
 #[tauri::command]
-pub fn log_client_error(webview: tauri::Webview, message: String, source: Option<String>) {
-    if webview.label() != crate::shell::MAIN {
+pub fn log_client_error(app: AppHandle, webview: tauri::Webview, message: String, source: Option<String>) {
+    if ensure_main_screen(&app, &webview).is_err() {
         return;
     }
     let allowed = CLIENT_ERRORS

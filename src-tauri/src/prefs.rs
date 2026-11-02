@@ -183,8 +183,8 @@ pub fn settings_set_shortcut(
     which: String,
     choice: ShortcutChoice,
 ) -> Result<PrefsView, String> {
-    use crate::hotkeys::HotkeyAction;
     popup::ensure_caller(&app, &webview, Popup::Settings)?;
+    use crate::hotkeys::HotkeyAction;
     let action = match which.as_str() {
         "leader" => HotkeyAction::Leader,
         "capture" => HotkeyAction::Capture,
