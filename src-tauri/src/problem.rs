@@ -230,7 +230,13 @@ impl Problem {
 pub fn classify_network(chain: &str) -> ProblemKind {
     let c = chain.to_ascii_lowercase();
     let has = |needles: &[&str]| needles.iter().any(|n| c.contains(n));
-    if has(&["timed out", "timeout", "os error 60)", "os error 110)", "os error 10060)"]) {
+    if has(&[
+        "timed out",
+        "timeout",
+        "os error 60)",
+        "os error 110)",
+        "os error 10060)",
+    ]) {
         ProblemKind::Timeout
     } else if has(&[
         "dns error",
@@ -255,7 +261,13 @@ pub fn classify_network(chain: &str) -> ProblemKind {
         "no route to host",
     ]) {
         ProblemKind::Offline
-    } else if has(&["connection refused", "os error 61)", "os error 111)", "os error 10061)", "actively refused"]) {
+    } else if has(&[
+        "connection refused",
+        "os error 61)",
+        "os error 111)",
+        "os error 10061)",
+        "actively refused",
+    ]) {
         ProblemKind::Refused
     } else {
         ProblemKind::Other
@@ -288,7 +300,9 @@ mod tests {
     #[test]
     fn refused_timeout_and_offline() {
         assert_eq!(
-            kind(ApiError::Network("tcp connect error: Connection refused (os error 61)".into())),
+            kind(ApiError::Network(
+                "tcp connect error: Connection refused (os error 61)".into()
+            )),
             ProblemKind::Refused
         );
         assert_eq!(
@@ -297,14 +311,21 @@ mod tests {
         );
         assert_eq!(kind(ApiError::Timeout), ProblemKind::Timeout);
         assert_eq!(
-            kind(ApiError::Network("tcp connect error: Connection timed out (os error 60)".into())),
+            kind(ApiError::Network(
+                "tcp connect error: Connection timed out (os error 60)".into()
+            )),
             ProblemKind::Timeout
         );
         assert_eq!(
-            kind(ApiError::Network("tcp connect error: Network is unreachable (os error 51)".into())),
+            kind(ApiError::Network(
+                "tcp connect error: Network is unreachable (os error 51)".into()
+            )),
             ProblemKind::Offline
         );
-        assert_eq!(kind(ApiError::Network("connection reset by peer".into())), ProblemKind::Other);
+        assert_eq!(
+            kind(ApiError::Network("connection reset by peer".into())),
+            ProblemKind::Other
+        );
     }
 
     #[test]
@@ -346,7 +367,12 @@ mod tests {
         assert!(retry(ApiError::Timeout));
         assert!(retry(ApiError::Network("dns error".into())));
         assert!(retry(ApiError::Network("connection refused".into())));
-        for tls in [TlsReason::Untrusted, TlsReason::Expired, TlsReason::WrongHost, TlsReason::Other] {
+        for tls in [
+            TlsReason::Untrusted,
+            TlsReason::Expired,
+            TlsReason::WrongHost,
+            TlsReason::Other,
+        ] {
             assert!(!retry(ApiError::Tls(tls)));
         }
         assert!(!retry(ApiError::NotBrainitive));
@@ -374,7 +400,10 @@ mod tests {
         ];
         for e in all {
             let p = Problem::from_api(&e, HOST);
-            assert!(!p.title.is_empty() && !p.message.is_empty() && !p.fix.is_empty(), "{e:?}");
+            assert!(
+                !p.title.is_empty() && !p.message.is_empty() && !p.fix.is_empty(),
+                "{e:?}"
+            );
         }
     }
 

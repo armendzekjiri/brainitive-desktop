@@ -200,7 +200,9 @@ impl Cache {
         run.full |= page.reset;
         run.pages += 1;
         for raw in page.data {
-            let Ok(change) = serde_json::from_value::<FeedChange>(raw) else { continue };
+            let Ok(change) = serde_json::from_value::<FeedChange>(raw) else {
+                continue;
+            };
             if !KINDS.contains(&change.kind.as_str()) {
                 continue;
             }
@@ -277,7 +279,8 @@ impl Cache {
     fn remove(&mut self, kind: &str, id: &str) {
         self.records.remove(&key(kind, id));
         if kind == "task_list" {
-            self.records.retain(|_, r| !(r.kind == "task" && task_list_of(&r.data).is_some_and(|l| l.to_string() == id)));
+            self.records
+                .retain(|_, r| !(r.kind == "task" && task_list_of(&r.data).is_some_and(|l| l.to_string() == id)));
         }
     }
 
@@ -288,7 +291,9 @@ impl Cache {
         // optimistic first: the feed re-sends My Day after done changes
         match change {
             Change::WorkDone { work_id, done, .. } => self.set_work_done(work_id, *done),
-            Change::TaskUpdate { task_id, done: Some(d), .. } => self.set_work_done(&format!("task:{task_id}"), *d),
+            Change::TaskUpdate {
+                task_id, done: Some(d), ..
+            } => self.set_work_done(&format!("task:{task_id}"), *d),
             _ => {}
         }
         let stored = match (record_type, entity) {
@@ -298,7 +303,10 @@ impl Cache {
         if stored {
             return;
         }
-        if let Change::TaskUpdate { task_id, title, done, .. } = change {
+        if let Change::TaskUpdate {
+            task_id, title, done, ..
+        } = change
+        {
             if let Some(r) = self.records.get_mut(&key("task", &task_id.to_string())) {
                 if let Some(t) = title {
                     r.data["title"] = Value::from(t.as_str());
@@ -386,7 +394,9 @@ fn text(v: &Value) -> String {
 }
 
 fn opt_text(v: &Value) -> Option<String> {
-    v.as_str().filter(|s| !s.is_empty()).map(|s| s.chars().take(2000).collect())
+    v.as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(2000).collect())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -693,13 +703,22 @@ mod tests {
         assert_eq!(run.cursor, None);
         let q = run.query();
         assert!(q.contains(&("scopes".into(), SCOPES.into())));
-        assert!(q.contains(&("task_lists".into(), "mine".into())), "the server resolves the lists");
+        assert!(
+            q.contains(&("task_lists".into(), "mine".into())),
+            "the server resolves the lists"
+        );
         assert!(q.contains(&("captures".into(), "inbox".into())));
         assert!(q.contains(&("limit".into(), "100".into())));
 
         let more = c.apply_page(
             &mut run,
-            page(vec![work("issue:1", "Fix", 1, None, "2026-11-01T09:00:00Z")], "c1", true, true, &[1]),
+            page(
+                vec![work("issue:1", "Fix", 1, None, "2026-11-01T09:00:00Z")],
+                "c1",
+                true,
+                true,
+                &[1],
+            ),
             10,
         );
         assert!(more);
@@ -707,7 +726,13 @@ mod tests {
         assert_eq!(c.cursor, None, "the cursor is kept only when the run is finished");
         let more = c.apply_page(
             &mut run,
-            page(vec![work("task:5", "Milk", 1, Some(3), "2026-11-01T09:00:00Z")], "c2", false, false, &[1]),
+            page(
+                vec![work("task:5", "Milk", 1, Some(3), "2026-11-01T09:00:00Z")],
+                "c2",
+                false,
+                false,
+                &[1],
+            ),
             11,
         );
         assert!(!more);
@@ -771,14 +796,26 @@ mod tests {
         let mut run = c.start_run();
         c.apply_page(
             &mut run,
-            page(vec![work("issue:1", "A", 1, None, "2026-11-01T09:00:00Z")], "c1", false, true, &[1]),
+            page(
+                vec![work("issue:1", "A", 1, None, "2026-11-01T09:00:00Z")],
+                "c1",
+                false,
+                true,
+                &[1],
+            ),
             1,
         );
         // the cursor expired: the server starts over
         let mut run = c.start_run();
         c.apply_page(
             &mut run,
-            page(vec![work("issue:2", "B", 1, None, "2026-11-01T09:00:00Z")], "c9", false, true, &[1]),
+            page(
+                vec![work("issue:2", "B", 1, None, "2026-11-01T09:00:00Z")],
+                "c9",
+                false,
+                true,
+                &[1],
+            ),
             2,
         );
         assert_eq!(c.records.keys().cloned().collect::<Vec<_>>(), ["work:issue:2"]);
@@ -856,7 +893,11 @@ mod tests {
 
         // a second list (e.g. pinned): a delta run, reset false, only the new list in full
         let mut run = c.start_run();
-        c.apply_page(&mut run, v2_page(vec![list(4, true), task(9, 4, "Soap", false, 1)], "c2", false, &[3, 4]), 2);
+        c.apply_page(
+            &mut run,
+            v2_page(vec![list(4, true), task(9, 4, "Soap", false, 1)], "c2", false, &[3, 4]),
+            2,
+        );
         assert!(!run.full);
         assert_eq!(c.task_lists, [3, 4]);
         assert!(c.has_list(3) && c.has_list(4), "a delta run keeps what it did not send");
@@ -875,7 +916,17 @@ mod tests {
         let mut run = c.start_run();
         c.apply_page(
             &mut run,
-            v2_page(vec![list(3, true), task(5, 3, "Milk", false, 1), list(4, true), task(9, 4, "Soap", false, 1)], "c1", true, &[3, 4]),
+            v2_page(
+                vec![
+                    list(3, true),
+                    task(5, 3, "Milk", false, 1),
+                    list(4, true),
+                    task(9, 4, "Soap", false, 1),
+                ],
+                "c1",
+                true,
+                &[3, 4],
+            ),
             1,
         );
         let mut run = c.start_run();
@@ -890,11 +941,18 @@ mod tests {
     fn viewers_cannot_add_tasks() {
         let mut c = Cache::new(&origin());
         let mut run = c.start_run();
-        c.apply_page(&mut run, v2_page(vec![list(3, false), list(4, true)], "c1", true, &[3, 4]), 1);
+        c.apply_page(
+            &mut run,
+            v2_page(vec![list(3, false), list(4, true)], "c1", true, &[3, 4]),
+            1,
+        );
         assert!(!c.can_manage_items(3));
         assert!(c.can_manage_items(4));
         let v = view(&c, &Outbox::default());
-        assert_eq!(v.lists.iter().map(|l| l.can_manage_items).collect::<Vec<_>>(), [false, true]);
+        assert_eq!(
+            v.lists.iter().map(|l| l.can_manage_items).collect::<Vec<_>>(),
+            [false, true]
+        );
     }
 
     #[test]
@@ -905,10 +963,18 @@ mod tests {
                 "data": {"id": id, "text": text, "state": "inbox", "captured_at": "2026-11-01T09:00:00Z"}})
         };
         let mut run = c.start_run();
-        c.apply_page(&mut run, v2_page(vec![cap("u-1", "One"), cap("u-2", "Two")], "c1", true, &[]), 1);
+        c.apply_page(
+            &mut run,
+            v2_page(vec![cap("u-1", "One"), cap("u-2", "Two")], "c1", true, &[]),
+            1,
+        );
         let mut run = c.start_run();
         c.apply_page(&mut run, v2_page(vec![delete("capture", "u-1")], "c2", false, &[]), 2);
-        let caps: Vec<_> = view(&c, &Outbox::default()).captures.iter().map(|c| c.text.clone()).collect();
+        let caps: Vec<_> = view(&c, &Outbox::default())
+            .captures
+            .iter()
+            .map(|c| c.text.clone())
+            .collect();
         assert_eq!(caps, ["Two"]);
     }
 
@@ -922,11 +988,21 @@ mod tests {
         let mut run = c.start_run();
         c.apply_page(
             &mut run,
-            page(vec![day("2026-11-01", "Yesterday"), day("2026-11-02", "Today")], "c1", false, true, &[]),
+            page(
+                vec![day("2026-11-01", "Yesterday"), day("2026-11-02", "Today")],
+                "c1",
+                false,
+                true,
+                &[],
+            ),
             1,
         );
         let mut run = c.start_run();
-        c.apply_page(&mut run, page(vec![day("2026-11-01", "Late copy")], "c2", false, false, &[]), 2);
+        c.apply_page(
+            &mut run,
+            page(vec![day("2026-11-01", "Late copy")], "c2", false, false, &[]),
+            2,
+        );
         let days: Vec<_> = c.of_kind("my_day").map(|r| r.id.clone()).collect();
         assert_eq!(days, ["2026-11-02"]);
         let v = view(&c, &Outbox::default());
@@ -1004,7 +1080,11 @@ mod tests {
         let day = v.my_day.unwrap();
         assert_eq!(day.items.len(), 1);
         assert!(day.items[0].pending);
-        let tasks: Vec<_> = v.lists[0].tasks.iter().map(|t| (t.id.clone(), t.title.clone(), t.pending)).collect();
+        let tasks: Vec<_> = v.lists[0]
+            .tasks
+            .iter()
+            .map(|t| (t.id.clone(), t.title.clone(), t.pending))
+            .collect();
         assert_eq!(
             tasks,
             [
@@ -1063,17 +1143,25 @@ mod tests {
             "project": {"id": 1, "name": "Brainitive"}, "updated_at": "2026-11-02T08:00:00Z"});
         c.apply_result(&tick(), Some("work"), Some(&entity));
         assert_eq!(c.records["work:issue:1"].data["title"], "Fix (server)");
-        assert_eq!(c.records["work:issue:1"].updated_at.as_deref(), Some("2026-11-02T08:00:00Z"));
+        assert_eq!(
+            c.records["work:issue:1"].updated_at.as_deref(),
+            Some("2026-11-02T08:00:00Z")
+        );
         assert_eq!(c.records["work:issue:1"].project_id, Some(1));
 
         // a new task: the server's record (with its id) is in its list at once
         let created = json!({"id": 11, "list_id": 3, "title": "Bread", "status": "todo", "done": false, "position": 3});
-        let add = Change::TaskCreate { task_list_id: 3, title: "Bread".into(), done: false };
+        let add = Change::TaskCreate {
+            task_list_id: 3,
+            title: "Bread".into(),
+            done: false,
+        };
         c.apply_result(&add, Some("task"), Some(&created));
         assert_eq!(c.task(11).unwrap().title, "Bread");
 
         // a task update: "theirs" replaces the cached copy, not a patch of mine
-        let theirs = json!({"id": 11, "list_id": 3, "title": "Rye bread", "status": "todo", "done": false, "position": 3});
+        let theirs =
+            json!({"id": 11, "list_id": 3, "title": "Rye bread", "status": "todo", "done": false, "position": 3});
         let upd = Change::TaskUpdate {
             task_list_id: 3,
             task_id: 11,
@@ -1105,7 +1193,13 @@ mod tests {
         let mut run = c.start_run();
         c.apply_page(
             &mut run,
-            page(vec![work("issue:1", "Fix", 1, None, "2026-11-01T09:00:00Z")], "c1", false, true, &[1]),
+            page(
+                vec![work("issue:1", "Fix", 1, None, "2026-11-01T09:00:00Z")],
+                "c1",
+                false,
+                true,
+                &[1],
+            ),
             1,
         );
         c.save(&path).unwrap();

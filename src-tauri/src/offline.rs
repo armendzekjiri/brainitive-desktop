@@ -381,7 +381,9 @@ pub async fn sync(app: &AppHandle, origin: &ServerOrigin) -> Result<(), CallErro
         inner.offline.syncing = false;
         inner.offline.last_error = match &result {
             Ok(()) => None,
-            Err(CallError::Offline(_)) => Some("The server can't be reached. Your changes are kept on this computer.".into()),
+            Err(CallError::Offline(_)) => {
+                Some("The server can't be reached. Your changes are kept on this computer.".into())
+            }
             Err(CallError::SignedOut(_)) => Some("Sign in again to send your changes.".into()),
             Err(CallError::Server { status, .. }) => Some(format!(
                 "The server could not sync right now (HTTP {status}). Your changes are kept and sent later."
@@ -413,7 +415,8 @@ async fn sync_once(app: &AppHandle, origin: &ServerOrigin) -> Result<(), CallErr
     }
     if problems > 0 {
         let body = if problems == 1 {
-            "1 change could not be applied as it was. Open the offline view to see why; your text is kept there.".to_string()
+            "1 change could not be applied as it was. Open the offline view to see why; your text is kept there."
+                .to_string()
         } else {
             format!("{problems} changes could not be applied as they were. Open the offline view to see why; your text is kept there.")
         };
@@ -431,7 +434,10 @@ async fn verify_user(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> Resu
     if state(app).lock().offline.verified {
         return Ok(epoch);
     }
-    let me = state(app).session.request(origin, &ApiRequest::get("/api/v1/me")).await?;
+    let me = state(app)
+        .session
+        .request(origin, &ApiRequest::get("/api/v1/me"))
+        .await?;
     let Some(id) = me.body.get("id").and_then(Value::as_u64) else {
         return Err(CallError::Failed("unexpected answer to /me".into()));
     };
@@ -546,7 +552,9 @@ pub async fn sync_now(app: &AppHandle) {
         let inner = s.lock();
         (inner.current_origin(), inner.phase)
     };
-    let Some(origin) = origin.filter(|_| signed_in(phase)) else { return };
+    let Some(origin) = origin.filter(|_| signed_in(phase)) else {
+        return;
+    };
     let ok = sync(app, &origin).await.is_ok();
     if ok && state(app).lock().phase == Phase::Unreachable {
         if let Err(e) = crate::flows::retry_now(app).await {
@@ -596,7 +604,10 @@ fn window_view(app: &AppHandle) -> WindowView {
 }
 
 /// Adds a change to the outbox (checked against the cache by `make`), then tries to send it.
-fn record(app: &AppHandle, make: impl FnOnce(&mut OfflineData) -> Result<Option<Change>, UiError>) -> Result<WindowView, UiError> {
+fn record(
+    app: &AppHandle,
+    make: impl FnOnce(&mut OfflineData) -> Result<Option<Change>, UiError>,
+) -> Result<WindowView, UiError> {
     {
         let s = state(app);
         let mut inner = s.lock();
@@ -677,7 +688,12 @@ pub fn offline_my_day_add(app: AppHandle, webview: Webview, work_id: String) -> 
 }
 
 #[tauri::command]
-pub fn offline_add_task(app: AppHandle, webview: Webview, task_list_id: u64, title: String) -> Result<WindowView, UiError> {
+pub fn offline_add_task(
+    app: AppHandle,
+    webview: Webview,
+    task_list_id: u64,
+    title: String,
+) -> Result<WindowView, UiError> {
     popup::ensure_caller(&app, &webview, Popup::Offline).map_err(|m| ui("not_allowed", m))?;
     let title = clean_title(&title)?;
     record(&app, |data| {
@@ -738,7 +754,12 @@ pub fn offline_update_task(
 }
 
 #[tauri::command]
-pub fn offline_add_capture(app: AppHandle, webview: Webview, text: String, url: Option<String>) -> Result<WindowView, UiError> {
+pub fn offline_add_capture(
+    app: AppHandle,
+    webview: Webview,
+    text: String,
+    url: Option<String>,
+) -> Result<WindowView, UiError> {
     popup::ensure_caller(&app, &webview, Popup::Offline).map_err(|m| ui("not_allowed", m))?;
     let input = CaptureInput::new(&text, url.as_deref(), None).map_err(|e| ui("invalid", e.to_string()))?;
     record(&app, |_| {
@@ -759,7 +780,11 @@ pub async fn offline_sync_now(app: AppHandle, webview: Webview) -> Result<Window
 
 /// Dismiss one problem (`request_id`) or all of them.
 #[tauri::command]
-pub fn offline_dismiss_problem(app: AppHandle, webview: Webview, request_id: Option<String>) -> Result<WindowView, String> {
+pub fn offline_dismiss_problem(
+    app: AppHandle,
+    webview: Webview,
+    request_id: Option<String>,
+) -> Result<WindowView, String> {
     popup::ensure_caller(&app, &webview, Popup::Offline)?;
     {
         let s = state(&app);
@@ -835,7 +860,10 @@ mod tests {
         let base = std::env::temp_dir().join(format!("brainitive-offline-clear-{}", std::process::id()));
         let mut data = OfflineData::new(base.clone());
         data.ensure(&origin());
-        assert!(!data.adopt_user(4, Some("Armend".into())), "a fresh cache takes the account");
+        assert!(
+            !data.adopt_user(4, Some("Armend".into())),
+            "a fresh cache takes the account"
+        );
         assert!(data.verified);
         data.outbox
             .push(Change::CaptureCreate {

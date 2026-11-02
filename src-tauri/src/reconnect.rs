@@ -51,8 +51,14 @@ mod tests {
     #[test]
     fn lookup_target_of_an_origin() {
         let u = |s| url::Url::parse(s).unwrap();
-        assert_eq!(lookup_target(&u("https://brain.example.com")), Some(("brain.example.com".into(), 443)));
-        assert_eq!(lookup_target(&u("http://localhost:8000")), Some(("localhost".into(), 8000)));
+        assert_eq!(
+            lookup_target(&u("https://brain.example.com")),
+            Some(("brain.example.com".into(), 443))
+        );
+        assert_eq!(
+            lookup_target(&u("http://localhost:8000")),
+            Some(("localhost".into(), 8000))
+        );
         assert_eq!(lookup_target(&u("http://[::1]:8000")), Some(("::1".into(), 8000)));
     }
 }

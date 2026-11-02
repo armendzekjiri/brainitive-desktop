@@ -193,7 +193,11 @@ pub async fn switcher_search(
     if let Some(f) = filter.as_deref().filter(|f| FILTERS.contains(f)) {
         request = request.query("type", f);
     }
-    let response = state(&app).session.request(&origin, &request).await.map_err(call_error)?;
+    let response = state(&app)
+        .session
+        .request(&origin, &request)
+        .await
+        .map_err(call_error)?;
     // the list answer is `{data: [...], next_cursor, total, counts, places}`: not unwrapped
     Ok(parse_search(&origin, &response.body))
 }
@@ -203,7 +207,8 @@ pub async fn switcher_search(
 pub fn switcher_open(app: AppHandle, webview: Webview, url: String) -> Result<(), UiError> {
     caller(&app, &webview)?;
     let origin = signed_in_origin(&app)?;
-    let page = crate::links::resolve_on_instance(&origin, &url).ok_or_else(|| ui("invalid", "Not a page of this server."))?;
+    let page =
+        crate::links::resolve_on_instance(&origin, &url).ok_or_else(|| ui("invalid", "Not a page of this server."))?;
     popup::hide(&app, Popup::Switcher);
     crate::shell::navigate_to(&app, &origin, page);
     Ok(())
@@ -243,9 +248,7 @@ pub async fn switcher_start_timer(app: AppHandle, webview: Webview, issue_id: u6
             "conflict",
             "Another timer is running. Stop it first (tray / menu bar or the web app).",
         )),
-        Err(CallError::Server { status: 403, .. }) => {
-            Err(ui("forbidden", "You can't log time on this issue."))
-        }
+        Err(CallError::Server { status: 403, .. }) => Err(ui("forbidden", "You can't log time on this issue.")),
         Err(e) => Err(call_error(e)),
     }
 }

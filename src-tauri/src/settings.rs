@@ -234,10 +234,12 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"current":null}"#).unwrap();
         assert_eq!(s.preferences, Preferences::default());
         assert!(s.preferences.keep_in_tray && s.preferences.ask_where_to_save);
-        let s: Settings =
-            serde_json::from_str(r#"{"preferences":{"capture_shortcut":null,"zoom":1.25}}"#).unwrap();
+        let s: Settings = serde_json::from_str(r#"{"preferences":{"capture_shortcut":null,"zoom":1.25}}"#).unwrap();
         assert_eq!(s.preferences.capture_shortcut, None);
-        assert_eq!(s.preferences.switcher_shortcut, Preferences::default().switcher_shortcut);
+        assert_eq!(
+            s.preferences.switcher_shortcut,
+            Preferences::default().switcher_shortcut
+        );
         assert_eq!(s.preferences.zoom, 1.25);
     }
 

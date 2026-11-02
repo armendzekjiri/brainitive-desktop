@@ -111,7 +111,9 @@ pub fn remove(data_dir: &Path) -> std::io::Result<u64> {
 /// At start: partial downloads (the app quit mid-download) and models the app no longer uses
 /// are deleted; the current model stays.
 pub fn clean(data_dir: &Path, spec: &ModelSpec) {
-    let Ok(entries) = std::fs::read_dir(folder(data_dir)) else { return };
+    let Ok(entries) = std::fs::read_dir(folder(data_dir)) else {
+        return;
+    };
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_file() && p.file_name().and_then(|n| n.to_str()) != Some(spec.file) {
@@ -317,7 +319,10 @@ mod tests {
     #[test]
     fn the_pinned_model_is_well_formed() {
         assert_eq!(MODEL.sha256.len(), 64);
-        assert!(MODEL.sha256.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(MODEL
+            .sha256
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
         let url = Url::parse(MODEL.url).unwrap();
         assert!(allowed_url(&url));
         // pinned to a commit, not a moving branch
@@ -330,7 +335,10 @@ mod tests {
     fn paths_live_in_the_voice_folder() {
         let data = Path::new("/data");
         assert_eq!(path(data, &MODEL), Path::new("/data/voice/ggml-small-q5_1.bin"));
-        assert_eq!(part_path(data, &MODEL), Path::new("/data/voice/ggml-small-q5_1.bin.part"));
+        assert_eq!(
+            part_path(data, &MODEL),
+            Path::new("/data/voice/ggml-small-q5_1.bin.part")
+        );
     }
 
     #[test]

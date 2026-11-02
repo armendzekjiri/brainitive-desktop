@@ -6,9 +6,9 @@ use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::flows::{self, ServerCheck, UiError};
+use crate::problem::Problem;
 use crate::server::{ServerOrigin, CLOUD_ORIGIN, DEV_ORIGIN, LOCAL_ORIGIN};
 use crate::settings::RecentServer;
-use crate::problem::Problem;
 use crate::state::{state, Notice, Phase, UpdateRequired};
 use crate::version::{APP_VERSION, DOWNLOAD_URL};
 

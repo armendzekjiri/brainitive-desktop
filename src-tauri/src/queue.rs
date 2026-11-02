@@ -226,7 +226,14 @@ pub fn new_request_id() -> String {
     b[6] = (b[6] & 0x0f) | 0x40;
     b[8] = (b[8] & 0x3f) | 0x80;
     let h = crate::server::hex(&b);
-    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 fn now() -> u64 {
@@ -258,11 +265,21 @@ mod tests {
         assert_eq!(ok.intended_type.as_deref(), Some("issue"));
         assert_eq!(CaptureInput::new("x", Some(""), Some("")).unwrap().url, None);
         assert_eq!(CaptureInput::new("   ", None, None), Err(InputError::Empty));
-        assert_eq!(CaptureInput::new(&"a".repeat(MAX_TEXT + 1), None, None), Err(InputError::TooLong));
+        assert_eq!(
+            CaptureInput::new(&"a".repeat(MAX_TEXT + 1), None, None),
+            Err(InputError::TooLong)
+        );
         for bad in ["javascript:alert(1)", "file:///etc", "example.com", "https://"] {
-            assert_eq!(CaptureInput::new("x", Some(bad), None), Err(InputError::BadUrl), "{bad}");
+            assert_eq!(
+                CaptureInput::new("x", Some(bad), None),
+                Err(InputError::BadUrl),
+                "{bad}"
+            );
         }
-        assert_eq!(CaptureInput::new("x", None, Some("whiteboard")), Err(InputError::BadType));
+        assert_eq!(
+            CaptureInput::new("x", None, Some("whiteboard")),
+            Err(InputError::BadType)
+        );
     }
 
     #[test]

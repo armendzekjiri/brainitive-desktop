@@ -144,9 +144,20 @@ pub fn is_work_id(id: &str) -> bool {
 /// One line of the tray menu (built into native items by [`build_menu`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entry {
-    Item { action: Option<TrayAction>, text: String, accelerator: Option<String> },
-    Check { action: TrayAction, text: String, checked: bool },
-    Submenu { text: String, entries: Vec<Entry> },
+    Item {
+        action: Option<TrayAction>,
+        text: String,
+        accelerator: Option<String>,
+    },
+    Check {
+        action: TrayAction,
+        text: String,
+        checked: bool,
+    },
+    Submenu {
+        text: String,
+        entries: Vec<Entry>,
+    },
     Separator,
 }
 
@@ -202,7 +213,13 @@ pub fn model(
     }));
     if offline.available {
         // offline mode (BRAI-366): the status, the offline window and "Sync now"
-        let changes = |n: usize| if n == 1 { "1 change".to_string() } else { format!("{n} changes") };
+        let changes = |n: usize| {
+            if n == 1 {
+                "1 change".to_string()
+            } else {
+                format!("{n} changes")
+            }
+        };
         match (offline.offline, offline.pending) {
             (true, 0) => out.push(label("Offline — changes will sync")),
             (true, n) => out.push(label(format!("Offline — {} will sync", changes(n)))),
@@ -260,7 +277,10 @@ pub fn model(
             }
             _ => "My Day".to_string(),
         };
-        out.push(Entry::Submenu { text: title, entries: day });
+        out.push(Entry::Submenu {
+            text: title,
+            entries: day,
+        });
 
         // the timer
         match &data.timer {
@@ -306,7 +326,10 @@ fn build_items(app: &AppHandle, entries: &[Entry]) -> tauri::Result<Vec<Box<dyn 
                 text,
                 accelerator,
             } => {
-                let id = action.as_ref().map(TrayAction::id).unwrap_or_else(|| "tray-label".into());
+                let id = action
+                    .as_ref()
+                    .map(TrayAction::id)
+                    .unwrap_or_else(|| "tray-label".into());
                 items.push(Box::new(MenuItem::with_id(
                     app,
                     id,
@@ -489,7 +512,9 @@ async fn toggle_day(app: &AppHandle, work: &str) {
 
 async fn end_timer(app: &AppHandle, stop: bool) {
     let Some(origin) = current(app) else { return };
-    let Some(timer) = state(app).lock().tray_data.timer.clone() else { return };
+    let Some(timer) = state(app).lock().tray_data.timer.clone() else {
+        return;
+    };
     let request = if stop {
         let mut body = json!({ "timer_id": timer.id });
         if timer.activity_required {
@@ -514,7 +539,9 @@ async fn end_timer(app: &AppHandle, stop: bool) {
             }
             state(app).lock().tray_data.timer = None;
         }
-        Err(CallError::Server { status: 422, message, .. }) => {
+        Err(CallError::Server {
+            status: 422, message, ..
+        }) => {
             // e.g. an activity must be chosen: the web's timer can do that
             crate::bridge::show_notification(app, "Choose how to log the time", &message, None);
             crate::shell::open_page(app, timer.url.as_deref().unwrap_or("/my-work"));
@@ -729,7 +756,12 @@ mod tests {
         assert_eq!(TrayAction::from_id("tray-label"), None);
         assert_eq!(TrayAction::from_id("settings"), None);
         // only plain work ids reach an API path
-        for bad in ["tray-day:issue:", "tray-day:issue:1/../x", "tray-day:page:3", "tray-day:issue:12?x"] {
+        for bad in [
+            "tray-day:issue:",
+            "tray-day:issue:1/../x",
+            "tray-day:page:3",
+            "tray-day:issue:12?x",
+        ] {
             assert_eq!(TrayAction::from_id(bad), None, "{bad}");
         }
     }
@@ -763,7 +795,15 @@ mod tests {
 
     #[test]
     fn menu_model_signed_out_only_offers_the_basics() {
-        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, None, &Default::default());
+        let m = model(
+            Some("Cloud"),
+            false,
+            &TrayData::default(),
+            None,
+            None,
+            None,
+            &Default::default(),
+        );
         assert_eq!(
             m[0],
             Entry::Item {
@@ -775,7 +815,9 @@ mod tests {
         assert!(!m.iter().any(|e| matches!(e, Entry::Submenu { .. })));
         assert!(m.contains(&item(TrayAction::Quit, "Quit Brainitive")));
         // voice capture is offered even signed out (the text waits in quick capture)
-        assert!(m.iter().any(|e| matches!(e, Entry::Item { action: Some(TrayAction::Voice), text, .. } if text == "Voice Capture…")));
+        assert!(m.iter().any(
+            |e| matches!(e, Entry::Item { action: Some(TrayAction::Voice), text, .. } if text == "Voice Capture…")
+        ));
     }
 
     #[test]
@@ -810,7 +852,15 @@ mod tests {
             ]),
             my_day_stale: false,
         };
-        let m = model(Some("Cloud"), true, &data, Some("shift+super+Space".into()), None, None, &Default::default());
+        let m = model(
+            Some("Cloud"),
+            true,
+            &data,
+            Some("shift+super+Space".into()),
+            None,
+            None,
+            &Default::default(),
+        );
         let Some(Entry::Submenu { text, entries }) = m.iter().find(|e| matches!(e, Entry::Submenu { .. })) else {
             panic!("no My Day");
         };
@@ -823,7 +873,9 @@ mod tests {
                 checked: true
             }
         );
-        let Entry::Check { text: long, .. } = &entries[1] else { panic!() };
+        let Entry::Check { text: long, .. } = &entries[1] else {
+            panic!()
+        };
         assert_eq!(long.chars().count(), MAX_TITLE);
         assert!(m.contains(&item(TrayAction::TimerOpen, "⏱ 1:05 — BRAI-1 Thing")));
         assert!(m.contains(&item(TrayAction::TimerStop, "Stop and Log Time")));
@@ -854,15 +906,41 @@ mod tests {
         assert_eq!(m[1], label("Offline — 3 changes will sync"));
         assert!(m.contains(&item(TrayAction::Offline, "Open Offline View…")));
         assert!(m.contains(&item(TrayAction::SyncNow, "Sync Now")));
-        let one = TrayStatus { pending: 1, ..offline.clone() };
-        assert_eq!(model(Some("Cloud"), false, &TrayData::default(), None, None, None, &one)[1], label("Offline — 1 change will sync"));
-        let none = TrayStatus { pending: 0, ..offline.clone() };
-        assert_eq!(model(Some("Cloud"), true, &TrayData::default(), None, None, None, &none)[1], label("Offline — changes will sync"));
+        let one = TrayStatus {
+            pending: 1,
+            ..offline.clone()
+        };
+        assert_eq!(
+            model(Some("Cloud"), false, &TrayData::default(), None, None, None, &one)[1],
+            label("Offline — 1 change will sync")
+        );
+        let none = TrayStatus {
+            pending: 0,
+            ..offline.clone()
+        };
+        assert_eq!(
+            model(Some("Cloud"), true, &TrayData::default(), None, None, None, &none)[1],
+            label("Offline — changes will sync")
+        );
         // online with changes still waiting
-        let online = TrayStatus { offline: false, ..offline };
-        assert_eq!(model(Some("Cloud"), true, &TrayData::default(), None, None, None, &online)[1], label("3 changes waiting to sync"));
+        let online = TrayStatus {
+            offline: false,
+            ..offline
+        };
+        assert_eq!(
+            model(Some("Cloud"), true, &TrayData::default(), None, None, None, &online)[1],
+            label("3 changes waiting to sync")
+        );
         // signed out: no offline entries
-        let m = model(Some("Cloud"), false, &TrayData::default(), None, None, None, &TrayStatus::default());
+        let m = model(
+            Some("Cloud"),
+            false,
+            &TrayData::default(),
+            None,
+            None,
+            None,
+            &TrayStatus::default(),
+        );
         assert!(!m.contains(&item(TrayAction::SyncNow, "Sync Now")));
     }
 

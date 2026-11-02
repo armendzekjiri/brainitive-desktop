@@ -38,20 +38,33 @@ pub enum Mode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Input {
     /// The hotkey went down (`hold`) or "Voice Capture" was chosen in a menu / button.
-    Start { at: Instant, hold: bool },
+    Start {
+        at: Instant,
+        hold: bool,
+    },
     /// The hotkey went down again while recording.
     HotkeyDown,
-    HotkeyUp { at: Instant },
+    HotkeyUp {
+        at: Instant,
+    },
     /// Enter / the Stop button.
     Stop,
     /// Esc / the Cancel button.
     Cancel,
     /// The clock (the indicator's timer): cuts off at [`MAX_LENGTH`].
-    Tick { at: Instant },
+    Tick {
+        at: Instant,
+    },
     /// The transcription of recording `session` finished.
-    Transcribed { session: u64, text: String },
+    Transcribed {
+        session: u64,
+        text: String,
+    },
     /// The microphone or the transcription of recording `session` failed.
-    Failed { session: u64, message: String },
+    Failed {
+        session: u64,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,7 +140,10 @@ impl Recorder {
             }
 
             (Phase::Recording, Input::HotkeyUp { at }) if self.mode == Mode::Hold => {
-                let held = self.started.map(|t| at.saturating_duration_since(t)).unwrap_or_default();
+                let held = self
+                    .started
+                    .map(|t| at.saturating_duration_since(t))
+                    .unwrap_or_default();
                 if held >= HOLD_MIN {
                     Some(self.transcribe(false))
                 } else {
@@ -158,9 +174,7 @@ impl Recorder {
                     Some(Effect::Deliver(text))
                 }
             }
-            (Phase::Recording | Phase::Transcribing, Input::Failed { session, message })
-                if session == self.session =>
-            {
+            (Phase::Recording | Phase::Transcribing, Input::Failed { session, message }) if session == self.session => {
                 self.phase = Phase::Error;
                 self.started = None;
                 Some(Effect::ShowError(message))
@@ -210,8 +224,13 @@ mod tests {
         assert!(r.busy());
         assert_eq!(r.elapsed(t + Duration::from_secs(3)), Duration::from_secs(3));
         assert_eq!(
-            r.handle(Input::HotkeyUp { at: t + Duration::from_secs(3) }),
-            Some(Effect::Transcribe { session: s, cut_off: false })
+            r.handle(Input::HotkeyUp {
+                at: t + Duration::from_secs(3)
+            }),
+            Some(Effect::Transcribe {
+                session: s,
+                cut_off: false
+            })
         );
         assert_eq!(r.phase(), Phase::Transcribing);
         assert_eq!(r.elapsed(t + Duration::from_secs(4)), Duration::ZERO);
@@ -219,7 +238,10 @@ mod tests {
         assert_eq!(r.handle(Input::Start { at: t, hold: true }), None);
         assert_eq!(r.handle(Input::HotkeyDown), None);
         assert_eq!(
-            r.handle(Input::Transcribed { session: s, text: "  Call Anna tomorrow \n".into() }),
+            r.handle(Input::Transcribed {
+                session: s,
+                text: "  Call Anna tomorrow \n".into()
+            }),
             Some(Effect::Deliver("Call Anna tomorrow".into()))
         );
         assert_eq!(r.phase(), Phase::Done);
@@ -231,14 +253,27 @@ mod tests {
         let t = t0();
         let mut r = Recorder::default();
         let s = start(&mut r, t, true);
-        assert_eq!(r.handle(Input::HotkeyUp { at: t + Duration::from_millis(200) }), None);
+        assert_eq!(
+            r.handle(Input::HotkeyUp {
+                at: t + Duration::from_millis(200)
+            }),
+            None
+        );
         assert_eq!((r.phase(), r.mode()), (Phase::Recording, Mode::Toggle));
         // a later key-up (of the second press) changes nothing; the press itself stops
         assert_eq!(
             r.handle(Input::HotkeyDown),
-            Some(Effect::Transcribe { session: s, cut_off: false })
+            Some(Effect::Transcribe {
+                session: s,
+                cut_off: false
+            })
         );
-        assert_eq!(r.handle(Input::HotkeyUp { at: t + Duration::from_secs(5) }), None);
+        assert_eq!(
+            r.handle(Input::HotkeyUp {
+                at: t + Duration::from_secs(5)
+            }),
+            None
+        );
         assert_eq!(r.phase(), Phase::Transcribing);
     }
 
@@ -249,12 +284,29 @@ mod tests {
         let s = start(&mut r, t, false);
         assert_eq!(r.mode(), Mode::Toggle);
         // a key-up never stops a toggle recording
-        assert_eq!(r.handle(Input::HotkeyUp { at: t + Duration::from_secs(9) }), None);
-        assert_eq!(r.handle(Input::Stop), Some(Effect::Transcribe { session: s, cut_off: false }));
+        assert_eq!(
+            r.handle(Input::HotkeyUp {
+                at: t + Duration::from_secs(9)
+            }),
+            None
+        );
+        assert_eq!(
+            r.handle(Input::Stop),
+            Some(Effect::Transcribe {
+                session: s,
+                cut_off: false
+            })
+        );
 
         let mut r = Recorder::default();
         let s = start(&mut r, t, false);
-        assert_eq!(r.handle(Input::HotkeyDown), Some(Effect::Transcribe { session: s, cut_off: false }));
+        assert_eq!(
+            r.handle(Input::HotkeyDown),
+            Some(Effect::Transcribe {
+                session: s,
+                cut_off: false
+            })
+        );
     }
 
     #[test]
@@ -265,14 +317,25 @@ mod tests {
         assert_eq!(r.handle(Input::Cancel), Some(Effect::Discard { session: s }));
         assert_eq!(r.phase(), Phase::Cancelled);
         // the release of the held key after Esc does nothing
-        assert_eq!(r.handle(Input::HotkeyUp { at: t + Duration::from_secs(2) }), None);
+        assert_eq!(
+            r.handle(Input::HotkeyUp {
+                at: t + Duration::from_secs(2)
+            }),
+            None
+        );
         assert_eq!(r.phase(), Phase::Cancelled);
 
         let s = start(&mut r, t, false);
         r.handle(Input::Stop);
         assert_eq!(r.handle(Input::Cancel), Some(Effect::Discard { session: s }));
         // the transcription that was still running arrives late: ignored
-        assert_eq!(r.handle(Input::Transcribed { session: s, text: "late".into() }), None);
+        assert_eq!(
+            r.handle(Input::Transcribed {
+                session: s,
+                text: "late".into()
+            }),
+            None
+        );
         assert_eq!(r.phase(), Phase::Cancelled);
         // Esc when nothing runs
         assert_eq!(Recorder::default().handle(Input::Cancel), None);
@@ -283,15 +346,33 @@ mod tests {
         let t = t0();
         let mut r = Recorder::default();
         let s = start(&mut r, t, true);
-        assert_eq!(r.handle(Input::Tick { at: t + Duration::from_secs(60) }), None);
-        assert_eq!(r.handle(Input::Tick { at: t + MAX_LENGTH - Duration::from_millis(1) }), None);
+        assert_eq!(
+            r.handle(Input::Tick {
+                at: t + Duration::from_secs(60)
+            }),
+            None
+        );
+        assert_eq!(
+            r.handle(Input::Tick {
+                at: t + MAX_LENGTH - Duration::from_millis(1)
+            }),
+            None
+        );
         assert_eq!(r.elapsed(t + Duration::from_secs(500)), MAX_LENGTH);
         assert_eq!(
             r.handle(Input::Tick { at: t + MAX_LENGTH }),
-            Some(Effect::Transcribe { session: s, cut_off: true })
+            Some(Effect::Transcribe {
+                session: s,
+                cut_off: true
+            })
         );
         // the key released afterwards changes nothing
-        assert_eq!(r.handle(Input::HotkeyUp { at: t + MAX_LENGTH + Duration::from_secs(1) }), None);
+        assert_eq!(
+            r.handle(Input::HotkeyUp {
+                at: t + MAX_LENGTH + Duration::from_secs(1)
+            }),
+            None
+        );
         assert_eq!(r.phase(), Phase::Transcribing);
         // ticks after the cut-off do nothing
         assert_eq!(r.handle(Input::Tick { at: t + MAX_LENGTH * 2 }), None);
@@ -304,7 +385,10 @@ mod tests {
         let s = start(&mut r, t, true);
         // the microphone failed while recording: close it and show why
         assert_eq!(
-            r.handle(Input::Failed { session: s, message: "no microphone".into() }),
+            r.handle(Input::Failed {
+                session: s,
+                message: "no microphone".into()
+            }),
             Some(Effect::ShowError("no microphone".into()))
         );
         assert_eq!(r.phase(), Phase::Error);
@@ -313,7 +397,10 @@ mod tests {
         let s = start(&mut r, t, true);
         r.handle(Input::Stop);
         assert_eq!(
-            r.handle(Input::Transcribed { session: s, text: " \n ".into() }),
+            r.handle(Input::Transcribed {
+                session: s,
+                text: " \n ".into()
+            }),
             Some(Effect::ShowError(NOTHING_HEARD.into()))
         );
         assert_eq!(r.phase(), Phase::Error);
@@ -321,9 +408,18 @@ mod tests {
         let s = start(&mut r, t, true);
         r.handle(Input::Stop);
         // a failure of an older session is ignored
-        assert_eq!(r.handle(Input::Failed { session: s - 1, message: "old".into() }), None);
         assert_eq!(
-            r.handle(Input::Failed { session: s, message: "model broken".into() }),
+            r.handle(Input::Failed {
+                session: s - 1,
+                message: "old".into()
+            }),
+            None
+        );
+        assert_eq!(
+            r.handle(Input::Failed {
+                session: s,
+                message: "model broken".into()
+            }),
             Some(Effect::ShowError("model broken".into()))
         );
     }
@@ -339,7 +435,13 @@ mod tests {
         assert_eq!(r.session(), b);
         // a result for the cancelled one is not delivered into the new recording
         r.handle(Input::Stop);
-        assert_eq!(r.handle(Input::Transcribed { session: a, text: "old".into() }), None);
+        assert_eq!(
+            r.handle(Input::Transcribed {
+                session: a,
+                text: "old".into()
+            }),
+            None
+        );
         assert_eq!(r.phase(), Phase::Transcribing);
     }
 }

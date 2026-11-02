@@ -57,9 +57,7 @@ pub fn parse(accelerator: &str) -> Result<Shortcut, ShortcutError> {
 /// Checks every shortcut the app registers (`None` = off) and that no two are the same. The
 /// error carries the name of the one at fault. Generic over any number of global shortcuts
 /// (quick capture, quick switcher, later voice capture …).
-pub fn parse_all<N: Copy>(
-    shortcuts: &[(N, Option<&str>)],
-) -> Result<Vec<(N, Shortcut)>, (N, ShortcutError)> {
+pub fn parse_all<N: Copy>(shortcuts: &[(N, Option<&str>)]) -> Result<Vec<(N, Shortcut)>, (N, ShortcutError)> {
     let mut out: Vec<(N, Shortcut)> = Vec::new();
     for (name, accelerator) in shortcuts {
         let Some(accelerator) = accelerator else { continue };
@@ -182,26 +180,26 @@ fn is_reserved(mods: Modifiers, key: Code) -> bool {
     const CMD: Modifiers = Modifiers::SUPER;
     let reserved: &[(Modifiers, Code)] = &[
         // macOS
-        (CMD.union(ALT), Code::Space),          // Finder search
-        (CMD.union(CTRL), Code::Space),         // emoji & symbols
-        (CTRL.union(ALT), Code::Space),         // next input source
-        (CMD.union(SHIFT), Code::Digit3),       // screenshots
+        (CMD.union(ALT), Code::Space),    // Finder search
+        (CMD.union(CTRL), Code::Space),   // emoji & symbols
+        (CTRL.union(ALT), Code::Space),   // next input source
+        (CMD.union(SHIFT), Code::Digit3), // screenshots
         (CMD.union(SHIFT), Code::Digit4),
         (CMD.union(SHIFT), Code::Digit5),
-        (CMD.union(CTRL), Code::KeyQ),          // lock screen
-        (CMD.union(ALT), Code::Escape),         // force quit
-        (CMD.union(SHIFT), Code::KeyQ),         // log out
-        (CMD.union(CTRL), Code::KeyF),          // full screen
+        (CMD.union(CTRL), Code::KeyQ),  // lock screen
+        (CMD.union(ALT), Code::Escape), // force quit
+        (CMD.union(SHIFT), Code::KeyQ), // log out
+        (CMD.union(CTRL), Code::KeyF),  // full screen
         // Windows / Linux
         (CTRL.union(ALT), Code::Delete),
-        (CTRL.union(SHIFT), Code::Escape),      // task manager
-        (CTRL.union(ALT), Code::KeyT),          // terminal (GNOME, Ubuntu)
-        (CTRL.union(ALT), Code::KeyL),          // lock (some desktops)
-        (CTRL.union(ALT), Code::ArrowLeft),     // workspaces
+        (CTRL.union(SHIFT), Code::Escape),  // task manager
+        (CTRL.union(ALT), Code::KeyT),      // terminal (GNOME, Ubuntu)
+        (CTRL.union(ALT), Code::KeyL),      // lock (some desktops)
+        (CTRL.union(ALT), Code::ArrowLeft), // workspaces
         (CTRL.union(ALT), Code::ArrowRight),
         (CTRL.union(ALT), Code::ArrowUp),
         (CTRL.union(ALT), Code::ArrowDown),
-        (CMD.union(SHIFT), Code::KeyS),         // Windows snipping tool
+        (CMD.union(SHIFT), Code::KeyS), // Windows snipping tool
         (ALT, Code::F4),
         (ALT, Code::Tab),
         (CMD, Code::Tab),
@@ -235,7 +233,14 @@ mod tests {
 
     #[test]
     fn canonical_round_trips() {
-        for raw in [DEFAULT_CAPTURE, DEFAULT_SWITCHER, DEFAULT_VOICE, "Control+Alt+KeyB", "shift+super+Digit7", "Ctrl+F5"] {
+        for raw in [
+            DEFAULT_CAPTURE,
+            DEFAULT_SWITCHER,
+            DEFAULT_VOICE,
+            "Control+Alt+KeyB",
+            "shift+super+Digit7",
+            "Ctrl+F5",
+        ] {
             let a = parse(raw).unwrap();
             let b = parse(&canonical(&a)).unwrap();
             assert_eq!(a.id(), b.id(), "{raw}");
@@ -265,13 +270,26 @@ mod tests {
     #[test]
     fn shortcuts_must_differ() {
         assert_eq!(
-            parse_all(&[("capture", Some("Control+Shift+KeyJ")), ("switcher", Some("ctrl+shift+j"))]).unwrap_err(),
+            parse_all(&[
+                ("capture", Some("Control+Shift+KeyJ")),
+                ("switcher", Some("ctrl+shift+j"))
+            ])
+            .unwrap_err(),
             ("switcher", ShortcutError::Duplicate)
         );
-        assert!(parse_all::<&str>(&[("capture", None), ("switcher", None)]).unwrap().is_empty());
-        assert_eq!(parse_all(&[("capture", Some("x")), ("switcher", None)]).unwrap_err().0, "capture");
+        assert!(parse_all::<&str>(&[("capture", None), ("switcher", None)])
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            parse_all(&[("capture", Some("x")), ("switcher", None)]).unwrap_err().0,
+            "capture"
+        );
         // off ones are skipped, a third one is checked against both
-        let three = [("a", Some("Control+Shift+KeyJ")), ("b", None), ("c", Some("Control+Alt+KeyJ"))];
+        let three = [
+            ("a", Some("Control+Shift+KeyJ")),
+            ("b", None),
+            ("c", Some("Control+Alt+KeyJ")),
+        ];
         assert_eq!(parse_all(&three).unwrap().len(), 2);
     }
 

@@ -106,7 +106,12 @@ pub fn on_download(app: &AppHandle, event: DownloadEvent<'_>) -> bool {
             } else {
                 None
             }
-            .or_else(|| app.path().download_dir().ok().map(|dir| (unique_path(&dir, &name), false)));
+            .or_else(|| {
+                app.path()
+                    .download_dir()
+                    .ok()
+                    .map(|dir| (unique_path(&dir, &name), false))
+            });
             let Some((path, staged)) = target else {
                 return true; // the webview's own default
             };
@@ -140,9 +145,7 @@ pub fn on_download(app: &AppHandle, event: DownloadEvent<'_>) -> bool {
                     }
                     crate::bridge::show_notification(app, "Download failed", "The file could not be downloaded.", None);
                 }
-                (None, true) => {
-                    crate::bridge::show_notification(app, "Download finished", "The file was saved.", None)
-                }
+                (None, true) => crate::bridge::show_notification(app, "Download finished", "The file was saved.", None),
             }
             true
         }

@@ -48,7 +48,8 @@ pub fn load(path: &Path) -> Result<Model, String> {
 fn load_with(path: &Path, params: WhisperContextParameters) -> Result<Model, String> {
     let started = Instant::now();
     let path = path.to_str().ok_or("the model path is not valid UTF-8")?;
-    let ctx = WhisperContext::new_with_params(path, params).map_err(|e| format!("the voice model could not be loaded ({e})"))?;
+    let ctx = WhisperContext::new_with_params(path, params)
+        .map_err(|e| format!("the voice model could not be loaded ({e})"))?;
     Ok(Model {
         ctx,
         load_time: started.elapsed(),
@@ -59,7 +60,14 @@ fn load_with(path: &Path, params: WhisperContextParameters) -> Result<Model, Str
 pub fn transcribe(model: &Model, clip: &Clip, language: &str) -> Result<(String, Timing), String> {
     let audio_len = Duration::from_secs_f32(clip.seconds());
     if clip.seconds() < MIN_SECONDS || audio::is_silent(&clip.samples) {
-        return Ok((String::new(), Timing { audio: audio_len, resample: Duration::ZERO, transcribe: Duration::ZERO }));
+        return Ok((
+            String::new(),
+            Timing {
+                audio: audio_len,
+                resample: Duration::ZERO,
+                transcribe: Duration::ZERO,
+            },
+        ));
     }
     let started = Instant::now();
     let mut samples = audio::resample_16k(&clip.samples, clip.rate);
@@ -129,11 +137,17 @@ mod tests {
 
     #[test]
     fn segments_are_joined_and_noise_markers_dropped() {
-        assert_eq!(clean([" Call Anna tomorrow.\n", " And buy milk. "]), "Call Anna tomorrow. And buy milk.");
+        assert_eq!(
+            clean([" Call Anna tomorrow.\n", " And buy milk. "]),
+            "Call Anna tomorrow. And buy milk."
+        );
         assert_eq!(clean(["[BLANK_AUDIO]"]), "");
         assert_eq!(clean([" (music)", " Hello", " [Musik]", " *laughs* "]), "Hello");
         // brackets inside a sentence are speech
-        assert_eq!(clean([" Ruf Anna an (morgen früh) bitte"]), "Ruf Anna an (morgen früh) bitte");
+        assert_eq!(
+            clean([" Ruf Anna an (morgen früh) bitte"]),
+            "Ruf Anna an (morgen früh) bitte"
+        );
         assert_eq!(clean(["unclosed [bracket"]), "unclosed [bracket");
         assert_eq!(clean([] as [&str; 0]), "");
     }
@@ -141,9 +155,15 @@ mod tests {
     #[test]
     fn too_short_or_silent_clips_are_not_transcribed() {
         // no model needed: these return before whisper runs
-        let silent = Clip { samples: vec![0.0; 48_000 * 3], rate: 48_000 };
+        let silent = Clip {
+            samples: vec![0.0; 48_000 * 3],
+            rate: 48_000,
+        };
         assert!(silent.seconds() > MIN_SECONDS && audio::is_silent(&silent.samples));
-        let tap = Clip { samples: vec![0.3; 1_000], rate: 48_000 };
+        let tap = Clip {
+            samples: vec![0.3; 1_000],
+            rate: 48_000,
+        };
         assert!(tap.seconds() < MIN_SECONDS);
     }
 
@@ -153,13 +173,18 @@ mod tests {
     #[test]
     #[ignore]
     fn real_transcription() {
-        let dir = std::path::PathBuf::from(std::env::var("BRAINITIVE_VOICE_MODEL_DIR").expect("BRAINITIVE_VOICE_MODEL_DIR"));
+        let dir =
+            std::path::PathBuf::from(std::env::var("BRAINITIVE_VOICE_MODEL_DIR").expect("BRAINITIVE_VOICE_MODEL_DIR"));
         let spec = super::super::model::MODEL;
         if !super::super::model::is_ready(&dir, &spec) {
-            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             let cancel = std::sync::atomic::AtomicBool::new(false);
             let started = Instant::now();
-            rt.block_on(super::super::model::download(&spec, &dir, &cancel, |_, _| {})).expect("download");
+            rt.block_on(super::super::model::download(&spec, &dir, &cancel, |_, _| {}))
+                .expect("download");
             println!("download: {:?}", started.elapsed());
         }
         init_logging();
@@ -167,7 +192,10 @@ mod tests {
         println!("load: {:?}", model.load_time);
         let cpu = load_with(
             &super::super::model::path(&dir, &spec),
-            WhisperContextParameters { use_gpu: false, ..Default::default() },
+            WhisperContextParameters {
+                use_gpu: false,
+                ..Default::default()
+            },
         )
         .expect("load cpu");
         for (lang, voice, sentence) in [

@@ -118,7 +118,12 @@ mod tests {
         for pair in order.windows(2) {
             let (low, high) = (parse_lenient(pair[0]).unwrap(), parse_lenient(pair[1]).unwrap());
             assert!(low < high, "{} < {}", pair[0], pair[1]);
-            assert!(!meets_minimum(pair[0], pair[1]), "{} must not meet {}", pair[0], pair[1]);
+            assert!(
+                !meets_minimum(pair[0], pair[1]),
+                "{} must not meet {}",
+                pair[0],
+                pair[1]
+            );
             assert!(meets_minimum(pair[1], pair[0]), "{} meets {}", pair[1], pair[0]);
         }
         // a short core with a tag, a v prefix and build metadata

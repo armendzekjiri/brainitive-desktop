@@ -390,7 +390,9 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
         MenuAction::ZoomIn => shell::zoom(app, 1),
         MenuAction::ZoomOut => shell::zoom(app, -1),
         MenuAction::NewIssue | MenuAction::NewDoc | MenuAction::Search => {
-            let Some((command, key)) = action.web_command() else { return };
+            let Some((command, key)) = action.web_command() else {
+                return;
+            };
             if let Some(w) = shell::target_window(app).filter(|_| shell::in_app(app)) {
                 let _ = w.set_focus();
                 let _ = w.eval(web_command_script(command, key));

@@ -207,8 +207,14 @@ mod tests {
             Navigation::External(u("https://brainitive.example.com/x"))
         );
         assert_eq!(decide_local_navigation(&u("file:///etc/passwd"), &l), Navigation::Block);
-        assert_eq!(decide_local_navigation(&u("javascript:alert(1)"), &l), Navigation::Block);
-        assert_eq!(decide_local_navigation(&u("brainitive://open?url=/x"), &l), Navigation::Block);
+        assert_eq!(
+            decide_local_navigation(&u("javascript:alert(1)"), &l),
+            Navigation::Block
+        );
+        assert_eq!(
+            decide_local_navigation(&u("brainitive://open?url=/x"), &l),
+            Navigation::Block
+        );
     }
 
     #[test]

@@ -124,10 +124,17 @@ pub async fn copy(app: &AppHandle) {
         ),
         Err(e) => {
             log::warn!("diagnostics could not be copied: {e}");
-            (MessageDialogKind::Error, format!("The diagnostics could not be copied: {e}"))
+            (
+                MessageDialogKind::Error,
+                format!("The diagnostics could not be copied: {e}"),
+            )
         }
     };
-    app.dialog().message(message).title("Brainitive diagnostics").kind(kind).show(|_| {});
+    app.dialog()
+        .message(message)
+        .title("Brainitive diagnostics")
+        .kind(kind)
+        .show(|_| {});
 }
 
 /// Help → Open Logs Folder.
@@ -196,7 +203,8 @@ mod tests {
     fn keeps_only_the_last_fifty_lines_and_redacts_them_again() {
         let mut r = report();
         r.log_lines = (0..80).map(|i| format!("line {i}")).collect();
-        r.log_lines.push("callback https://x.example/cb?code=AuthCode1234567890 token=bra_0123456789abcdefghij".into());
+        r.log_lines
+            .push("callback https://x.example/cb?code=AuthCode1234567890 token=bra_0123456789abcdefghij".into());
         let text = render(&r);
         assert!(text.contains("Last 50 log lines"));
         assert!(!text.contains("line 30\n") && text.contains("line 31\n") && text.contains("line 79\n"));

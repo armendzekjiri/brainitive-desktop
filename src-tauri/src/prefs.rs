@@ -179,7 +179,11 @@ pub fn settings_set_toggle(app: AppHandle, webview: Webview, key: String, value:
     popup::ensure_caller(&app, &webview, Popup::Settings)?;
     if key == "launch_at_login" {
         let autolaunch = app.autolaunch();
-        let result = if value { autolaunch.enable() } else { autolaunch.disable() };
+        let result = if value {
+            autolaunch.enable()
+        } else {
+            autolaunch.disable()
+        };
         result.map_err(|e| format!("The login item could not be changed: {e}"))?;
         return Ok(view(&app));
     }
@@ -236,7 +240,10 @@ mod tests {
     #[test]
     fn recognises_a_start_by_the_login_item() {
         let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter();
-        assert!(launched_at_login(args(&["/Applications/Brainitive.app/Contents/MacOS/brainitive-desktop", "--autostart"])));
+        assert!(launched_at_login(args(&[
+            "/Applications/Brainitive.app/Contents/MacOS/brainitive-desktop",
+            "--autostart"
+        ])));
         assert!(!launched_at_login(args(&["brainitive-desktop"])));
         assert!(!launched_at_login(args(&["brainitive-desktop", "--autostart=1"])));
     }

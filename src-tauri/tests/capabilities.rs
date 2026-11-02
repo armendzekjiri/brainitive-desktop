@@ -30,7 +30,10 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         .iter()
         .map(|c| c.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(enabled, ["local", "settings", "capture", "switcher", "offline", "voice"]);
+    assert_eq!(
+        enabled,
+        ["local", "settings", "capture", "switcher", "offline", "voice"]
+    );
 
     for (name, window, prefix) in [
         ("settings", "settings", "allow-settings-"),
@@ -43,12 +46,17 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         assert_eq!(cap["identifier"], name);
         assert_eq!(cap["local"], true, "{name}");
         assert!(cap.get("remote").is_none(), "{name} must not reach remote content");
-        assert_eq!(cap["windows"], serde_json::json!([window]), "{name}: exactly its own window");
+        assert_eq!(
+            cap["windows"],
+            serde_json::json!([window]),
+            "{name}: exactly its own window"
+        );
         assert!(cap.get("webviews").is_none());
         for p in permissions(&cap) {
             // the offline window listens for `offline://changed`, the voice indicator for
             // `voice://view` / `voice://level` (each sent to that window only)
-            let event = matches!(name, "offline" | "voice") && matches!(p.as_str(), "core:event:allow-listen" | "core:event:allow-unlisten");
+            let event = matches!(name, "offline" | "voice")
+                && matches!(p.as_str(), "core:event:allow-listen" | "core:event:allow-unlisten");
             assert!(p.starts_with(prefix) || event, "{name} grants {p}");
         }
     }
@@ -64,13 +72,19 @@ fn no_capability_file_grants_plugins_or_the_bridge() {
     for name in ["local", "settings", "capture", "switcher", "offline", "voice"] {
         for p in permissions(&capability(name)) {
             assert!(!p.contains("brainitive-"), "{name}: bridge command {p}");
-            for plugin in ["global-shortcut", "autostart", "dialog", "clipboard", "fs", "opener", "notification", "shell"] {
+            for plugin in [
+                "global-shortcut",
+                "autostart",
+                "dialog",
+                "clipboard",
+                "fs",
+                "opener",
+                "notification",
+                "shell",
+            ] {
                 assert!(!p.starts_with(&format!("{plugin}:")), "{name}: plugin permission {p}");
             }
-            assert!(
-                !p.starts_with("core:") || p.starts_with("core:event:"),
-                "{name}: {p}"
-            );
+            assert!(!p.starts_with("core:") || p.starts_with("core:event:"), "{name}: {p}");
         }
     }
 }

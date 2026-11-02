@@ -216,7 +216,10 @@ async fn instance_gate(app: &AppHandle, origin: &ServerOrigin) -> Result<Option<
         Problem::from_api(&e, &host)
     })?;
     if &final_origin != origin {
-        return Err(Problem::from_api(&ApiError::BadRedirect(final_origin.display_name()), &host));
+        return Err(Problem::from_api(
+            &ApiError::BadRedirect(final_origin.display_name()),
+            &host,
+        ));
     }
     let min = info.min_versions.as_ref().and_then(|m| m.desktop.clone());
     let update = min
@@ -301,7 +304,9 @@ pub fn show_unreachable(app: &AppHandle, mut problem: Problem) {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Whether this loop is still the one the Unreachable screen is waiting for.

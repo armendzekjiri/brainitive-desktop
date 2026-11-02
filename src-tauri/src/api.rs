@@ -642,9 +642,15 @@ mod tests {
             .query("limit", "12")
             .url(&origin)
             .unwrap();
-        assert_eq!(url.as_str(), "https://brainitive.example.com/api/v1/search?q=a+b%26c&limit=12");
         assert_eq!(
-            ApiRequest::get("/api/v1/me/my-day/items/issue:12").url(&origin).unwrap().path(),
+            url.as_str(),
+            "https://brainitive.example.com/api/v1/search?q=a+b%26c&limit=12"
+        );
+        assert_eq!(
+            ApiRequest::get("/api/v1/me/my-day/items/issue:12")
+                .url(&origin)
+                .unwrap()
+                .path(),
             "/api/v1/me/my-day/items/issue:12"
         );
         for bad in [

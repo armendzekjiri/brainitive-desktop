@@ -94,17 +94,14 @@ pub async fn capture_submit(
     intended_type: Option<String>,
 ) -> Result<CaptureResult, UiError> {
     popup::ensure_caller(&app, &webview, Popup::Capture).map_err(|m| ui("not_allowed", m))?;
-    let input = CaptureInput::new(&text, url.as_deref(), intended_type.as_deref())
-        .map_err(|e| ui("invalid", e.to_string()))?;
+    let input =
+        CaptureInput::new(&text, url.as_deref(), intended_type.as_deref()).map_err(|e| ui("invalid", e.to_string()))?;
     let origin = state(&app)
         .lock()
         .current_origin()
         .ok_or_else(|| ui("no_server", "Connect Brainitive to a server first."))?;
     if !state(&app).session.has_stored_sign_in(&origin).await {
-        return Err(ui(
-            "signed_out",
-            format!("Sign in to {} first.", origin.display_name()),
-        ));
+        return Err(ui("signed_out", format!("Sign in to {} first.", origin.display_name())));
     }
     let entry = QueuedCapture::new(&origin, input);
     let result = send(&app, &origin, &entry).await;

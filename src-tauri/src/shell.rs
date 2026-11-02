@@ -110,7 +110,11 @@ pub fn refresh_title(app: &AppHandle) {
     let (title, label) = {
         let s = state(app);
         let inner = s.lock();
-        let offline = if crate::offline::is_offline(&inner) { " (offline)" } else { "" };
+        let offline = if crate::offline::is_offline(&inner) {
+            " (offline)"
+        } else {
+            ""
+        };
         match inner.current_origin() {
             Some(o) => (
                 format!("Brainitive — {}{offline}", o.display_name()),
@@ -293,7 +297,11 @@ fn build_app_window(
     let load = app.clone();
     let popup = app.clone();
     let download = app.clone();
-    let (width, height) = if label == MAIN { (1280.0, 840.0) } else { (1100.0, 780.0) };
+    let (width, height) = if label == MAIN {
+        (1280.0, 840.0)
+    } else {
+        (1100.0, 780.0)
+    };
 
     let builder = WebviewWindowBuilder::new(app, label, url)
         .title(window_title(app))
@@ -506,7 +514,11 @@ fn on_page_load(app: &AppHandle, window: &WebviewWindow, url: &Url, event: PageL
     if event == PageLoadEvent::Finished && window.label() == MAIN && allowed {
         // the bundled screens are the first paint (cached shell); the server's page is "loaded"
         let remote = instance.as_ref().is_some_and(|o| o.contains(url));
-        crate::startup::mark(if remote { "remote page loaded" } else { "bundled shell loaded" });
+        crate::startup::mark(if remote {
+            "remote page loaded"
+        } else {
+            "bundled shell loaded"
+        });
     }
     match (event, allowed) {
         (PageLoadEvent::Started, false) => {
@@ -675,7 +687,17 @@ mod tests {
         assert!(is_app_window("main"));
         assert!(is_app_window("app-1"));
         assert!(is_app_window("app-123456"));
-        for bad in ["app-", "app-x", "app-1-2", "app-1234567", "capture", "switcher", "settings", "mainx", ""] {
+        for bad in [
+            "app-",
+            "app-x",
+            "app-1-2",
+            "app-1234567",
+            "capture",
+            "switcher",
+            "settings",
+            "mainx",
+            "",
+        ] {
             assert!(!is_app_window(bad), "{bad}");
         }
     }

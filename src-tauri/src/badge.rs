@@ -62,7 +62,12 @@ pub fn render(count: i64) -> Option<Vec<u8>> {
                 if bits & (0b100 >> col) != 0 {
                     for dy in 0..scale {
                         for dx in 0..scale {
-                            put(&mut rgba, x0 + col * scale + dx, top + row as i32 * scale + dy, [255, 255, 255, 255]);
+                            put(
+                                &mut rgba,
+                                x0 + col * scale + dx,
+                                top + row as i32 * scale + dy,
+                                [255, 255, 255, 255],
+                            );
                         }
                     }
                 }

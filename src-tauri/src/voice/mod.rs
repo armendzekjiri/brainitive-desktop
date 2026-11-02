@@ -68,14 +68,27 @@ pub enum Screen {
     /// The system asks for the microphone (macOS).
     Permission,
     /// The microphone is blocked: how to allow it.
-    Denied { message: &'static str },
-    Downloading { done: u64, total: u64 },
-    DownloadFailed { message: String },
+    Denied {
+        message: &'static str,
+    },
+    Downloading {
+        done: u64,
+        total: u64,
+    },
+    DownloadFailed {
+        message: String,
+    },
     /// Set up: "Hold ⇧⌘V and speak" / Start.
     Ready,
-    Recording { elapsed_ms: u64, max_ms: u64, hold: bool },
+    Recording {
+        elapsed_ms: u64,
+        max_ms: u64,
+        hold: bool,
+    },
     Transcribing,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -174,7 +187,13 @@ fn begin(app: &AppHandle, hold: bool) {
     let v = voice(app);
     let downloading = v.lock().download.as_ref().map(|(_, done)| *done);
     if let Some(done) = downloading {
-        return show(app, Screen::Downloading { done, total: MODEL.size });
+        return show(
+            app,
+            Screen::Downloading {
+                done,
+                total: MODEL.size,
+            },
+        );
     }
     if !model::is_ready(&v.data_dir, &MODEL) {
         return start_download(app);
@@ -184,7 +203,10 @@ fn begin(app: &AppHandle, hold: bool) {
         MicPermission::NotDetermined => ask_permission(app),
         MicPermission::Granted | MicPermission::Unknown => {
             // the guard must be gone before `run` (it locks again): no `if let` on the lock
-            let effect = v.lock().recorder.handle(Input::Start { at: Instant::now(), hold });
+            let effect = v.lock().recorder.handle(Input::Start {
+                at: Instant::now(),
+                hold,
+            });
             if let Some(effect) = effect {
                 show_window(app);
                 run(app, effect);
@@ -209,7 +231,10 @@ fn ask_permission(app: &AppHandle) {
     show(app, Screen::Permission);
     let h = app.clone();
     permission::request(move |granted| {
-        log::info!("voice: microphone permission {}", if granted { "granted" } else { "denied" });
+        log::info!(
+            "voice: microphone permission {}",
+            if granted { "granted" } else { "denied" }
+        );
         set_screen(&h, if granted { Screen::Ready } else { denied() });
     });
 }
@@ -244,7 +269,13 @@ fn run(app: &AppHandle, effect: Effect) {
                 .name("voice-start".into())
                 .spawn(move || open_microphone(&h, session));
             if let Err(e) = spawned {
-                feed(app, Input::Failed { session, message: format!("Voice capture could not start ({e}).") });
+                feed(
+                    app,
+                    Input::Failed {
+                        session,
+                        message: format!("Voice capture could not start ({e})."),
+                    },
+                );
             }
         }
         Effect::Transcribe { session, cut_off } => {
@@ -294,14 +325,26 @@ fn open_microphone(app: &AppHandle, session: u64) {
         Err(AudioError::Denied) => {
             let current = v.lock().recorder.session() == session;
             if current {
-                feed(app, Input::Failed { session, message: String::new() });
+                feed(
+                    app,
+                    Input::Failed {
+                        session,
+                        message: String::new(),
+                    },
+                );
                 set_screen(app, denied());
             }
             return;
         }
         Err(e) => {
             log::warn!("voice: microphone: {e}");
-            feed(app, Input::Failed { session, message: e.to_string() });
+            feed(
+                app,
+                Input::Failed {
+                    session,
+                    message: e.to_string(),
+                },
+            );
             return;
         }
     };
@@ -355,14 +398,23 @@ fn start_clock(app: &AppHandle, session: u64) {
             };
             if let Some(f) = failure {
                 log::warn!("voice: microphone stream: {f}");
-                feed(&app, Input::Failed { session, message: "The microphone stopped working.".into() });
+                feed(
+                    &app,
+                    Input::Failed {
+                        session,
+                        message: "The microphone stopped working.".into(),
+                    },
+                );
                 return;
             }
             let elapsed = started.elapsed().min(MAX_LENGTH);
             let _ = app.emit_to(
                 Popup::Voice.label(),
                 "voice://level",
-                Level { level, elapsed_ms: elapsed.as_millis() as u64 },
+                Level {
+                    level,
+                    elapsed_ms: elapsed.as_millis() as u64,
+                },
             );
             feed(&app, Input::Tick { at: Instant::now() });
         }
@@ -372,49 +424,63 @@ fn start_clock(app: &AppHandle, session: u64) {
 /// On its own thread: the clip → text, then the recorder gets the result.
 fn spawn_transcription(app: &AppHandle, session: u64, capture: Capture, cut_off: bool) {
     let h = app.clone();
-    let spawned = std::thread::Builder::new().name("voice-transcribe".into()).spawn(move || {
-        let app = &h;
-        let clip = capture.finish();
-        let loader = {
-            let v = voice(app);
-            let mut inner = v.lock();
-            match inner.loader.take() {
-                Some((s, l)) if s == session => Some(l),
-                _ => None,
+    let spawned = std::thread::Builder::new()
+        .name("voice-transcribe".into())
+        .spawn(move || {
+            let app = &h;
+            let clip = capture.finish();
+            let loader = {
+                let v = voice(app);
+                let mut inner = v.lock();
+                match inner.loader.take() {
+                    Some((s, l)) if s == session => Some(l),
+                    _ => None,
+                }
+            };
+            let language = state(app).lock().settings.preferences.voice_language.clone();
+            let model = match loader {
+                Some(l) => l.join().unwrap_or_else(|_| Err("the model loader stopped".into())),
+                None => whisper::load(&model::path(&voice(app).data_dir, &MODEL)),
+            };
+            let result = model.and_then(|m| {
+                let r = whisper::transcribe(&m, &clip, &language);
+                if let Ok((_, t)) = &r {
+                    // durations only: never the audio or the text
+                    log::info!(
+                        "voice: {:.1} s recorded{}, model load {} ms, resample {} ms, transcription {} ms ({})",
+                        t.audio.as_secs_f32(),
+                        if cut_off { " (cut off at 2 min)" } else { "" },
+                        m.load_time.as_millis(),
+                        t.resample.as_millis(),
+                        t.transcribe.as_millis(),
+                        if cfg!(target_os = "macos") { "metal" } else { "cpu" },
+                    );
+                }
+                r
+            });
+            drop(clip);
+            match result {
+                Ok((text, _)) => feed(app, Input::Transcribed { session, text }),
+                Err(message) => {
+                    log::warn!("voice: {message}");
+                    feed(
+                        app,
+                        Input::Failed {
+                            session,
+                            message: format!("The speech could not be turned into text: {message}."),
+                        },
+                    );
+                }
             }
-        };
-        let language = state(app).lock().settings.preferences.voice_language.clone();
-        let model = match loader {
-            Some(l) => l.join().unwrap_or_else(|_| Err("the model loader stopped".into())),
-            None => whisper::load(&model::path(&voice(app).data_dir, &MODEL)),
-        };
-        let result = model.and_then(|m| {
-            let r = whisper::transcribe(&m, &clip, &language);
-            if let Ok((_, t)) = &r {
-                // durations only: never the audio or the text
-                log::info!(
-                    "voice: {:.1} s recorded{}, model load {} ms, resample {} ms, transcription {} ms ({})",
-                    t.audio.as_secs_f32(),
-                    if cut_off { " (cut off at 2 min)" } else { "" },
-                    m.load_time.as_millis(),
-                    t.resample.as_millis(),
-                    t.transcribe.as_millis(),
-                    if cfg!(target_os = "macos") { "metal" } else { "cpu" },
-                );
-            }
-            r
         });
-        drop(clip);
-        match result {
-            Ok((text, _)) => feed(app, Input::Transcribed { session, text }),
-            Err(message) => {
-                log::warn!("voice: {message}");
-                feed(app, Input::Failed { session, message: format!("The speech could not be turned into text: {message}.") });
-            }
-        }
-    });
     if let Err(e) = spawned {
-        feed(app, Input::Failed { session, message: format!("Voice capture could not start ({e}).") });
+        feed(
+            app,
+            Input::Failed {
+                session,
+                message: format!("Voice capture could not start ({e})."),
+            },
+        );
     }
 }
 
@@ -427,11 +493,23 @@ fn start_download(app: &AppHandle) {
         let mut inner = v.lock();
         if inner.download.is_some() {
             drop(inner);
-            return show(app, Screen::Downloading { done: 0, total: MODEL.size });
+            return show(
+                app,
+                Screen::Downloading {
+                    done: 0,
+                    total: MODEL.size,
+                },
+            );
         }
         inner.download = Some((Arc::clone(&cancel), 0));
     }
-    show(app, Screen::Downloading { done: 0, total: MODEL.size });
+    show(
+        app,
+        Screen::Downloading {
+            done: 0,
+            total: MODEL.size,
+        },
+    );
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let dir = voice(&app).data_dir.clone();
@@ -451,7 +529,10 @@ fn start_download(app: &AppHandle) {
         voice(&app).lock().download = None;
         match result {
             Ok(_) => {
-                log::info!("voice: model downloaded and verified in {} s", started.elapsed().as_secs());
+                log::info!(
+                    "voice: model downloaded and verified in {} s",
+                    started.elapsed().as_secs()
+                );
                 let visible = app
                     .get_webview_window(Popup::Voice.label())
                     .is_some_and(|w| w.is_visible().unwrap_or(false));
@@ -577,7 +658,12 @@ pub async fn voice_turn_on(app: AppHandle, webview: Webview) -> Result<(), Strin
     } else {
         if permission::status() == MicPermission::NotDetermined {
             // asked now, while the model downloads
-            permission::request(|granted| log::info!("voice: microphone permission {}", if granted { "granted" } else { "denied" }));
+            permission::request(|granted| {
+                log::info!(
+                    "voice: microphone permission {}",
+                    if granted { "granted" } else { "denied" }
+                )
+            });
         }
         start_download(&app);
     }
@@ -625,7 +711,11 @@ pub struct ModelStatus {
 
 pub fn model_status(app: &AppHandle) -> ModelStatus {
     let v = voice(app);
-    let downloading = v.lock().download.as_ref().map(|(_, done)| done * 100 / MODEL.size.max(1));
+    let downloading = v
+        .lock()
+        .download
+        .as_ref()
+        .map(|(_, done)| done * 100 / MODEL.size.max(1));
     ModelStatus {
         name: MODEL.name,
         size_mb: MODEL.size.div_ceil(1_000_000),
@@ -687,13 +777,19 @@ mod tests {
         codes.dedup();
         assert_eq!(codes.len(), LANGUAGES.len());
         // whisper codes: 2 letters (or "auto")
-        assert!(LANGUAGES.iter().all(|(c, _)| *c == "auto" || (c.len() == 2 && c.bytes().all(|b| b.is_ascii_lowercase()))));
+        assert!(LANGUAGES
+            .iter()
+            .all(|(c, _)| *c == "auto" || (c.len() == 2 && c.bytes().all(|b| b.is_ascii_lowercase()))));
     }
 
     #[test]
     fn the_view_model_is_tagged_by_screen() {
         let v = VoiceView {
-            screen: Screen::Recording { elapsed_ms: 1500, max_ms: 120_000, hold: true },
+            screen: Screen::Recording {
+                elapsed_ms: 1500,
+                max_ms: 120_000,
+                hold: true,
+            },
             shortcut: "⇧⌘V".into(),
             platform: "macos",
             model_name: MODEL.name,

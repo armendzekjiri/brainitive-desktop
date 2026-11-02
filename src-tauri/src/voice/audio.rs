@@ -238,11 +238,13 @@ where
 {
     out.clear();
     let channels = channels.max(1);
-    out.extend(
-        block
-            .chunks_exact(channels)
-            .map(|frame| frame.iter().map(|s| <f32 as FromSample<T>>::from_sample_(*s)).sum::<f32>() / channels as f32),
-    );
+    out.extend(block.chunks_exact(channels).map(|frame| {
+        frame
+            .iter()
+            .map(|s| <f32 as FromSample<T>>::from_sample_(*s))
+            .sum::<f32>()
+            / channels as f32
+    }));
 }
 
 /// The meter: RMS of a block in dBFS, −60 dB … 0 dB mapped to 0 … 1.
@@ -368,7 +370,11 @@ mod tests {
             let input = sine(440.0, rate, 2.0, 0.5);
             let out = resample_16k(&input, rate);
             let expected = (input.len() as f64 * 16_000.0 / rate as f64) as usize;
-            assert!((out.len() as i64 - expected as i64).abs() <= 1, "{rate}: {} vs {expected}", out.len());
+            assert!(
+                (out.len() as i64 - expected as i64).abs() <= 1,
+                "{rate}: {} vs {expected}",
+                out.len()
+            );
             // a 440 Hz tone keeps (almost) its level
             let r = rms(&out[100..out.len() - 100]);
             assert!((r - 0.5 / 2f32.sqrt()).abs() < 0.03, "{rate}: rms {r}");

@@ -44,7 +44,11 @@ pub enum Change {
         title: String,
     },
     /// A new task in a kept list (`list_task.create`).
-    TaskCreate { task_list_id: u64, title: String, done: bool },
+    TaskCreate {
+        task_list_id: u64,
+        title: String,
+        done: bool,
+    },
     /// Rename / tick a task of a kept list (`list_task.update` with `base.fields`).
     TaskUpdate {
         task_list_id: u64,
@@ -128,7 +132,9 @@ pub enum Verdict {
     /// Dropped: `kind` for the problem.
     Drop(&'static str),
     /// Kept. `stop`: don't send more now (rate limit, server error).
-    Keep { stop: bool },
+    Keep {
+        stop: bool,
+    },
 }
 
 /// One entry of the `POST /api/v1/sync` answer.
@@ -228,9 +234,7 @@ impl Change {
             Self::WorkDone { title, .. } => format!("Mark not done: {}", quote(title)),
             Self::MyDayAdd { title, .. } => format!("Add to My Day: {}", quote(title)),
             Self::TaskCreate { title, .. } => format!("New task {}", quote(title)),
-            Self::TaskUpdate {
-                title: Some(t), ..
-            } => format!("Rename task to {}", quote(t)),
+            Self::TaskUpdate { title: Some(t), .. } => format!("Rename task to {}", quote(t)),
             Self::TaskUpdate {
                 done: Some(true),
                 base_title,
@@ -284,7 +288,12 @@ impl Entry {
             }
             Change::MyDayAdd { work_id, .. } => {
                 let (work_type, id) = work_ref(work_id).unwrap_or(("board", 0));
-                ("my_day.add", None, None, json!({ "work_type": work_type, "work_id": id }))
+                (
+                    "my_day.add",
+                    None,
+                    None,
+                    json!({ "work_type": work_type, "work_id": id }),
+                )
             }
             Change::TaskCreate {
                 task_list_id,
@@ -379,7 +388,9 @@ fn problem_message(kind: &str, result: Option<&SyncResult>) -> String {
         "conflict" => "Changed on the server meanwhile. The server's version was kept.".to_string(),
         "deleted" => server.unwrap_or_else(|| "It was deleted or you can't open it any more.".into()),
         "forbidden" => "You are not allowed to make this change.".to_string(),
-        "invalid" => errors.or(server).unwrap_or_else(|| "The server did not accept this change.".into()),
+        "invalid" => errors
+            .or(server)
+            .unwrap_or_else(|| "The server did not accept this change.".into()),
         "waiting" => "It depended on another change that never arrived.".to_string(),
         _ => server.unwrap_or_else(|| "The server did not accept this change.".into()),
     };
@@ -478,7 +489,12 @@ impl Outbox {
     }
 
     /// Renames / ticks a task that was created offline and not sent yet (its create changes).
-    pub fn edit_pending_create(&mut self, request_id: &str, title: Option<String>, done: Option<bool>) -> Result<(), OutboxError> {
+    pub fn edit_pending_create(
+        &mut self,
+        request_id: &str,
+        title: Option<String>,
+        done: Option<bool>,
+    ) -> Result<(), OutboxError> {
         let entry = self
             .entries
             .iter_mut()
@@ -646,7 +662,10 @@ impl Outbox {
             step.split = true;
             return step;
         }
-        if let Some(i) = sent.first().and_then(|id| self.entries.iter().position(|e| &e.request_id == id)) {
+        if let Some(i) = sent
+            .first()
+            .and_then(|id| self.entries.iter().position(|e| &e.request_id == id))
+        {
             let entry = self.entries.remove(i);
             let result = SyncResult {
                 message: Some(error.to_string()),
@@ -822,7 +841,9 @@ mod tests {
         o.push(update(Some("New"), None)).unwrap();
         o.push(update(None, Some(true))).unwrap();
         assert_eq!(o.len(), 1);
-        let Change::TaskUpdate { title, done, .. } = &o.entries[0].change else { panic!() };
+        let Change::TaskUpdate { title, done, .. } = &o.entries[0].change else {
+            panic!()
+        };
         assert_eq!((title.as_deref(), *done), (Some("New"), Some(true)));
         o.push(update(Some("Old"), Some(false))).unwrap();
         assert!(o.is_empty());
@@ -848,7 +869,10 @@ mod tests {
         o.push(done("issue:1", true, false)).unwrap();
         assert!(!o.base_done("issue:1", false), "unsent: folded in, same base");
         o.entries[0].attempts = 1;
-        assert!(o.base_done("issue:1", false), "sent, answer lost: the server may have it done");
+        assert!(
+            o.base_done("issue:1", false),
+            "sent, answer lost: the server may have it done"
+        );
 
         let update = |title: Option<&str>, d: Option<bool>| Change::TaskUpdate {
             task_list_id: 1,
@@ -886,7 +910,10 @@ mod tests {
             }
         );
         o.entries[0].attempts = 1;
-        assert_eq!(o.edit_pending_create(&id, None, Some(false)), Err(OutboxError::InFlight));
+        assert_eq!(
+            o.edit_pending_create(&id, None, Some(false)),
+            Err(OutboxError::InFlight)
+        );
         assert_eq!(o.edit_pending_create("nope", None, None), Err(OutboxError::UnknownRef));
     }
 

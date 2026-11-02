@@ -26,7 +26,13 @@ pub enum Popup {
 }
 
 impl Popup {
-    pub const ALL: [Popup; 5] = [Popup::Capture, Popup::Switcher, Popup::Settings, Popup::Offline, Popup::Voice];
+    pub const ALL: [Popup; 5] = [
+        Popup::Capture,
+        Popup::Switcher,
+        Popup::Settings,
+        Popup::Offline,
+        Popup::Voice,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -164,11 +170,7 @@ pub fn dismiss(app: &AppHandle, popup: Popup) {
             log::warn!("{e}");
         }
     }
-    let app_was_active = state(app)
-        .lock()
-        .popup_return
-        .remove(popup.label())
-        .unwrap_or(true);
+    let app_was_active = state(app).lock().popup_return.remove(popup.label()).unwrap_or(true);
     if app_was_active {
         if let Some(w) = shell::target_window(app).filter(|w| w.is_visible().unwrap_or(false)) {
             let _ = w.set_focus();
@@ -219,14 +221,16 @@ fn build(app: &AppHandle, popup: Popup) -> tauri::Result<WebviewWindow> {
         .center()
         // a link / text dropped into a field is handled by the page; files never navigate
         .disable_drag_drop_handler()
-        .on_navigation(move |url| match links::decide_local_navigation(url, &shell::local_origins(&nav)) {
-            Navigation::Allow => true,
-            Navigation::External(url) => {
-                shell::open_external(&nav, &url);
-                false
-            }
-            _ => false,
-        })
+        .on_navigation(
+            move |url| match links::decide_local_navigation(url, &shell::local_origins(&nav)) {
+                Navigation::Allow => true,
+                Navigation::External(url) => {
+                    shell::open_external(&nav, &url);
+                    false
+                }
+                _ => false,
+            },
+        )
         .on_new_window(move |url, _| {
             if links::external_url(url.as_str()).is_some() {
                 shell::open_external(&popup_app, &url);
@@ -244,7 +248,11 @@ mod tests {
     fn labels_round_trip_and_never_clash_with_app_windows() {
         for p in Popup::ALL {
             assert_eq!(Popup::from_label(p.label()), Some(p));
-            assert!(!shell::is_app_window(p.label()), "{} must not get the remote bridge", p.label());
+            assert!(
+                !shell::is_app_window(p.label()),
+                "{} must not get the remote bridge",
+                p.label()
+            );
         }
         assert_eq!(Popup::from_label("main"), None);
         assert!(Popup::Capture.floating() && Popup::Switcher.floating() && !Popup::Settings.floating());

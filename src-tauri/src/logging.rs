@@ -343,7 +343,13 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            ["brainitive.log", "brainitive.log.1", "brainitive.log.2", "brainitive.log.3", "brainitive.log.4"]
+            [
+                "brainitive.log",
+                "brainitive.log.1",
+                "brainitive.log.2",
+                "brainitive.log.3",
+                "brainitive.log.4"
+            ]
         );
         for name in &names {
             assert!(fs::metadata(dir.join(name)).unwrap().len() <= 100, "{name}");

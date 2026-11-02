@@ -38,7 +38,15 @@ const LINE_KEYS: &[&str] = &["authorization", "proxy-authorization", "set-cookie
 
 /// Path segments after which the next segment is a secret (`/app/session/<one-time code>`).
 const SECRET_AFTER: &[&str] = &[
-    "session", "token", "code", "reset", "invite", "verify", "unsubscribe", "signed", "callback-code",
+    "session",
+    "token",
+    "code",
+    "reset",
+    "invite",
+    "verify",
+    "unsubscribe",
+    "signed",
+    "callback-code",
 ];
 
 pub fn redact(input: &str) -> String {
@@ -135,7 +143,8 @@ fn sanitize_url_tail(tail: &str) -> String {
         if i > 0 {
             out.push('/');
         }
-        if opaque_segment(segment) || (SECRET_AFTER.contains(&previous.to_ascii_lowercase().as_str()) && !segment.is_empty())
+        if opaque_segment(segment)
+            || (SECRET_AFTER.contains(&previous.to_ascii_lowercase().as_str()) && !segment.is_empty())
         {
             out.push_str(MASK);
         } else {
@@ -160,7 +169,9 @@ fn sanitize_url_tail(tail: &str) -> String {
 /// A long identifier-like segment with a digit: an id, a code, a signed token.
 fn opaque_segment(segment: &str) -> bool {
     segment.len() >= 20
-        && segment.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b'%'))
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b'%'))
         && segment.bytes().any(|b| b.is_ascii_digit())
 }
 
@@ -196,7 +207,9 @@ fn redact_pairs(input: &str) -> String {
 fn secret_value_at(s: &[u8], l: &[u8], i: usize) -> Option<(usize, usize)> {
     if l[i..].starts_with(b"bearer ") {
         let start = i + 7;
-        let end = run_end(s, start, |b| b.is_ascii_whitespace() || matches!(b, b'"' | b'\'' | b',' | b';'));
+        let end = run_end(s, start, |b| {
+            b.is_ascii_whitespace() || matches!(b, b'"' | b'\'' | b',' | b';')
+        });
         return (end > start && &s[start..end] != MASK.as_bytes()).then_some((start, end));
     }
     let (key, strong) = STRONG_KEYS
@@ -333,7 +346,10 @@ mod tests {
             (r#"{"password": "hunter2hunter2"}"#, "hunter2hunter2"),
             ("code_verifier=VerifierVerifierVerifier123", "VerifierVerifier"),
             ("client_secret='s3cr3t value'", "s3cr3t"),
-            ("code=AuthCode1234567890abcdef state=StateValue1234567890xyz", "AuthCode1234567890abcdef"),
+            (
+                "code=AuthCode1234567890abcdef state=StateValue1234567890xyz",
+                "AuthCode1234567890abcdef",
+            ),
             ("state=StateValue1234567890xyz", "StateValue1234567890xyz"),
             ("TOKEN=UpperCaseSecret", "UpperCaseSecret"),
         ] {
@@ -366,19 +382,28 @@ mod tests {
     #[test]
     fn urls_lose_query_fragment_userinfo_and_one_time_codes() {
         let out = redact("GET https://user:pw@brain.example.com:8443/app/authorize?code=abc&state=xyz#frag failed");
-        assert_eq!(out, "GET https://brain.example.com:8443/app/authorize?[redacted]#[redacted] failed");
+        assert_eq!(
+            out,
+            "GET https://brain.example.com:8443/app/authorize?[redacted]#[redacted] failed"
+        );
 
         let out = redact("brainitive://auth/callback?code=AuthCode1234567890&state=S");
         assert_eq!(out, "brainitive://auth/callback?[redacted]");
 
         let out = redact("navigating to \"https://brain.example.com/app/session/Zm9vYmFy\" ok");
-        assert_eq!(out, "navigating to \"https://brain.example.com/app/session/[redacted]\" ok");
+        assert_eq!(
+            out,
+            "navigating to \"https://brain.example.com/app/session/[redacted]\" ok"
+        );
 
         let out = redact("https://x.example/files/3f2c9a1b-77d4-4e8a-9c1d-0123456789ab/download");
         assert_eq!(out, "https://x.example/files/[redacted]/download");
 
         // a plain URL is kept, a trailing sentence dot too
-        assert_eq!(redact("see https://www.brainitive.app/dashboard."), "see https://www.brainitive.app/dashboard.");
+        assert_eq!(
+            redact("see https://www.brainitive.app/dashboard."),
+            "see https://www.brainitive.app/dashboard."
+        );
         assert_eq!(redact("origin http://localhost:8000"), "origin http://localhost:8000");
         // an empty query / no query stays as is
         assert_eq!(redact("https://a.example/p?"), "https://a.example/p?");
@@ -435,6 +460,9 @@ mod tests {
 
     #[test]
     fn non_ascii_text_is_kept() {
-        assert_eq!(redact("Zürich — Café ✓ state=Verbunden"), "Zürich — Café ✓ state=Verbunden");
+        assert_eq!(
+            redact("Zürich — Café ✓ state=Verbunden"),
+            "Zürich — Café ✓ state=Verbunden"
+        );
     }
 }
