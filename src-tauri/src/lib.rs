@@ -252,6 +252,11 @@ pub fn run() {
                 popup::on_focus_lost(app, &label);
             }
         }
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::ThemeChanged(theme),
+            ..
+        } => popup::on_theme_changed(app, &label, theme),
         // "keep running in the tray": closing the main window hides it (the web app keeps
         // running, so its notifications still arrive); the tray / dock icon brings it back
         RunEvent::WindowEvent {

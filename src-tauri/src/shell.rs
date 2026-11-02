@@ -30,6 +30,15 @@ pub fn is_app_window(label: &str) -> bool {
             .is_some_and(|n| !n.is_empty() && n.len() <= 6 && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// The macOS title bar of every decorated window. Tauri's default (`Visible`) also sets
+/// `NSWindowStyleMask::FullSizeContentView`, so the webview spans the title bar; since macOS 26
+/// (Tahoe) that title bar is see-through and scrolled content shows behind the window title.
+/// `Transparent` = no full-size content view: the webview starts below the title bar, which shows
+/// the window's background colour (the system's, or the page's top for bundled windows,
+/// `popup::title_bar_color`).
+#[cfg(target_os = "macos")]
+pub const TITLE_BAR: tauri::TitleBarStyle = tauri::TitleBarStyle::Transparent;
+
 /// The commands remote content (the current server's origin only) may call.
 pub const BRIDGE_PERMISSIONS: [&str; 4] = [
     "allow-brainitive-notify",
@@ -313,8 +322,9 @@ fn build_app_window(
         })
         .on_download(move |_webview, event| crate::downloads::on_download(&download, event));
 
+    // macOS 26: the server's pages start below the title bar instead of scrolling under it
     #[cfg(target_os = "macos")]
-    let builder = builder.data_store_identifier(store);
+    let builder = builder.title_bar_style(TITLE_BAR).data_store_identifier(store);
     #[cfg(not(target_os = "macos"))]
     let builder = builder.data_directory(webview_data_dir(app, &store)?);
 

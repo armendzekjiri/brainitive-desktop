@@ -263,7 +263,48 @@ fn build(app: &AppHandle, popup: Popup) -> tauri::Result<WebviewWindow> {
             }
             NewWindowResponse::Deny
         });
-    builder.build()
+    // macOS 26: the page must not run under the see-through title bar (see shell::TITLE_BAR)
+    #[cfg(target_os = "macos")]
+    let builder = if floating {
+        builder
+    } else {
+        builder.title_bar_style(shell::TITLE_BAR)
+    };
+    let window = builder.build()?;
+    if let Ok(theme) = window.theme() {
+        apply_title_bar_color(&window, popup, theme);
+    }
+    Ok(window)
+}
+
+/// The colour of the top of a decorated bundled window's page (`--bg` of Settings, `--panel` of
+/// the offline view's status bar), light / dark: the title bar shows it, so title bar and page
+/// read as one surface. `None`: no title bar (floating windows).
+pub fn title_bar_color(popup: Popup, dark: bool) -> Option<(u8, u8, u8)> {
+    match (popup, dark) {
+        (Popup::Settings, false) => Some((0xff, 0xff, 0xff)),
+        (Popup::Settings, true) => Some((0x19, 0x21, 0x2a)),
+        (Popup::Offline, false) => Some((0xf4, 0xf6, 0xf8)),
+        (Popup::Offline, true) => Some((0x11, 0x16, 0x1c)),
+        _ => None,
+    }
+}
+
+/// Paints the title bar strip (macOS; elsewhere the OS draws its own title bar).
+fn apply_title_bar_color(window: &WebviewWindow, popup: Popup, theme: tauri::Theme) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    if let Some((r, g, b)) = title_bar_color(popup, theme == tauri::Theme::Dark) {
+        let _ = window.set_background_color(Some(tauri::window::Color(r, g, b, 255)));
+    }
+}
+
+/// `WindowEvent::ThemeChanged`: light ↔ dark, the title bar strip follows the page.
+pub fn on_theme_changed(app: &AppHandle, label: &str, theme: tauri::Theme) {
+    if let (Some(popup), Some(window)) = (Popup::from_label(label), app.get_webview_window(label)) {
+        apply_title_bar_color(&window, popup, theme);
+    }
 }
 
 #[cfg(test)]
@@ -275,6 +316,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn title_bar_strip_matches_the_top_of_the_page() {
+        // native.css --bg (Settings) and --panel (the offline view's status bar), light and dark
+        assert_eq!(title_bar_color(Popup::Settings, false), Some((0xff, 0xff, 0xff)));
+        assert_eq!(title_bar_color(Popup::Settings, true), Some((0x19, 0x21, 0x2a)));
+        assert_eq!(title_bar_color(Popup::Offline, false), Some((0xf4, 0xf6, 0xf8)));
+        assert_eq!(title_bar_color(Popup::Offline, true), Some((0x11, 0x16, 0x1c)));
+        let css = include_str!("../../src/native.css");
+        assert!(css.contains("--bg: #ffffff") && css.contains("--bg: #19212a"));
+        assert!(css.contains("--panel: #f4f6f8") && css.contains("--panel: #11161c"));
+        // floating windows have no title bar
+        for p in Popup::ALL.into_iter().filter(|p| p.floating()) {
+            assert_eq!(title_bar_color(p, false), None, "{}", p.label());
+        }
+    }
 
     #[test]
     fn labels_round_trip_and_never_clash_with_app_windows() {
