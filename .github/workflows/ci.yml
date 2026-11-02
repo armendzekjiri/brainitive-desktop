@@ -58,3 +58,20 @@ jobs:
       - name: cargo build
         working-directory: src-tauri
         run: cargo build --locked
+
+      # The Microsoft Store variant (BRAI-442): its WinRT code only compiles on Windows, so check
+      # it on every push / PR here, not first on a release tag.
+      - name: cargo clippy (msstore)
+        if: runner.os == 'Windows'
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets --features msstore -- -D warnings
+
+      - name: cargo test (msstore)
+        if: runner.os == 'Windows'
+        working-directory: src-tauri
+        run: cargo test --locked --features msstore
+
+      # scripts/*.test.mjs: version bump, MSIX manifest + logos
+      - name: Script tests
+        if: runner.os == 'Linux'
+        run: node --test scripts/

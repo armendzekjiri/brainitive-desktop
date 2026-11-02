@@ -1,6 +1,7 @@
 name: Build
 
-# Installers for macOS (universal), Windows (x64, NSIS) and Linux (x64, AppImage + .deb).
+# Installers for macOS (universal), Windows (x64, NSIS) and Linux (x64, AppImage + .deb), and the
+# Microsoft Store package (x64 MSIX, job "msstore", BRAI-442) for tags and manual runs.
 #   - pull request: tests only, no bundles
 #   - tag v*:       tests, bundles, a DRAFT GitHub release with the installers + SHA256SUMS
 #   - manual run:   tests + bundles as workflow artifacts (no release)
@@ -268,10 +269,122 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # Microsoft Store package (BRAI-442, docs/MICROSOFT-STORE.md): the msstore variant (no updater,
+  # Store links, startup task) as an UNSIGNED x64 MSIX for Partner Center, which signs it. No
+  # secrets: -SignForTest signs a separate sideload copy with a self-signed certificate made on
+  # the runner (its private key is deleted right after). Tags with a pre-release part
+  # (v1.0.0-beta.1) are skipped: an MSIX version is X.Y.Z.0, the Store has no betas of its own.
+  msstore:
+    name: Microsoft Store (MSIX)
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@7dcc700092a1a8b9c17ba0e140b4e34e93000946 # 1.90.0
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+          key: msstore
+
+      - run: npm ci
+      - run: npm run build
+
+      # the manifest renderer and the logo generator (identity = MICROSOFT-STORE-LISTING.md)
+      - name: Packaging script tests
+        run: node --test scripts/
+
+      - name: cargo test (msstore)
+        working-directory: src-tauri
+        run: cargo test --locked --features msstore
+
+      - name: cargo clippy (msstore)
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets --features msstore -- -D warnings
+
+      # tauri build --no-bundle --features msstore --config tauri.msstore.conf.json, then the
+      # package folder, makepri and makeappx pack (which fails on a manifest schema error)
+      - name: Build the MSIX
+        id: msix
+        shell: pwsh
+        run: ./scripts/build-msix.ps1 -SignForTest
+
+      # The Windows App Certification Kit, when the runner image has it: installs the sideload
+      # copy and runs the Store's checks. Informational (it can't fail the job); run it by hand
+      # before a submission anyway (docs/MICROSOFT-STORE.md).
+      - name: Windows App Certification Kit
+        id: wack
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: pwsh
+        env:
+          SIDELOAD: ${{ steps.msix.outputs.sideload }}
+          CER: ${{ steps.msix.outputs.cer }}
+        run: |
+          $appcert = "${env:ProgramFiles(x86)}\Windows Kits\10\App Certification Kit\appcert.exe"
+          if (-not (Test-Path $appcert)) {
+            Write-Host "::notice::appcert.exe is not on this runner: run WACK by hand (docs/MICROSOFT-STORE.md)"
+            exit 0
+          }
+          Import-Certificate -FilePath $env:CER -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
+          $report = Join-Path $env:RUNNER_TEMP "wack-report.xml"
+          & $appcert reset
+          & $appcert test -appxpackagepath $env:SIDELOAD -reportoutputpath $report
+          $code = $LASTEXITCODE
+          if (Test-Path $report) {
+            $result = ([xml](Get-Content $report -Raw)).REPORT.OVERALL_RESULT
+            Write-Host "WACK overall result: $result"
+            if ($result -ne "PASS") { Write-Host "::warning::WACK result ${result}, see the msstore-wack-report artifact" }
+          }
+          exit $code
+
+      - name: Upload the WACK report
+        if: always() && steps.wack.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: msstore-wack-report
+          path: ${{ runner.temp }}/wack-report.xml
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # "installers-*": the draft release picks it up with the other installers
+      - name: Upload the MSIX
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: installers-msstore
+          path: ${{ steps.msix.outputs.msix }}
+          if-no-files-found: error
+          retention-days: 14
+
+      # the self-signed copy for sideload tests; never attached to a release or uploaded to the Store
+      - name: Upload the sideload test copy
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: msstore-sideload-test
+          path: |
+            ${{ steps.msix.outputs.sideload }}
+            ${{ steps.msix.outputs.cer }}
+          if-no-files-found: error
+          retention-days: 14
+
+  # Runs when the installers built; the Store package must have built too, unless its job was
+  # skipped (a pre-release tag).
   release:
     name: Draft release
-    if: github.ref_type == 'tag' && github.event_name == 'push'
-    needs: build
+    if: >-
+      !cancelled() && github.ref_type == 'tag' && github.event_name == 'push' &&
+      needs.build.result == 'success' &&
+      (needs.msstore.result == 'success' || needs.msstore.result == 'skipped')
+    needs: [build, msstore]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -320,7 +433,7 @@ jobs:
           prerelease=()
           [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
           gh release create "$TAG" installers/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag "${prerelease[@]}" \
-            --title "Brainitive Desktop $TAG" --notes "See CHANGELOG.md. Unsigned builds show a Gatekeeper / SmartScreen warning."
+            --title "Brainitive Desktop $TAG" --notes "See CHANGELOG.md. Unsigned builds show a Gatekeeper / SmartScreen warning. The .msix is the unsigned Microsoft Store upload for Partner Center, not an installer: get Brainitive for Windows from the Store or the -setup.exe."
 
   # Beta channel (BRAI-373): when the owner publishes a pre-release, its latest.json becomes
   # beta.json of the rolling pre-release "updater-beta" (created on first use, always kept a
