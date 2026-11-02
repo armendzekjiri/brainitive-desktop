@@ -1,112 +1,101 @@
 # Brainitive Desktop
 
-The desktop app of [Brainitive](https://brainitive.app) for macOS, Windows and Linux: a
-[Tauri 2](https://tauri.app) shell around your Brainitive server — **Brainitive Cloud** or a
-**self-hosted** instance — with sign-in through your system browser, the refresh token in the OS
-keychain, `brainitive://` deep links and native notifications.
+The desktop app for [Brainitive](https://brainitive.app) on macOS, Windows and Linux: a
+[Tauri 2](https://tauri.app) shell around your Brainitive server (**Brainitive Cloud** or a
+**self-hosted** instance) with sign-in through your system browser, the refresh token in the OS
+keychain, `brainitive://` deep links, native notifications, global shortcuts, a menu-bar / tray
+panel, an offline copy of your work and on-device voice capture.
 
-Status: **0.1.0 (unreleased)**. The server side (App API v1, `/api/v1`) ships with Brainitive
-v1.49.0.
+Status: **v1.0.0 in preparation** (see [CHANGELOG.md](CHANGELOG.md)). It needs a Brainitive server
+with App API v1 (`/api/v1`, Brainitive v1.49.0 or later).
 
-## Choosing a server
+<!-- Screenshots: add them to docs/images/ and link them here before the 1.0.0 release. -->
+_Screenshots: coming soon._
 
-On first start you choose **Brainitive Cloud** (one click) or **Self-hosted server**: type the
-address (`brainitive.example.com` is enough — `https://` is added, paths and trailing slashes are
-dropped; `http://` only for `localhost` / `127.0.0.1`). The app asks the server
-(`GET /api/v1/instance`) and shows its name and version before you continue; certificate problems,
-"not a Brainitive server", a too-old server and a too-old app are shown as clear errors.
+## Download
 
-## Several servers (work and private)
+- **GitHub Releases**: <https://github.com/armendzekjiri/brainitive-desktop/releases> (macOS `.dmg`,
+  Windows `-setup.exe`, Linux `.AppImage` and `.deb`, plus `SHA256SUMS`).
+- **brainitive.app/download**: <https://brainitive.app/download> links the latest installers.
 
-Add as many servers as you use (up to 20) — for example your company's Brainitive for work and
-Brainitive Cloud for private — and switch between them in a second:
+Installed apps update themselves (signed updates only; Settings → Updates has a beta channel).
 
-- **Menu**: Brainitive (macOS) / File (Windows, Linux) → **Servers** ▸ one line per server, the
-  current one checked. **⌃⌘1…⌃⌘9** (macOS) / **Alt+1…Alt+9** (Windows, Linux) switch to the first
-  nine. **Add Server…** opens the connect screen without signing you out (**Back to …** returns),
-  **Manage Servers…** opens Settings → Servers. The same list is in the tray menu.
-- **Menu-bar panel**: click the server name in its header ("Work ▾") and pick another one.
-- **Settings → Servers**: rename a server (the default is "Brainitive Cloud", the server's own
-  name, or its address), see whether you are signed in and when you last used it, **Switch to**,
-  **Sign out** (it stays in the list), **Forget** (signs out and deletes its data on this
-  computer), and ↑ / ↓ to set the order of the shortcuts.
+### System requirements
 
-Each server keeps its own sign-in (keychain entry), webview data, offline copy, waiting captures
-and New task choices, so switching never signs you out and never mixes data. Offline changes that
-are still waiting get a quick try before you leave a server; the rest is sent the next time you
-are on it. Only the current server is checked for notifications. The window title shows where you
-are: "Brainitive — Work".
+| OS | Requirement |
+|---|---|
+| macOS | 14 (Sonoma) or later, Apple Silicon or Intel (universal build) |
+| Windows | 10 or 11, x64, with [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/) (the installer sets it up if missing) |
+| Linux | x64, `.AppImage` or `.deb` (WebKitGTK 4.1, ALSA for the microphone). Global shortcuts do not work on Wayland; the tray and menus still do |
 
-## Native features
+## Connecting to Brainitive
 
-- **Brainitive key** — ⌃⌘K (macOS) / Ctrl+Alt+K (Windows, Linux) from any app, then one letter:
-  **C** quick capture, **T** new task, **K** quick switcher, **V** voice capture (hold to talk), **O** open Brainitive.
-  A small panel lists the letters; Esc or clicking elsewhere closes it.
-  Change the key and the letters in Settings → Shortcuts.
-- **Quick capture** — ⇧⌘Space (macOS) / Ctrl+Shift+Space from any app: type, ⌘↩ / Ctrl+↩ to save
-  to your inbox. Works offline (sent when you're back).
-- **New task** — ⌃⌘T (macOS) / Ctrl+Alt+T (Windows) / ⌃⌘K T, off on Linux (Ctrl+Alt+T is the
-  terminal there; set your own key in Settings): a small window to create an issue — project
-  (searchable, the last one is remembered per server), board, title, description (Markdown),
-  priority, type. ⌘↩ / Ctrl+↩ creates, then **Open** shows it in the app. Offline: **Save to
-  Inbox instead**. Also in the tray menu and the menu-bar panel.
-- **Voice capture** — ⌃⌘K, then hold V (or a direct shortcut you set, e.g. ⇧⌘V), speak, let go: the text opens in quick capture to
-  check and save (a tap starts it, ↩ or the shortcut again finishes; Esc cancels; max 2 minutes).
-  Turn it on in Settings, or from File → Voice Capture… / the tray / quick capture's microphone button (a direct shortcut is only taken from other apps while it is on); the speech model (190 MB) is downloaded once.
-  Speech is turned into text **on your computer** (Whisper); the audio is never saved or sent.
-  Pick the language (or auto-detect) and remove the model in Settings → Voice capture.
-- **Quick switcher** — ⌃⌘K K (or a direct shortcut you set): search everything, ↩ opens, ⌘C copies a snippet, ⌘T starts
-  the timer on an issue.
-- **Menu bar / tray** — click the icon for a glass panel with Today (next events, work due), My Day and
-  your assigned work (tick done, works offline), notifications (open, mark read) and the timer (live,
-  stop with an activity, start from your issues); right-click for the menu.
-- **Menus** — ⌘N new issue, ⌥⌘N new doc, ⇧⌘N new window, ⌘K search, ⌘[ / ⌘] back / forward,
-  ⌘= / ⌘- / ⌘0 zoom, ⌘, settings (Ctrl on Windows / Linux).
-- **Settings** (⌘,) — Shortcuts: the Brainitive key and its letters, and optional direct shortcuts
-  (quick capture ⇧⌘Space and New task ⌃⌘T / Ctrl+Alt+T are on — New task is off on Linux —, quick switcher and voice capture are off until you set them); keep running in the tray, open at
-  login, ask where to save downloads, voice capture.
+On first start choose **Brainitive Cloud** (one click) or **Self-hosted server** and type its
+address (`brainitive.example.com` is enough: `https://` is added; `http://` only for `localhost`).
+The app asks the server (`GET /api/v1/instance`) and shows its name and version before you
+continue. Certificate problems, "not a Brainitive server", a too-old server or a too-old app each
+get a clear message. Then you sign in in your system browser.
 
-## Development
+You can add up to 20 servers (for example work and private) and switch in a second: Servers menu,
+**⌃⌘1…⌃⌘9** (macOS) / **Alt+1…Alt+9** (Windows, Linux), the tray menu or the panel header.
+Each server keeps its own sign-in, webview data, offline copy and waiting captures.
 
-Requirements: Rust (stable, ≥ 1.85), Node 20+, the
+## Native features and default shortcuts
+
+| Action | macOS | Windows | Linux |
+|---|---|---|---|
+| Brainitive key (then **C** capture, **T** new task, **K** switcher, **V** voice, **O** open) | ⌃⌘K | Ctrl+Alt+K | Ctrl+Alt+K |
+| Quick capture | ⇧⌘Space | Ctrl+Shift+Space | Ctrl+Shift+Space |
+| New task | ⌃⌘T | Ctrl+Alt+T | off (Ctrl+Alt+T opens a terminal on Ubuntu) |
+| Quick switcher | off, ⌃⌘K K (suggested direct key ⌥⌘K) | off, Ctrl+Alt+K K (suggested Ctrl+Alt+Shift+K) | same as Windows |
+| Voice capture (off until you turn it on) | ⌃⌘K V (suggested ⇧⌘V) | Ctrl+Alt+K V (suggested Ctrl+Shift+V) | same as Windows |
+
+Everything can be changed or turned off in **Settings → Shortcuts**. Also: a menu-bar / tray panel
+(Today, My Day, Assigned, Inbox, Timer), a full app menu, offline mode with an outbox, voice capture
+(Whisper runs on your computer, audio is never saved or sent), notifications with a badge, launch
+at login, and download handling with the platform's quarantine marks. Details: [CHANGELOG.md](CHANGELOG.md)
+and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Building from source
+
+Requirements: Rust (stable, 1.85 or later), Node 20+, the
 [Tauri prerequisites](https://tauri.app/start/prerequisites/) of your OS (Xcode command line tools
-on macOS; WebView2 on Windows; `libwebkit2gtk-4.1-dev` etc. on Linux) and, for voice capture's
-whisper.cpp, **CMake** (`brew install cmake`; Visual Studio's C++ tools include it on Windows;
-`cmake libasound2-dev` on Linux). The first build compiles whisper.cpp (≈ 20–30 s).
+on macOS; WebView2 and the Visual Studio C++ tools on Windows; `libwebkit2gtk-4.1-dev` etc. on
+Linux) and, for voice capture (whisper.cpp), **CMake** (`brew install cmake`; included in Visual
+Studio's C++ tools on Windows; `cmake libasound2-dev` on Linux). The first build compiles
+whisper.cpp (about 20-30 s).
 
 ```bash
 npm install
 npm run tauri dev          # Vite on :1420 + the Rust app
 npm run build              # type-check + build the bundled screens
 cd src-tauri
-cargo test                 # unit tests (URL rules, PKCE, deep links, guard, versions, settings)
-cargo test --test live_network -- --ignored   # live TLS / discovery checks (network)
-BRAINITIVE_VOICE_MODEL_DIR=/tmp/voice cargo test --lib real_transcription -- --ignored --nocapture
-                           # macOS: downloads the speech model once, transcribes `say` clips
+cargo test                 # unit tests
 cargo clippy --all-targets -- -D warnings
+cargo fmt --check
 npx tauri build --debug --bundles app          # macOS: a .app with the brainitive:// scheme
 ```
 
-### Against a local server
-
-In the app repo run `composer run dev` (the server on `http://localhost:8000`). Debug builds offer
-**Local (localhost:8000)** and **Pre-release (dev.brainitive.app)** on the connect screen.
-
-Sign-in returns through `brainitive://auth/callback`. On macOS the scheme is only registered for a
-**bundled** app: build it with `npx tauri build --debug --bundles app` and open
-`src-tauri/target/debug/bundle/macos/Brainitive.app` (on Windows / Linux, `tauri dev` registers the
-scheme at runtime). Unsigned debug builds may make macOS ask for keychain access after each rebuild.
+Against a local server: run the Brainitive app (`composer run dev`, `http://localhost:8000`);
+debug builds offer **Local (localhost:8000)** and **Pre-release (dev.brainitive.app)** on the
+connect screen. On macOS the `brainitive://` scheme is only registered for a **bundled** app, so
+open `src-tauri/target/debug/bundle/macos/Brainitive.app`. Unsigned debug builds may make macOS ask
+for keychain access after each rebuild.
 
 ## Docs
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — modules, flows, per-server data
-- [docs/SECURITY.md](docs/SECURITY.md) — threat model, IPC, navigation guard, tokens, TLS
-- [docs/SPIKE.md](docs/SPIKE.md) — per-OS webview matrix and go / no-go
-- Server contract: `docs/ai/API.md` of the app repo (`../docs/ai/API.md` when this repo is checked
-  out at `brainitive/desktop/`)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): modules, flows, per-server data
+- [docs/SECURITY.md](docs/SECURITY.md): threat model, IPC, navigation guard, tokens, TLS
+- [docs/RELEASING.md](docs/RELEASING.md): signing, updates, cutting a release
+- [docs/QA-CHECKLIST.md](docs/QA-CHECKLIST.md): manual per-OS test list
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to contribute
+
+## Security
+
+Please report vulnerabilities privately, not in a public issue: see [SECURITY.md](SECURITY.md).
 
 ## License
 
 [Business Source License 1.1](LICENSE), like Brainitive itself: free for production use below the
-revenue threshold of the Additional Use Grant; each version becomes AGPL-3.0 four years after its
+revenue threshold in the Additional Use Grant; each version becomes AGPL-3.0 four years after its
 release.
