@@ -325,18 +325,28 @@ pub fn on_enter_app(app: &AppHandle) {
     changed(app);
 }
 
-/// Sign out / forget / another account: this server's offline data is deleted.
-pub fn wipe(app: &AppHandle, origin: &ServerOrigin) {
+/// Sign out / forget / another account: this server's offline data is deleted (tried again a
+/// few times). `false`: files are left on disk (the sign-out reports it and retries at start).
+pub fn wipe(app: &AppHandle, origin: &ServerOrigin) -> bool {
     let (dir, generation) = {
         let s = state(app);
         let mut inner = s.lock();
         let dir = inner.offline.clear(origin);
         (dir, inner.offline.generation)
     };
-    if let Err(e) = remove_files(&dir, generation) {
-        log::warn!("could not delete the offline data: {e}");
+    let mut deleted = false;
+    for attempt in 1..=3 {
+        match remove_files(&dir, generation) {
+            Ok(()) => {
+                deleted = true;
+                break;
+            }
+            Err(e) => log::warn!("could not delete the offline data (try {attempt}): {e}"),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     changed(app);
+    deleted
 }
 
 /// Deletes the folder after any write that is still running; older writes never land later.

@@ -47,6 +47,11 @@ pub struct Settings {
     /// Hex ids of webview data stores of forgotten servers, deleted once nothing uses them.
     #[serde(default)]
     pub pending_wipes: Vec<String>,
+    /// Servers whose sign-out could not delete everything on this computer (keychain entry,
+    /// offline files, queued captures; codex review 4): retried at every start, and nothing is
+    /// restored from them meanwhile.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_sign_outs: Vec<ServerOrigin>,
     /// Desktop preferences (Settings window). Launch at login is not stored here: the OS
     /// (LaunchAgent / registry / autostart file) is the truth for it.
     #[serde(default)]
@@ -343,6 +348,19 @@ impl Settings {
             self.current = None;
         }
         self.schedule_wipe(origin);
+    }
+
+    /// A sign-out of `origin` begins: marked until its local cleanup is done
+    /// ([`Self::sign_out_done`]), so a crash or a refused deletion is retried at the next start.
+    pub fn sign_out_started(&mut self, origin: &ServerOrigin) {
+        if !self.pending_sign_outs.contains(origin) {
+            self.pending_sign_outs.push(origin.clone());
+        }
+    }
+
+    /// Everything of that sign-out is gone from this computer (or a new sign-in owns it now).
+    pub fn sign_out_done(&mut self, origin: &ServerOrigin) {
+        self.pending_sign_outs.retain(|o| o != origin);
     }
 
     /// The server's webview data store is deleted once no window uses it (Forget, and a

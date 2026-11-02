@@ -870,4 +870,63 @@ mod tests {
         assert_eq!(crate::secrets::fake::peek(&origin).as_deref(), Some("brr_2"));
         assert_eq!(session.access_token(&origin).await.unwrap(), "bra_2");
     }
+
+    // ── an honest sign-out (codex review, finding 4) ────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refused_keychain_deletion_is_retried_reported_and_never_restored() {
+        let server = FakeServer::start().await;
+        let origin = server.origin.clone();
+        server.reply(REFRESH, 200, tokens(1));
+        server.reply(LOGOUT, 204, serde_json::json!({}));
+        let session = session_for(&server);
+
+        // refused twice, then it works: the sign-out's own retries delete it
+        crate::secrets::fake::store(&origin, "brr_0").unwrap();
+        crate::secrets::fake::fail_deletes(&origin, 2);
+        let report = session.sign_out(&origin).await;
+        assert!(report.keychain_deleted);
+        assert_eq!(crate::secrets::fake::peek(&origin), None);
+
+        // refused every time: reported, and the leftover entry is never used
+        let other = FakeServer::start().await;
+        let origin = other.origin.clone();
+        other.reply(REFRESH, 200, tokens(1));
+        other.reply(LOGOUT, 204, serde_json::json!({}));
+        crate::secrets::fake::store(&origin, "brr_0").unwrap();
+        crate::secrets::fake::fail_deletes(&origin, 100);
+        let report = session.sign_out(&origin).await;
+        assert!(!report.keychain_deleted);
+        assert_eq!(report.remote, Remote::Revoked);
+        assert!(crate::secrets::fake::peek(&origin).is_some(), "still in the keychain");
+        assert!(!session.has_stored_sign_in(&origin).await, "but never restored from");
+        assert!(matches!(
+            session.access_token(&origin).await,
+            Err(SessionError::SignedOut(_))
+        ));
+        // the next start closes it before anything restores, and tries again
+        let restarted = Session::new(ApiClient::loopback());
+        restarted.close(&origin);
+        assert!(!restarted.has_stored_sign_in(&origin).await);
+        crate::secrets::fake::fail_deletes(&origin, 0);
+        assert!(restarted.delete_stored_sign_in(&origin).await);
+        assert_eq!(crate::secrets::fake::peek(&origin), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_server_that_cannot_be_reached_is_reported_as_not_revoked() {
+        let server = FakeServer::start().await;
+        let origin = server.origin.clone();
+        crate::secrets::fake::store(&origin, "brr_0").unwrap();
+        server.reply(REFRESH, 503, serde_json::json!({ "code": "server_error" }));
+        let session = session_for(&server);
+        let report = session.sign_out(&origin).await;
+        assert_eq!(report.remote, Remote::NotConfirmed);
+        assert!(report.keychain_deleted, "local deletion does not wait for the server");
+        // a dead refresh token: the server already ended the session
+        let dead = FakeServer::start().await;
+        crate::secrets::fake::store(&dead.origin, "brr_0").unwrap();
+        dead.reply(REFRESH, 401, serde_json::json!({ "code": "invalid_grant" }));
+        assert_eq!(session.sign_out(&dead.origin).await.remote, Remote::AlreadyEnded);
+    }
 }

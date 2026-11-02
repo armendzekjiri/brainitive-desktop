@@ -219,12 +219,18 @@ pub async fn flush(app: &AppHandle) {
     }
 }
 
-/// Sign out / forget: the server's waiting captures are deleted with its sign-in.
-pub fn drop_queue(app: &AppHandle, origin: &ServerOrigin) {
+/// Sign out / forget: the server's waiting captures are deleted with its sign-in. `false`: the
+/// file could not be written (they are gone from memory; the sign-out cleanup is retried).
+pub fn drop_queue(app: &AppHandle, origin: &ServerOrigin) -> bool {
     let s = state(app);
     let mut inner = s.lock();
-    if inner.queue.drop_origin(origin) > 0 {
-        inner.save_queue();
+    inner.queue.drop_origin(origin);
+    match inner.queue.save(&inner.queue_path) {
+        Ok(()) => true,
+        Err(e) => {
+            log::warn!("queued captures of a signed-out server not deleted from disk: {e}");
+            false
+        }
     }
 }
 

@@ -13,7 +13,7 @@ use crate::links::{self, DeepLink};
 use crate::problem::Problem;
 use crate::reconnect;
 use crate::server::ServerOrigin;
-use crate::session::SessionError;
+use crate::session::{Remote, SessionError};
 use crate::shell;
 use crate::state::{state, Notice, Phase, UpdateRequired};
 use crate::version::{meets_minimum, APP_VERSION};
@@ -83,6 +83,7 @@ pub fn startup(app: &AppHandle) {
     let current = state(app).lock().current_origin();
     match current {
         Some(origin) => {
+            let unfinished = close_unfinished_sign_outs(app);
             state(app).lock().phase = Phase::Connecting;
             // build the window with this server's data store right away: no rebuild later
             shell::open_main(app, origin.store_id(), tauri::WebviewUrl::App("index.html".into()));
@@ -90,10 +91,12 @@ pub fn startup(app: &AppHandle) {
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
                 shell::run_pending_wipes(&handle).await;
+                finish_sign_outs(&handle, unfinished).await;
                 restore(&handle, origin, None).await;
             });
         }
         None => {
+            let unfinished = close_unfinished_sign_outs(app);
             state(app).lock().phase = Phase::Choose;
             shell::open_main(
                 app,
@@ -102,7 +105,10 @@ pub fn startup(app: &AppHandle) {
             );
             shell::refresh_title(app);
             let handle = app.clone();
-            tauri::async_runtime::spawn(async move { shell::run_pending_wipes(&handle).await });
+            tauri::async_runtime::spawn(async move {
+                shell::run_pending_wipes(&handle).await;
+                finish_sign_outs(&handle, unfinished).await;
+            });
         }
     }
 }
@@ -503,8 +509,18 @@ pub async fn handle_deep_link(app: &AppHandle, url: Url) {
             shell::show_local(app, Phase::Connecting, None);
             match state(app).session.complete_sign_in(&code, &st).await {
                 Ok(origin) => {
-                    // possibly another account than before
-                    state(app).lock().account_epoch += 1;
+                    {
+                        // possibly another account than before
+                        let s = state(app);
+                        let mut inner = s.lock();
+                        inner.account_epoch += 1;
+                        // a sign-out cleanup still waiting for this server is moot: this
+                        // sign-in's keychain entry replaced the old one
+                        if inner.settings.pending_sign_outs.contains(&origin) {
+                            inner.settings.sign_out_done(&origin);
+                            inner.save_settings();
+                        }
+                    }
                     restore(app, origin, None).await
                 }
                 Err(SessionError::StateMismatch) => {
@@ -586,20 +602,25 @@ pub async fn on_web_session_lost(app: &AppHandle, origin: ServerOrigin) {
 }
 
 /// "Sign out" (menu or the web app's logout): revoke this device, delete the keychain entry,
-/// clear the webview data of this server, show the sign-in screen.
+/// clear the webview data of this server, show the sign-in screen — and say honestly what could
+/// not be done (codex review 4).
 pub async fn sign_out(app: &AppHandle) {
     let Some(origin) = state(app).lock().current_origin() else {
         return;
     };
+    // first: a capture, panel or New-task call still running for this sign-in writes nothing
+    // back from now on (codex review 5)
+    state(app).lock().account_epoch += 1;
     clear_account_traces(app);
-    state(app).session.sign_out(&origin).await;
-    crate::capture::drop_queue(app, &origin);
-    crate::offline::wipe(app, &origin);
+    let mut cleanup = end_sign_in(app, &origin).await;
     crate::bridge::set_badge(app, 0);
     if let Some(w) = shell::main_window(app) {
         // the window uses this server's own data store, so this clears only its data
         if state(app).lock().window_store == Some(origin.store_id()) {
-            let _ = w.clear_all_browsing_data();
+            if let Err(e) = w.clear_all_browsing_data() {
+                log::warn!("webview data of the signed-out server not cleared: {e}");
+                cleanup.browsing_data = false;
+            }
         }
     }
     {
@@ -608,7 +629,135 @@ pub async fn sign_out(app: &AppHandle) {
         inner.last_good = None;
         inner.account_epoch += 1;
     }
-    shell::show_local(app, Phase::SignIn, Some(Notice::info("You are signed out.")));
+    let notice = sign_out_notice(&cleanup, &origin.display_name());
+    shell::show_local(app, Phase::SignIn, Some(notice));
+}
+
+/// What a sign-out managed to do (codex review 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cleanup {
+    pub remote: Remote,
+    pub keychain: bool,
+    pub offline_files: bool,
+    pub queue_file: bool,
+    pub browsing_data: bool,
+}
+
+impl Cleanup {
+    /// Nothing of the sign-in is left on this computer.
+    pub fn local_done(&self) -> bool {
+        self.keychain && self.offline_files && self.queue_file
+    }
+}
+
+/// The parts every sign-out shares (current server, Settings → Servers, Forget): the device on
+/// the server, the keychain entry, the queued captures, the offline files. The server is marked
+/// in settings first (`pending_sign_outs`) and unmarked only when everything local is gone, so a
+/// refused deletion or a crash is retried at the next start and never restored meanwhile.
+async fn end_sign_in(app: &AppHandle, origin: &ServerOrigin) -> Cleanup {
+    {
+        let s = state(app);
+        let mut inner = s.lock();
+        inner.settings.sign_out_started(origin);
+        inner.save_settings();
+    }
+    let report = state(app).session.sign_out(origin).await;
+    let queue_file = crate::capture::drop_queue(app, origin);
+    let offline_files = crate::offline::wipe(app, origin);
+    let cleanup = Cleanup {
+        remote: report.remote,
+        keychain: report.keychain_deleted,
+        offline_files,
+        queue_file,
+        browsing_data: true,
+    };
+    if cleanup.local_done() {
+        let s = state(app);
+        let mut inner = s.lock();
+        inner.settings.sign_out_done(origin);
+        inner.save_settings();
+    }
+    log::info!(
+        "signed out: server {:?}, keychain {}, offline files {}, queue {}",
+        cleanup.remote,
+        if cleanup.keychain { "deleted" } else { "LEFT" },
+        if cleanup.offline_files { "deleted" } else { "LEFT" },
+        if cleanup.queue_file { "deleted" } else { "LEFT" },
+    );
+    cleanup
+}
+
+/// The sentence after a sign-out: "You are signed out." only when it is true; otherwise what is
+/// left and how to fix it (pure, tested).
+pub fn sign_out_notice(c: &Cleanup, host: &str) -> Notice {
+    let mut left = Vec::new();
+    if c.remote == Remote::NotConfirmed {
+        left.push(format!(
+            "{host} could not be reached to end this computer's session there: remove this computer from the devices in your account settings on {host}."
+        ));
+    }
+    if !c.keychain {
+        left.push(
+            "The saved sign-in could not be removed from the system keychain. Brainitive never uses it again and retries at the next start; you can also delete the \"app.brainitive.desktop\" entry yourself (Keychain Access / Credential Manager)."
+                .to_string(),
+        );
+    }
+    if !c.offline_files || !c.queue_file {
+        left.push(
+            "Some offline data of this account could not be deleted from this computer yet. Brainitive retries at the next start."
+                .to_string(),
+        );
+    }
+    if !c.browsing_data {
+        left.push(format!(
+            "The web data of {host} in this app could not be cleared: use \"Forget this server\" in Settings → Servers to delete it."
+        ));
+    }
+    if left.is_empty() {
+        Notice::info("You are signed out.")
+    } else {
+        Notice::error(format!(
+            "You are signed out on this computer, but not everything could be cleaned up. {}",
+            left.join(" ")
+        ))
+    }
+}
+
+/// A native notification when a sign-out of a server that is not on screen (Settings → Servers,
+/// Forget) left something behind.
+fn report_background_sign_out(app: &AppHandle, cleanup: &Cleanup, host: &str) {
+    let notice = sign_out_notice(cleanup, host);
+    if notice.level == "error" {
+        crate::bridge::show_notification(app, "Sign-out not complete", &notice.message, None);
+    }
+}
+
+/// Start: sign-outs whose cleanup was not finished (the keychain refused, a crash). Their
+/// servers are closed in the session at once (nothing is restored from a leftover keychain
+/// entry), then the deletion is tried again.
+pub fn close_unfinished_sign_outs(app: &AppHandle) -> Vec<ServerOrigin> {
+    let pending = state(app).lock().settings.pending_sign_outs.clone();
+    for origin in &pending {
+        state(app).session.close(origin);
+    }
+    pending
+}
+
+pub async fn finish_sign_outs(app: &AppHandle, pending: Vec<ServerOrigin>) {
+    for origin in pending {
+        let keychain = state(app).session.delete_stored_sign_in(&origin).await;
+        let queue_file = crate::capture::drop_queue(app, &origin);
+        let offline_files = crate::offline::wipe(app, &origin);
+        if keychain && queue_file && offline_files {
+            log::info!("an unfinished sign-out is complete now");
+            let s = state(app);
+            let mut inner = s.lock();
+            inner.settings.sign_out_done(&origin);
+            inner.save_settings();
+        } else {
+            log::warn!("an unfinished sign-out still could not delete everything; retried at the next start");
+        }
+    }
 }
 
 /// BRAI-377: nothing of the account that signs out stays in memory or in a hidden window — a
@@ -728,9 +877,7 @@ pub async fn sign_out_server(app: &AppHandle, origin: ServerOrigin) {
         servers_changed(app);
         return;
     }
-    state(app).session.sign_out(&origin).await;
-    crate::capture::drop_queue(app, &origin);
-    crate::offline::wipe(app, &origin);
+    let cleanup = end_sign_in(app, &origin).await;
     {
         let s = state(app);
         let mut inner = s.lock();
@@ -739,6 +886,7 @@ pub async fn sign_out_server(app: &AppHandle, origin: ServerOrigin) {
     }
     shell::run_pending_wipes(app).await;
     servers_changed(app);
+    report_background_sign_out(app, &cleanup, &origin.display_name());
 }
 
 /// "Forget this server": sign out there, delete its keychain entry and its webview data,
@@ -746,11 +894,11 @@ pub async fn sign_out_server(app: &AppHandle, origin: ServerOrigin) {
 pub async fn forget_server(app: &AppHandle, origin: ServerOrigin) {
     let label = state(app).lock().settings.label_of(&origin);
     if state(app).lock().current_origin().as_ref() == Some(&origin) {
+        state(app).lock().account_epoch += 1;
         clear_account_traces(app);
     }
-    state(app).session.sign_out(&origin).await;
-    crate::capture::drop_queue(app, &origin);
-    crate::offline::wipe(app, &origin);
+    let cleanup = end_sign_in(app, &origin).await;
+    report_background_sign_out(app, &cleanup, &origin.display_name());
     let was_current = {
         let s = state(app);
         let mut inner = s.lock();
@@ -942,5 +1090,86 @@ mod tests {
         let refused = unconfirmed_redirect(&o("https://a.example.com"), &o("https://b.example.com")).unwrap();
         assert_eq!(refused.kind, "redirected");
         assert!(refused.message.contains("https://b.example.com"), "{}", refused.message);
+    }
+
+    #[test]
+    fn a_sign_out_says_what_is_left_instead_of_claiming_success() {
+        let all = Cleanup {
+            remote: Remote::Revoked,
+            keychain: true,
+            offline_files: true,
+            queue_file: true,
+            browsing_data: true,
+        };
+        assert_eq!(sign_out_notice(&all, "acme.com").message, "You are signed out.");
+        assert_eq!(sign_out_notice(&all, "acme.com").level, "info");
+        let ended = Cleanup {
+            remote: Remote::AlreadyEnded,
+            ..all
+        };
+        assert_eq!(
+            sign_out_notice(&ended, "acme.com").level,
+            "info",
+            "nothing left on the server"
+        );
+
+        let offline = Cleanup {
+            remote: Remote::NotConfirmed,
+            ..all
+        };
+        let n = sign_out_notice(&offline, "acme.com");
+        assert_eq!(n.level, "error");
+        assert!(n.message.contains("acme.com could not be reached"), "{}", n.message);
+        assert!(n.message.contains("devices in your account settings"), "{}", n.message);
+
+        let keychain = Cleanup { keychain: false, ..all };
+        let n = sign_out_notice(&keychain, "acme.com");
+        assert_eq!(n.level, "error");
+        assert!(n.message.contains("keychain"), "{}", n.message);
+        assert!(!n.message.starts_with("You are signed out."), "{}", n.message);
+        assert!(!keychain.local_done());
+
+        let files = Cleanup {
+            offline_files: false,
+            ..all
+        };
+        assert!(sign_out_notice(&files, "acme.com").message.contains("offline data"));
+        assert!(!files.local_done());
+        let queue = Cleanup {
+            queue_file: false,
+            ..all
+        };
+        assert!(!queue.local_done());
+        let web = Cleanup {
+            browsing_data: false,
+            ..all
+        };
+        let n = sign_out_notice(&web, "acme.com");
+        assert!(n.message.contains("Forget this server"), "{}", n.message);
+        assert!(
+            web.local_done(),
+            "the webview store is handled by Forget, not the start-up retry"
+        );
+        // never a token or an error chain in the text
+        for c in [offline, keychain, files, web] {
+            let m = sign_out_notice(&c, "acme.com").message;
+            assert!(!m.contains("brr_") && !m.contains("bra_"), "{m}");
+        }
+    }
+
+    #[test]
+    fn an_unfinished_sign_out_stays_marked_until_its_cleanup_is_done() {
+        let mut s = crate::settings::Settings::default();
+        let a = o("a.example.com");
+        s.sign_out_started(&a);
+        s.sign_out_started(&a);
+        assert_eq!(s.pending_sign_outs, vec![a.clone()]);
+        // survives a restart
+        let json = serde_json::to_string(&s).unwrap();
+        let back: crate::settings::Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.pending_sign_outs, vec![a.clone()]);
+        s.sign_out_done(&a);
+        assert!(s.pending_sign_outs.is_empty());
+        assert!(!serde_json::to_string(&s).unwrap().contains("pending_sign_outs"));
     }
 }
