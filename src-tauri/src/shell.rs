@@ -500,6 +500,11 @@ fn on_navigation(app: &AppHandle, label: &str, url: &Url) -> bool {
 fn on_page_load(app: &AppHandle, window: &WebviewWindow, url: &Url, event: PageLoadEvent) {
     let instance = state(app).lock().current_origin();
     let allowed = links::is_app_page(url, instance.as_ref(), &local_origins(app));
+    if event == PageLoadEvent::Finished && window.label() == MAIN && allowed {
+        // the bundled screens are the first paint (cached shell); the server's page is "loaded"
+        let remote = instance.as_ref().is_some_and(|o| o.contains(url));
+        crate::startup::mark(if remote { "remote page loaded" } else { "bundled shell loaded" });
+    }
     match (event, allowed) {
         (PageLoadEvent::Started, false) => {
             // a top-level load of another site: cancel it in the still-current document and

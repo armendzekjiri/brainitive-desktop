@@ -7,6 +7,10 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 Phase 09, reliability and diagnostics:
 
+- **Performance pass, desktop side** (BRAI-369): start-up phases are timed in the log
+  (`startup: bundled shell loaded +…ms`, `remote page loaded`); the download-staging clean-up no
+  longer blocks `setup()`. `docs/PERFORMANCE.md` has the procedure, budgets and suggestions for the
+  web app.
 - **Logs and diagnostics** (BRAI-368): Rust panics, app log output and script errors of the bundled
   screens go to a rotating local file (5 × 2 MB) with tokens, cookies, codes and query strings
   removed. Help → **Copy Diagnostics** (versions, OS, webview, server, signed in yes/no, last 50 log

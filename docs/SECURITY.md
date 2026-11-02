@@ -180,6 +180,7 @@ store is deleted and it leaves the recent list.
 - New local command `log_client_error` (main window only, `capabilities/local.json`): message ≤ 500
   and source ≤ 200 characters, ≤ 20 per minute, redacted. Remote pages cannot call it; errors in
   remote pages or popup windows are not logged.
+- Start-up timing lines (`startup: <phase> +Nms`) contain phase names and milliseconds only.
 - Diagnostics contain the server origin only, never user data or paths with query strings.
 
 ## TLS policy

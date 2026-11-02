@@ -33,6 +33,7 @@ desktop/
     │   ├── redact.rs           removes tokens, cookies, codes, query strings from log text   (pure)
     │   ├── logging.rs          rotating log file (5 × 2 MB), `log` backend, panic hook       (rotation pure)
     │   ├── diagnostics.rs      Help → Copy Diagnostics text + Open Logs Folder
+    │   ├── startup.rs          cold-start phase timing (`startup: <phase> +Nms` in the log)
     │   ├── reconnect.rs        backoff 5 s → 60 s, lookup target for the "network is back" probe (pure)
     │   ├── settings.rs         settings.json: servers, pending wipes, Preferences, zoom steps (pure)
     │   ├── shortcuts.rs        global shortcut defaults, parsing, rules, labels              (pure)

@@ -20,6 +20,7 @@ pub mod problem;
 pub mod prefs;
 pub mod queue;
 pub mod redact;
+pub mod startup;
 pub mod reconnect;
 pub mod secrets;
 pub mod server;
@@ -39,6 +40,7 @@ use tauri_plugin_notification::NotificationExt;
 use crate::state::{state, AppState};
 
 pub fn run() {
+    startup::begin();
     let app = tauri::Builder::default()
         // first: a second launch (or a deep link on Windows / Linux) goes to the running app
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -117,6 +119,7 @@ pub fn run() {
                 std::env::consts::OS,
                 std::env::consts::ARCH
             );
+            startup::mark("setup entered");
             let settings_path = app.path().app_config_dir()?.join("settings.json");
             let queue_path = app.path().app_local_data_dir()?.join("capture-queue.json");
             app.manage(AppState::new(settings_path, queue_path));
@@ -126,6 +129,7 @@ pub fn run() {
                 inner.start_hidden =
                     prefs::launched_at_login(std::env::args()) && inner.settings.preferences.start_hidden;
             }
+            startup::mark("settings and queue loaded");
             let handle = app.handle().clone();
 
             menu::install(&handle)?;
@@ -139,7 +143,10 @@ pub fn run() {
             });
             tray::install(&handle)?;
             tray::start_poller(&handle);
-            downloads::clean_staging(&handle);
+            // a directory removal: off the setup path
+            let cleaner = handle.clone();
+            tauri::async_runtime::spawn_blocking(move || downloads::clean_staging(&cleaner));
+            startup::mark("menu, tray and shortcuts ready");
             if let Err(e) = hotkeys::apply(&handle) {
                 log::warn!("{e}");
             }
@@ -166,6 +173,7 @@ pub fn run() {
             });
 
             flows::startup(&handle);
+            startup::mark("main window created");
 
             // launched by a link
             if let Ok(Some(urls)) = app.deep_link().get_current() {

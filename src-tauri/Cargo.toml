@@ -44,9 +44,11 @@ log = "0.4"
 [dev-dependencies]
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros"] }
 
+# Release profile, see docs/PERFORMANCE.md. Everything heavy (rendering, JS) is in the system
+# webview, so Rust speed hardly matters; binary size and start-up do.
 [profile.release]
-codegen-units = 1
-lto = true
-opt-level = "s"
-panic = "abort"
-strip = true
+codegen-units = 1   # one unit: the optimiser sees the whole crate (slower build, smaller + faster code)
+lto = true          # link-time optimisation across all crates, drops unused code
+opt-level = "s"     # optimise for size: fewer pages to map at launch; "3" gains nothing measurable here
+panic = "abort"     # no unwinding tables; our panic hook (logging.rs) still runs before the abort
+strip = true        # no symbols: ~half the binary size (backtraces in logs show addresses only)

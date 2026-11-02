@@ -40,3 +40,32 @@ Built in this order, one commit per card. Gate after each card:
 - Measure cold start and idle memory on macOS (release build), write `docs/PERFORMANCE.md` with the numbers,
   how to measure, per-OS budgets, and suggestions for the web app (not changed here).
 - `Cargo.toml` release profile: review and document.
+
+## Result
+
+**Built**
+- BRAI-367 (`fdde369`): error classification (`problem.rs`), backoff + network-back retry
+  (`reconnect.rs`, `flows.rs`), update-required screen and gate, Open offline kept.
+- BRAI-368 (`2e72110`): `redact.rs`, `logging.rs` (5 × 2 MB, panic hook), `diagnostics.rs`, Help →
+  Copy Diagnostics / Open Logs Folder, `log_client_error` command + `main.ts` hooks. No telemetry.
+- BRAI-369 (third commit): `startup.rs` phase timing, clean-up off `setup()`, release profile
+  documented, `docs/PERFORMANCE.md` with procedure, budgets and web-app suggestions.
+
+**Tests**: 118 lib tests + 3 capability tests; clippy `-D warnings` clean; `npm run build` ok.
+Unit tests cover error classification, semver/pre-release comparison, redaction, diagnostics text,
+log rotation, rate limit, startup marks.
+
+**Not done / untested**
+- Cold-start and idle-memory numbers are NOT measured: a running debug Brainitive.app made the
+  single-instance plugin swallow my launch, and I did not stop it. PERFORMANCE.md has the table
+  to fill in and the exact procedure.
+- Windows/Linux: DNS/refused error strings, log paths, Open Logs Folder, WebView2/WebKitGTK
+  version in diagnostics are untested (code is cfg-gated or string-matched).
+- The in-app copy-diagnostics dialog and menu items were not clicked through in a running app.
+
+**Open questions**
+- `DOWNLOAD_URL` (`https://www.brainitive.app/download`) is a guess.
+- Remember the min version across restarts (offline mode is only blocked from the in-memory check)?
+  Should the poller re-check `min_versions.desktop` while in the app?
+- `log_client_error` is for the bundled main window only; errors in remote pages and popups are not
+  logged. Extending that needs a bridge change, left for your decision.
