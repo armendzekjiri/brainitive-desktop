@@ -13,6 +13,8 @@ pub mod hotkeys;
 pub mod links;
 pub mod logging;
 pub mod menu;
+pub mod offline_cache;
+pub mod outbox;
 pub mod pkce;
 pub mod poll;
 pub mod popup;
