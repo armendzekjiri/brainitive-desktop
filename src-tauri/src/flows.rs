@@ -510,10 +510,16 @@ pub async fn handle_deep_link(app: &AppHandle, url: Url) {
             match state(app).session.complete_sign_in(&code, &st).await {
                 Ok(origin) => {
                     {
-                        // possibly another account than before
+                        // possibly another account than before: nothing of the previous sign-in
+                        // stays in memory, and its offline data / queued captures on disk are
+                        // held back until `GET /me` says whose they are (codex review 2)
                         let s = state(app);
                         let mut inner = s.lock();
-                        inner.account_epoch += 1;
+                        drop_account_state(&mut inner);
+                        inner
+                            .settings
+                            .set_sign_in(&origin, Some(crate::queue::new_request_id()));
+                        inner.save_settings();
                         // a sign-out cleanup still waiting for this server is moot: this
                         // sign-in's keychain entry replaced the old one
                         if inner.settings.pending_sign_outs.contains(&origin) {
@@ -659,6 +665,7 @@ async fn end_sign_in(app: &AppHandle, origin: &ServerOrigin) -> Cleanup {
         let s = state(app);
         let mut inner = s.lock();
         inner.settings.sign_out_started(origin);
+        inner.settings.set_sign_in(origin, None);
         inner.save_settings();
     }
     let report = state(app).session.sign_out(origin).await;

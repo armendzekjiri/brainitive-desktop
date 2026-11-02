@@ -237,7 +237,7 @@ fn answer(app: &AppHandle, tab: Tab, error: Option<String>) -> TabAnswer {
     let mut inner = s.lock();
     let offline = is_offline(&inner);
     if let Some(origin) = inner.current_origin().filter(|_| signed_in(inner.phase)) {
-        inner.offline.ensure(&origin);
+        inner.load_offline(&origin);
     }
     let pending = view::pending_done(&inner.offline.outbox);
     let reads = view::PendingReads::of(&inner.offline.outbox);

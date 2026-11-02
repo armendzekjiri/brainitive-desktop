@@ -263,6 +263,12 @@ impl Inner {
         self.settings.current.clone()
     }
 
+    /// Loads `origin`'s offline data for the sign-in stored for it (see `OfflineData::load`).
+    pub fn load_offline(&mut self, origin: &ServerOrigin) {
+        let sign_in = self.settings.sign_in_of(origin);
+        self.offline.load(origin, sign_in.as_deref());
+    }
+
     pub fn save_queue(&self) {
         if let Err(e) = self.queue.save(&self.queue_path) {
             log::warn!("could not save the capture queue: {e}");

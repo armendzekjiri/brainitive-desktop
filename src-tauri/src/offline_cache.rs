@@ -54,6 +54,9 @@ pub struct Cache {
     pub user_id: Option<u64>,
     #[serde(default)]
     pub user_name: Option<String>,
+    /// The sign-in (`RecentServer::sign_in`) whose `GET /me` confirmed `user_id` last.
+    #[serde(default)]
+    pub sign_in: Option<String>,
     /// The cursor of the last finished run (`None`: the next run is a full one).
     #[serde(default)]
     pub cursor: Option<String>,
@@ -172,6 +175,7 @@ impl Cache {
             origin: origin.clone(),
             user_id: None,
             user_name: None,
+            sign_in: None,
             cursor: None,
             task_lists: Vec::new(),
             project_ids: Vec::new(),

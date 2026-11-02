@@ -24,6 +24,12 @@ pub struct RecentServer {
     /// The name the user gave it in Settings → Servers (`None`: [`crate::servers::default_name`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_name: Option<String>,
+    /// A random id of the sign-in that is stored for this server, new on every completed sign-in
+    /// and gone on sign-out (codex review 2). The offline copy, the outbox and queued captures
+    /// carry the id they were made under; data of another sign-in is not shown or sent before
+    /// `GET /me` confirmed it is the same account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<String>,
 }
 
 impl RecentServer {
@@ -285,6 +291,7 @@ impl Settings {
                 version,
                 last_used: now(),
                 custom_name: None,
+                sign_in: None,
             });
         } else {
             log::warn!("server list full: {origin} not saved");
@@ -348,6 +355,17 @@ impl Settings {
             self.current = None;
         }
         self.schedule_wipe(origin);
+    }
+
+    /// The id of the sign-in stored for `origin` (see [`RecentServer::sign_in`]).
+    pub fn sign_in_of(&self, origin: &ServerOrigin) -> Option<String> {
+        self.recent.iter().find(|r| &r.origin == origin)?.sign_in.clone()
+    }
+
+    pub fn set_sign_in(&mut self, origin: &ServerOrigin, id: Option<String>) {
+        if let Some(r) = self.recent.iter_mut().find(|r| &r.origin == origin) {
+            r.sign_in = id;
+        }
     }
 
     /// A sign-out of `origin` begins: marked until its local cleanup is done
