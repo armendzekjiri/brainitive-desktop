@@ -27,6 +27,8 @@ interface View {
     projects: Project[];
     selection: { project_id: number | null; board_id: number | null };
     stale: boolean;
+    // offline, a task is kept and created when the server answers (newer servers)
+    queue_offline: boolean;
 }
 
 interface Choice {
@@ -48,6 +50,8 @@ interface Created {
     key: string | null;
     title: string;
     can_open: boolean;
+    // kept offline: created when Brainitive is back online
+    pending: boolean;
 }
 
 interface TaskError {
@@ -499,6 +503,8 @@ async function reload(): Promise<void> {
                 projectInput.placeholder = 'Offline: projects can’t be loaded';
                 setStatus('You’re offline. You can save this to your inbox and turn it into a task later.', 'muted');
                 inboxButton.hidden = false;
+            } else if (view?.queue_offline) {
+                setStatus('You’re offline. Tasks you create now are created once Brainitive is back online.', 'muted');
             }
         } else showError(err);
         fit();
@@ -535,8 +541,10 @@ async function submit(): Promise<void> {
             },
         });
         setStatus('');
-        $('done-key').textContent = created.key ?? 'Task';
-        $('done-name').textContent = created.title;
+        $('done-key').textContent = created.pending ? 'Task' : (created.key ?? 'Task');
+        $('done-verb').textContent = created.pending ? 'saved' : 'created';
+        $('done-name').textContent = created.pending ? `${created.title} — it is created once Brainitive is back online.` : created.title;
+        $('done').classList.toggle('pending', created.pending);
         ($('open') as HTMLButtonElement).hidden = !created.can_open;
         show('done');
         ($(created.can_open ? 'open' : 'again') as HTMLButtonElement).focus();

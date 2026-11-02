@@ -87,6 +87,8 @@ interface AssignedView {
 interface NoteRow {
     id: string;
     text: string;
+    // marked read offline, waiting to sync
+    pending: boolean;
     body: string | null;
     key: string | null;
     context: string | null;
@@ -105,6 +107,11 @@ interface RunningTimer {
     label: string;
     key: string | null;
     title: string;
+    description: string | null;
+    // started offline, waiting to sync
+    pending: boolean;
+    // started offline and not on the server yet: discard works, stop waits for the sync
+    started_offline: boolean;
     started_at: string | null;
     elapsed_seconds: number;
     activity_required: boolean;
@@ -117,7 +124,14 @@ interface TimerView {
     running: RunningTimer | null;
     entries: { id: string; minutes: number; label: string; activity: string | null; note: string | null; from_timer: boolean }[] | null;
     total_minutes: number;
+    // seconds logged today without the running timer (newer servers; else `entries`)
+    today_seconds: number | null;
     candidates: { id: string; label: string; in_my_day: boolean }[];
+    description_supported: boolean;
+    // a stop / discard waits to sync
+    pending_note: string | null;
+    // a stop made offline needs an activity
+    activity_needed: { message: string; label: string; activities: Activity[] } | null;
 }
 
 interface TabAnswer {
@@ -126,6 +140,8 @@ interface TabAnswer {
     error: string | null;
     age: number | null;
     from_offline_copy: boolean;
+    // timer / mark-read changes are kept and sent later while offline
+    queue_offline: boolean;
     today: TodayView | null;
     my_day: MyDayView | null;
     assigned: AssignedView | null;
@@ -158,6 +174,8 @@ let activityPrompt: string | null = null;
 /** Discard waits for a second click. */
 let discardArmed = false;
 let timerQuery = '';
+/** The optional "what are you doing" of the next timer (newer servers). */
+let timerDescription = '';
 /** A message after an action (timer stopped, a failed tick). */
 let notice: { text: string; error: boolean } | null = null;
 let loading = 0;
@@ -426,12 +444,12 @@ function renderAssigned(v: AssignedView): void {
     if (v.more) inner.append(moreLink('Show all in My Work'));
 }
 
-function renderNotifications(v: { items: NoteRow[]; unread: number }, offline: boolean): void {
+function renderNotifications(v: { items: NoteRow[]; unread: number }, blocked: boolean): void {
     const unread = v.unread;
     inner.append(
         section(unread ? `${unread} unread` : 'Notifications', undefined, {
             label: 'Mark all read',
-            disabled: offline || (!unread && v.items.every((n) => n.read)),
+            disabled: blocked || (!unread && v.items.every((n) => n.read)),
             run: () => {
                 invoke('panel_mark_all_read')
                     .then(() => load('notifications', false))
@@ -451,6 +469,7 @@ function renderNotifications(v: { items: NoteRow[]; unread: number }, offline: b
         main.dataset.focus = `note:${n.id}`;
         main.append(el('span', 'title note-text', n.text));
         const meta = el('span', 'meta');
+        if (n.pending) meta.append(el('span', 'chip pending', 'Waiting to sync'));
         if (n.body) meta.append(el('span', undefined, n.body));
         else if (n.context) meta.append(el('span', undefined, n.context));
         if (meta.childNodes.length) main.append(meta);
@@ -465,9 +484,36 @@ function renderNotifications(v: { items: NoteRow[]; unread: number }, offline: b
     inner.append(all);
 }
 
-function renderTimer(v: TimerView, offline: boolean): void {
+/** The inline activity choice: Stop asked for one, or a stop made offline needs one. */
+function activityChoice(message: string, activities: Activity[]): HTMLElement {
+    const box = el('div');
+    box.append(el('p', 'hint', message));
+    const list = el('div', 'activities');
+    for (const a of activities) {
+        const b = el('button', 'btn');
+        b.type = 'button';
+        const dot = el('span', 'dot-color');
+        if (a.color) dot.style.background = a.color;
+        b.append(dot, document.createTextNode(a.name));
+        b.addEventListener('click', () => void stopTimer(a.id));
+        list.append(b);
+    }
+    if (!activities.length) list.append(el('span', 'hint', 'No activities to choose from. Stop it in the web app.'));
+    box.append(list);
+    return box;
+}
+
+function renderTimer(v: TimerView, blocked: boolean): void {
     const hint = head?.offline_hint ?? null;
     const t = v.running;
+    if (v.pending_note) inner.append(el('div', 'banner', v.pending_note));
+    const needed = v.activity_needed;
+    if (needed && !t) {
+        // the timer runs on on the server until the stop goes out with an activity
+        const card = el('div', 'timer-card');
+        card.append(el('span', 'title', needed.label), activityChoice(needed.message, needed.activities));
+        inner.append(card);
+    }
     if (t) {
         const card = el('div', 'timer-card');
         const c = el('div', 'clock', clock(t.elapsed_seconds));
@@ -477,42 +523,48 @@ function renderTimer(v: TimerView, offline: boolean): void {
         label.type = 'button';
         label.dataset.focus = 'timer';
         label.append(el('span', 'title', t.label));
+        const meta = el('span', 'meta');
+        if (t.pending) meta.append(el('span', 'chip pending', 'Waiting to sync'));
+        if (t.description) meta.append(el('span', undefined, t.description));
+        if (meta.childNodes.length) label.append(meta);
         label.addEventListener('click', () => open({ kind: 'timer' }));
         const actions = el('div', 'timer-actions');
         const stop = el('button', 'btn primary', 'Stop & log');
         stop.type = 'button';
-        stop.disabled = offline;
+        stop.disabled = blocked || t.started_offline;
+        if (t.started_offline) stop.title = 'Started offline: it can be stopped once it has synced';
         stop.addEventListener('click', () => void stopTimer(null));
         const discard = el('button', 'btn danger', discardArmed ? 'Discard? Click again' : 'Discard');
         discard.type = 'button';
-        discard.disabled = offline;
+        discard.disabled = blocked;
         discard.addEventListener('click', () => void discardTimer());
         actions.append(stop, discard);
         card.append(c, label, actions);
-        if (activityPrompt && !offline) {
-            card.append(el('p', 'hint', activityPrompt));
-            const list = el('div', 'activities');
-            for (const a of t.activities) {
-                const b = el('button', 'btn');
-                b.type = 'button';
-                const dot = el('span', 'dot-color');
-                if (a.color) dot.style.background = a.color;
-                b.append(dot, document.createTextNode(a.name));
-                b.addEventListener('click', () => void stopTimer(a.id));
-                list.append(b);
-            }
-            if (!t.activities.length) list.append(el('span', 'hint', 'No activities to choose from. Stop it in the web app.'));
-            card.append(list);
-        }
-        if (offline && hint) card.append(el('p', 'hint', hint));
+        if (needed) card.append(activityChoice(needed.message, needed.activities));
+        else if (activityPrompt && !blocked) card.append(activityChoice(activityPrompt, t.activities));
+        if (blocked && hint) card.append(el('p', 'hint', hint));
         inner.append(card);
     } else {
         inner.append(section('Start a timer'));
+        if (v.description_supported) {
+            const what = el('input', 'search');
+            what.type = 'text';
+            what.maxLength = 255;
+            what.placeholder = 'What are you working on? (optional)';
+            what.value = timerDescription;
+            what.disabled = blocked || !v.candidates.length;
+            what.setAttribute('aria-label', 'Timer description');
+            what.dataset.focus = 'timer-description';
+            what.addEventListener('input', () => {
+                timerDescription = what.value;
+            });
+            inner.append(what);
+        }
         const input = el('input', 'search');
         input.type = 'search';
         input.placeholder = v.candidates.length ? 'Find an issue from My Day or assigned to you' : 'No open issues in My Day or assigned to you';
         input.value = timerQuery;
-        input.disabled = offline || !v.candidates.length;
+        input.disabled = blocked || !v.candidates.length;
         input.setAttribute('aria-label', 'Find an issue to time');
         input.dataset.focus = 'timer-search';
         const list = el('div');
@@ -525,7 +577,7 @@ function renderTimer(v: TimerView, offline: boolean): void {
                 const b = el('button', 'row-main');
                 b.type = 'button';
                 b.dataset.focus = `start:${c.id}`;
-                b.disabled = offline;
+                b.disabled = blocked;
                 b.append(el('span', 'title', c.label));
                 if (c.in_my_day) {
                     const meta = el('span', 'meta');
@@ -551,10 +603,20 @@ function renderTimer(v: TimerView, offline: boolean): void {
         });
         inner.append(input, list);
         draw();
-        if (offline && hint) inner.append(el('p', 'hint', hint));
+        if (blocked && hint) inner.append(el('p', 'hint', hint));
     }
 
-    if (v.entries) {
+    if (v.today_seconds != null) {
+        // the server's total of finished logs + the running timer, ticking
+        const s = section('Today');
+        const total = el('span', 'total', minutes(Math.floor((v.today_seconds + (t && !t.pending ? t.elapsed_seconds : 0)) / 60)));
+        total.id = 'today-total';
+        total.dataset.logged = String(v.today_seconds);
+        total.dataset.running = t && !t.pending ? String(t.elapsed_seconds) : '';
+        s.append(total);
+        inner.append(s);
+        if (!v.today_seconds && !t) inner.append(el('p', 'hint', 'No time logged today yet.'));
+    } else if (v.entries) {
         const s = section('Today');
         s.append(el('span', 'total', minutes(v.total_minutes)));
         inner.append(s);
@@ -575,8 +637,9 @@ function renderTimer(v: TimerView, offline: boolean): void {
 
 async function startTimer(id: string): Promise<void> {
     try {
-        await invoke('panel_timer_start', { workId: id });
+        await invoke('panel_timer_start', { workId: id, description: timerDescription.trim() || null });
         timerQuery = '';
+        timerDescription = '';
         notice = null;
     } catch (e) {
         showNotice(errorMessage(e), true);
@@ -660,6 +723,8 @@ function render(): void {
     const a = answers.get(tab);
     if (a) banner(a);
     const offline = !!a?.offline;
+    // offline, timer / mark-read work only where the server keeps them for later (newer servers)
+    const blocked = offline && !a?.queue_offline;
     const has = a && (a.today || a.my_day || a.assigned || a.notifications || a.timer);
     if (!has) {
         if (loading > 0 || !a) inner.append(skeleton());
@@ -668,12 +733,11 @@ function render(): void {
     } else if (a.today) renderToday(a.today, a);
     else if (a.my_day) renderMyDay(a.my_day);
     else if (a.assigned) renderAssigned(a.assigned);
-    else if (a.notifications) renderNotifications(a.notifications, offline);
+    else if (a.notifications) renderNotifications(a.notifications, blocked);
     else if (a.timer) {
         if (!a.timer.running) activityPrompt = null;
-        renderTimer(a.timer, offline);
+        renderTimer(a.timer, blocked);
     }
-    // writes are off offline where the API has no sync type for them
     content.scrollTop = scroll;
     if (focused) {
         const again = inner.querySelector<HTMLElement>(`[data-focus="${CSS.escape(focused)}"]`);
@@ -952,10 +1016,14 @@ $('so-button').addEventListener('click', () => void invoke('panel_run', { action
 
 // the running timer ticks
 window.setInterval(() => {
+    const since = (Date.now() - timerLoadedAt) / 1000;
     const c = document.getElementById('clock');
-    if (!c) return;
-    const base = Number(c.dataset.elapsed ?? 0);
-    c.textContent = clock(base + (Date.now() - timerLoadedAt) / 1000);
+    if (c) c.textContent = clock(Number(c.dataset.elapsed ?? 0) + since);
+    const total = document.getElementById('today-total');
+    if (total && total.dataset.running) {
+        const seconds = Number(total.dataset.logged ?? 0) + Number(total.dataset.running) + since;
+        total.textContent = minutes(Math.floor(seconds / 60));
+    }
 }, 1000);
 
 /** Opened (again): new data, the remembered tab on the first open. */

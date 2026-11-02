@@ -308,6 +308,15 @@ select.invalid {
     white-space: nowrap;
 }
 
+/* kept offline: created once the server answers */
+.done.pending .done-mark {
+    background: var(--muted, #8a8a8a);
+}
+
+.done.pending .done-name {
+    white-space: normal;
+}
+
 .done-actions {
     display: flex;
     gap: 8px;
