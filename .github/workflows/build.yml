@@ -1,0 +1,230 @@
+name: Build
+
+# Installers for macOS (universal), Windows (x64, NSIS) and Linux (x64, AppImage + .deb).
+#   - pull request: tests only, no bundles
+#   - tag v*:       tests, bundles, a DRAFT GitHub release with the installers + SHA256SUMS
+#   - manual run:   tests + bundles as workflow artifacts (no release)
+# Signing is optional: every signing step only runs when its secrets exist, so the workflow
+# produces unsigned installers until they are added. See docs/RELEASING.md.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  # whisper.cpp (voice capture) is built from source: portable baseline, see src-tauri/.cargo/config.toml
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (universal)
+            os: macos-14
+            args: --target universal-apple-darwin --bundles app,dmg
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+            artifact: macos
+            bundle-glob: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          - name: Windows (x64)
+            os: windows-2022
+            args: --bundles nsis
+            rust-targets: ""
+            artifact: windows
+            bundle-glob: src-tauri/target/release/bundle/nsis/*.exe
+          - name: Linux (x64)
+            os: ubuntu-22.04
+            args: --bundles deb,appimage
+            rust-targets: ""
+            artifact: linux
+            bundle-glob: |
+              src-tauri/target/release/bundle/deb/*.deb
+              src-tauri/target/release/bundle/appimage/*.AppImage
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      # webkit2gtk-4.1 + ayatana appindicator (tray), librsvg, patchelf (AppImage), libasound2-dev
+      # (cpal / ALSA, voice capture), libdbus-1-dev (keyring). cmake and a C++ compiler are on all runners.
+      - name: Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf libdbus-1-dev pkg-config libasound2-dev libssl-dev xdg-utils
+
+      - uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@1.90.0
+        with:
+          components: clippy
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2.8.0
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked
+
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      # ---- signing: each block runs only when its secrets exist --------------------------------
+      - name: Detect signing secrets
+        id: signing
+        shell: bash
+        env:
+          HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+          HAS_APPLE_NOTARY_ID: ${{ secrets.APPLE_ID != '' && secrets.APPLE_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+          HAS_APPLE_NOTARY_KEY: ${{ secrets.APPLE_API_KEY != '' && secrets.APPLE_API_ISSUER != '' && secrets.APPLE_API_KEY_P8 != '' }}
+          HAS_AZURE: ${{ secrets.AZURE_TENANT_ID != '' && secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_CLIENT_SECRET != '' && secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT != '' && secrets.AZURE_TRUSTED_SIGNING_PROFILE != '' }}
+        run: |
+          {
+            echo "apple=$HAS_APPLE"
+            echo "apple_notary_id=$HAS_APPLE_NOTARY_ID"
+            echo "apple_notary_key=$HAS_APPLE_NOTARY_KEY"
+            echo "azure=$HAS_AZURE"
+          } >> "$GITHUB_OUTPUT"
+
+      # Tauri imports the .p12 into a temporary keychain itself when APPLE_CERTIFICATE is set.
+      - name: macOS signing
+        if: runner.os == 'macOS' && steps.signing.outputs.apple == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          {
+            echo "APPLE_CERTIFICATE<<EOF_CERT"
+            echo "$APPLE_CERTIFICATE"
+            echo "EOF_CERT"
+            echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD"
+            echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY"
+          } >> "$GITHUB_ENV"
+
+      # Notarization (needs the signing above). Option A: Apple ID + app-specific password.
+      - name: macOS notarization (Apple ID)
+        if: runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id == 'true'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          {
+            echo "APPLE_ID=$APPLE_ID"
+            echo "APPLE_PASSWORD=$APPLE_PASSWORD"
+            echo "APPLE_TEAM_ID=$APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
+
+      # Option B: App Store Connect API key (preferred for CI; used when Option A is absent).
+      - name: macOS notarization (API key)
+        if: runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id != 'true' && steps.signing.outputs.apple_notary_key == 'true'
+        shell: bash
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/private_keys"
+          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8"
+          chmod 600 "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8"
+          {
+            echo "APPLE_API_KEY=$APPLE_API_KEY"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
+            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8"
+          } >> "$GITHUB_ENV"
+
+      # Windows: Azure Trusted Signing through trusted-signing-cli, wired up with a config overlay
+      # written here (tauri.conf.json stays unsigned so local builds never need Azure).
+      - name: Windows signing (Azure Trusted Signing)
+        id: winsign
+        if: runner.os == 'Windows' && steps.signing.outputs.azure == 'true'
+        shell: bash
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
+        run: |
+          cargo install trusted-signing-cli --locked
+          printf '{"bundle":{"windows":{"signCommand":"trusted-signing-cli -e %s -a %s -c %s -d Brainitive %%1"}}}' \
+            "$ENDPOINT" "$ACCOUNT" "$PROFILE" > "$RUNNER_TEMP/sign.conf.json"
+          {
+            echo "AZURE_TENANT_ID=$AZURE_TENANT_ID"
+            echo "AZURE_CLIENT_ID=$AZURE_CLIENT_ID"
+            echo "AZURE_CLIENT_SECRET=$AZURE_CLIENT_SECRET"
+          } >> "$GITHUB_ENV"
+          echo "config=$RUNNER_TEMP/sign.conf.json" >> "$GITHUB_OUTPUT"
+
+      # Bundles are not built for pull requests.
+      - name: tauri build
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          SIGN_CONFIG: ${{ steps.winsign.outputs.config }}
+        run: |
+          if [ -n "$SIGN_CONFIG" ]; then
+            npx tauri build ${{ matrix.args }} --config "$SIGN_CONFIG"
+          else
+            npx tauri build ${{ matrix.args }}
+          fi
+
+      - name: Upload installers
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: installers-${{ matrix.artifact }}
+          path: ${{ matrix.bundle-glob }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Draft release
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4.3.0
+        with:
+          path: installers
+          pattern: installers-*
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: installers
+        run: sha256sum * > SHA256SUMS
+
+      # A draft: the owner reviews it and publishes by hand (docs/RELEASING.md).
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" installers/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "Brainitive Desktop $TAG" --notes "See CHANGELOG.md. Unsigned builds show a Gatekeeper / SmartScreen warning."
