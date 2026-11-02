@@ -83,10 +83,28 @@ impl Popup {
         matches!(self, Self::Capture | Self::Switcher | Self::Voice)
     }
 
+    /// Windows that hold the signed-in account's content (typed or transcribed capture text,
+    /// search results, the offline copy): destroyed on sign-out, rebuilt empty on next use
+    /// (BRAI-377). Settings and the voice indicator hold no account data.
+    pub fn holds_account_data(self) -> bool {
+        matches!(self, Self::Capture | Self::Switcher | Self::Offline)
+    }
+
     /// Gone when it loses focus. Not the voice indicator: a recording goes on while the user
     /// clicks elsewhere (its own Stop / Cancel and the shortcut end it).
     pub fn hides_on_blur(self) -> bool {
         matches!(self, Self::Capture | Self::Switcher)
+    }
+}
+
+/// Sign-out / forget (BRAI-377): the bundled windows with the account's content are destroyed
+/// (hidden ones keep their page — the capture text, the switcher's last results — otherwise).
+pub fn close_account_windows(app: &AppHandle) {
+    for popup in Popup::ALL.into_iter().filter(|p| p.holds_account_data()) {
+        if let Some(w) = app.get_webview_window(popup.label()) {
+            let _ = w.destroy();
+        }
+        state(app).lock().popup_return.remove(popup.label());
     }
 }
 
@@ -242,6 +260,12 @@ fn build(app: &AppHandle, popup: Popup) -> tauri::Result<WebviewWindow> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sign_out_closes_the_windows_with_account_data() {
+        let closed: Vec<_> = Popup::ALL.into_iter().filter(|p| p.holds_account_data()).collect();
+        assert_eq!(closed, vec![Popup::Capture, Popup::Switcher, Popup::Offline]);
+    }
+
     use super::*;
 
     #[test]

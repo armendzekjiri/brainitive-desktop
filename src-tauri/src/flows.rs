@@ -561,6 +561,7 @@ pub async fn sign_out(app: &AppHandle) {
     let Some(origin) = state(app).lock().current_origin() else {
         return;
     };
+    clear_account_traces(app);
     state(app).session.sign_out(&origin).await;
     crate::capture::drop_queue(app, &origin);
     crate::offline::wipe(app, &origin);
@@ -580,6 +581,15 @@ pub async fn sign_out(app: &AppHandle) {
     shell::show_local(app, Phase::SignIn, Some(Notice::info("You are signed out.")));
 }
 
+/// BRAI-377: nothing of the account that signs out stays in memory or in a hidden window — a
+/// running voice recording is cancelled, a transcript waiting for quick capture is dropped, and
+/// the quick-capture / switcher / offline windows (their text, last results) are destroyed.
+fn clear_account_traces(app: &AppHandle) {
+    crate::voice::cancel_for_sign_out(app);
+    state(app).lock().capture_prefill = None;
+    crate::popup::close_account_windows(app);
+}
+
 /// "Switch server…": back to the choice, without signing out of the current server.
 pub fn switch_server(app: &AppHandle) {
     state(app).session.cancel_sign_in();
@@ -589,6 +599,9 @@ pub fn switch_server(app: &AppHandle) {
 /// "Forget this server": sign out there, delete its keychain entry and its webview data,
 /// remove it from the recent list.
 pub async fn forget_server(app: &AppHandle, origin: ServerOrigin) {
+    if state(app).lock().current_origin().as_ref() == Some(&origin) {
+        clear_account_traces(app);
+    }
     state(app).session.sign_out(&origin).await;
     crate::capture::drop_queue(app, &origin);
     crate::offline::wipe(app, &origin);

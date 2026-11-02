@@ -724,6 +724,16 @@ pub fn model_status(app: &AppHandle) -> ModelStatus {
     }
 }
 
+/// Sign-out / forget (BRAI-377): a recording or transcription in progress is dropped (its text
+/// never reaches the quick-capture window), and the indicator closes without hiding the app.
+pub fn cancel_for_sign_out(app: &AppHandle) {
+    state(app).lock().popup_return.remove(Popup::Voice.label());
+    if voice(app).lock().recorder.busy() {
+        feed(app, Input::Cancel);
+        log::info!("voice: recording dropped at sign-out");
+    }
+}
+
 /// Settings turned voice capture off: a recording in progress is dropped.
 pub fn turned_off(app: &AppHandle) {
     if voice(app).lock().recorder.busy() {
