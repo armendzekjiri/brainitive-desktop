@@ -9,7 +9,7 @@
 //!   reuse and revoke the device). The new refresh token is written to the keychain before the
 //!   new access token is used.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -129,6 +129,8 @@ struct Pending {
     origin: ServerOrigin,
     pkce: PkcePair,
     started: Instant,
+    /// The origin's session generation when the sign-in began.
+    generation: u64,
 }
 
 struct Access {
@@ -136,10 +138,58 @@ struct Access {
     expires_at: Instant,
 }
 
+/// The session epoch (codex review, finding 3): per origin, a generation that every sign-out
+/// and every completed sign-in moves on, and whether a sign-out began. A refresh or a sign-in
+/// that started under an older generation, or for an origin that is signing out, never stores
+/// tokens. One mutex, never held across an `.await`.
+#[derive(Default)]
+struct Control {
+    pending: Option<Pending>,
+    generation: HashMap<ServerOrigin, u64>,
+    /// A sign-out began: no token is handed out or stored until a sign-in completes.
+    closed: HashSet<ServerOrigin>,
+}
+
+impl Control {
+    fn generation(&self, origin: &ServerOrigin) -> u64 {
+        self.generation.get(origin).copied().unwrap_or(0)
+    }
+}
+
+#[derive(Default)]
+struct Tokens {
+    access: HashMap<ServerOrigin, Access>,
+    /// An access token a refresh got after the sign-out began (it was not stored): the sign-out
+    /// uses it to revoke the device.
+    orphans: HashMap<ServerOrigin, String>,
+}
+
+/// What the server said to "sign this device out".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Remote {
+    /// `POST /auth/logout` succeeded: the device is revoked.
+    Revoked,
+    /// The stored sign-in was already dead on the server (revoked, expired): nothing to revoke.
+    AlreadyEnded,
+    /// The server could not be reached or refused: the device may still be signed in there.
+    NotConfirmed,
+}
+
+/// The result of [`Session::sign_out`]: what is gone for sure, what may be left.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignOutReport {
+    pub remote: Remote,
+    /// The keychain entry is gone (or a newer sign-in owns it now).
+    pub keychain_deleted: bool,
+}
+
+/// How often a refused keychain deletion is tried again during one sign-out.
+const DELETE_TRIES: u32 = 3;
+
 pub struct Session {
     api: ApiClient,
-    pending: std::sync::Mutex<Option<Pending>>,
-    tokens: Mutex<HashMap<ServerOrigin, Access>>,
+    control: std::sync::Mutex<Control>,
+    tokens: Mutex<Tokens>,
 }
 
 impl Default for Session {
@@ -152,8 +202,8 @@ impl Session {
     pub fn new(api: ApiClient) -> Self {
         Self {
             api,
-            pending: std::sync::Mutex::new(None),
-            tokens: Mutex::new(HashMap::new()),
+            control: std::sync::Mutex::new(Control::default()),
+            tokens: Mutex::new(Tokens::default()),
         }
     }
 
@@ -161,27 +211,33 @@ impl Session {
         &self.api
     }
 
+    fn control(&self) -> std::sync::MutexGuard<'_, Control> {
+        self.control.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Starts a sign-in for `origin` and returns the browser URL. A previous unfinished
     /// sign-in is replaced (its callback will then fail the state check).
     pub fn begin_sign_in(&self, origin: &ServerOrigin, instance: &InstanceInfo) -> Url {
         let pkce = PkcePair::generate();
         let url = authorize_url(origin, instance, &pkce, &device_name());
-        *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = Some(Pending {
+        let mut control = self.control();
+        let generation = control.generation(origin);
+        control.pending = Some(Pending {
             origin: origin.clone(),
             pkce,
             started: Instant::now(),
+            generation,
         });
         url
     }
 
     pub fn cancel_sign_in(&self) {
-        self.pending.lock().unwrap_or_else(|e| e.into_inner()).take();
+        self.control().pending.take();
     }
 
     pub fn sign_in_pending_for(&self) -> Option<ServerOrigin> {
-        self.pending
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
+        self.control()
+            .pending
             .as_ref()
             .filter(|p| p.started.elapsed() < PENDING_TTL)
             .map(|p| p.origin.clone())
@@ -189,24 +245,40 @@ impl Session {
 
     /// `brainitive://auth/callback?error=…&state=…`: ends the pending sign-in if the state is ours.
     pub fn fail_sign_in(&self, state: Option<&str>) -> bool {
-        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        let ours = matches!((pending.as_ref(), state), (Some(p), Some(s)) if state_matches(&p.pkce.state, s));
+        let mut control = self.control();
+        let ours = matches!((control.pending.as_ref(), state), (Some(p), Some(s)) if state_matches(&p.pkce.state, s));
         if ours {
-            pending.take();
+            control.pending.take();
         }
         ours
     }
 
+    /// Whether credentials that `generation` produced may still be stored for `origin`. A
+    /// completed sign-in (`sign_in`) reopens a closed origin and starts a new generation.
+    fn claim(&self, origin: &ServerOrigin, generation: u64, sign_in: bool) -> bool {
+        let mut control = self.control();
+        if control.generation(origin) != generation {
+            return false;
+        }
+        if sign_in {
+            control.closed.remove(origin);
+            *control.generation.entry(origin.clone()).or_insert(0) += 1;
+            return true;
+        }
+        !control.closed.contains(origin)
+    }
+
     /// `brainitive://auth/callback?code=…&state=…`: checks the state (single use: the pending
-    /// sign-in is consumed either way), exchanges the code and stores the tokens.
+    /// sign-in is consumed either way), exchanges the code and stores the tokens — unless the
+    /// user signed out of that server while the exchange ran (the new device is revoked then).
     pub async fn complete_sign_in(&self, code: &str, state: &str) -> Result<ServerOrigin, SessionError> {
         let pending = {
-            let mut guard = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-            match guard.as_ref() {
+            let mut control = self.control();
+            match control.pending.as_ref() {
                 None => return Err(SessionError::NoPendingSignIn),
                 // a forged or stale link must not cancel the real sign-in in progress
                 Some(p) if !state_matches(&p.pkce.state, state) => return Err(SessionError::StateMismatch),
-                Some(_) => guard.take().expect("checked above"),
+                Some(_) => control.pending.take().expect("checked above"),
             }
         };
         if pending.started.elapsed() > PENDING_TTL {
@@ -224,12 +296,22 @@ impl Session {
             .exchange(&pending.origin, code, &pending.pkce.verifier, &device)
             .await?;
         let mut tokens = self.tokens.lock().await;
+        if !self.claim(&pending.origin, pending.generation, true) {
+            drop(tokens);
+            log::info!("sign-in finished after a sign-out: its tokens are not kept");
+            let _ = tokio::time::timeout(LOGOUT_TIMEOUT, self.api.logout(&pending.origin, &pair.access_token)).await;
+            return Err(SessionError::Cancelled);
+        }
         self.store_pair(&pending.origin, pair, &mut tokens).await?;
         Ok(pending.origin)
     }
 
-    /// Whether a refresh token is stored for `origin` (one keychain read).
+    /// Whether a refresh token is stored for `origin` (one keychain read). `false` while a
+    /// sign-out of it runs or ran (until the next sign-in).
     pub async fn has_stored_sign_in(&self, origin: &ServerOrigin) -> bool {
+        if self.control().closed.contains(origin) {
+            return false;
+        }
         let origin = origin.clone();
         tauri::async_runtime::spawn_blocking(move || secrets::load_refresh_token(&origin))
             .await
@@ -242,7 +324,10 @@ impl Session {
     /// A valid access token for `origin`, refreshing (serialized) when needed.
     pub async fn access_token(&self, origin: &ServerOrigin) -> Result<String, SessionError> {
         let mut tokens = self.tokens.lock().await;
-        if let Some(access) = tokens.get(origin) {
+        if self.control().closed.contains(origin) {
+            return Err(signed_out());
+        }
+        if let Some(access) = tokens.access.get(origin) {
             if access.expires_at > Instant::now() + REFRESH_MARGIN {
                 return Ok(access.token.clone());
             }
@@ -256,12 +341,15 @@ impl Session {
         self.refresh_locked(origin, &mut tokens).await
     }
 
-    async fn refresh_locked(
-        &self,
-        origin: &ServerOrigin,
-        tokens: &mut HashMap<ServerOrigin, Access>,
-    ) -> Result<String, SessionError> {
-        tokens.remove(origin);
+    async fn refresh_locked(&self, origin: &ServerOrigin, tokens: &mut Tokens) -> Result<String, SessionError> {
+        let generation = {
+            let control = self.control();
+            if control.closed.contains(origin) {
+                return Err(signed_out());
+            }
+            control.generation(origin)
+        };
+        tokens.access.remove(origin);
         let o = origin.clone();
         let stored = tauri::async_runtime::spawn_blocking(move || secrets::load_refresh_token(&o))
             .await
@@ -270,6 +358,12 @@ impl Session {
             return Err(SessionError::SignedOut("Please sign in.".into()));
         };
         match self.api.refresh(origin, &refresh_token).await {
+            // a sign-out began while the refresh ran: nothing is stored, the sign-out revokes
+            // the device with this token
+            Ok(pair) if !self.claim(origin, generation, false) => {
+                tokens.orphans.insert(origin.clone(), pair.access_token);
+                Err(signed_out())
+            }
             Ok(pair) => self.store_pair(origin, pair, tokens).await,
             Err(e) => {
                 let e = SessionError::from(e);
@@ -287,7 +381,7 @@ impl Session {
         &self,
         origin: &ServerOrigin,
         pair: TokenPair,
-        tokens: &mut HashMap<ServerOrigin, Access>,
+        tokens: &mut Tokens,
     ) -> Result<String, SessionError> {
         let o = origin.clone();
         let refresh = pair.refresh_token.clone();
@@ -295,7 +389,7 @@ impl Session {
             .await
             .map_err(|e| SessionError::Keychain(e.to_string()))??;
         let ttl = Duration::from_secs(pair.expires_in.clamp(30, 24 * 3600));
-        tokens.insert(
+        tokens.access.insert(
             origin.clone(),
             Access {
                 token: pair.access_token.clone(),
@@ -320,7 +414,7 @@ impl Session {
 
     /// Whether an access token for `origin` is in memory (no keychain read, no network).
     pub async fn has_access_token(&self, origin: &ServerOrigin) -> bool {
-        self.tokens.lock().await.contains_key(origin)
+        self.tokens.lock().await.access.contains_key(origin) && !self.control().closed.contains(origin)
     }
 
     /// The one-time URL that signs the webview in, optionally landing on `to` (a path).
@@ -341,32 +435,118 @@ impl Session {
         Ok(url)
     }
 
-    /// Signs this device out on the server (best effort) and forgets its tokens locally.
-    pub async fn sign_out(&self, origin: &ServerOrigin) {
+    /// Signs this device out of `origin`: first the session epoch moves on (no refresh or
+    /// sign-in still running can store a token from now on, and none is handed out), then the
+    /// server revokes the device (bounded), then the keychain entry goes (tried again when the
+    /// keychain refuses). Reports what could not be done instead of claiming success.
+    pub async fn sign_out(&self, origin: &ServerOrigin) -> SignOutReport {
+        let generation = {
+            let mut control = self.control();
+            let generation = control.generation.entry(origin.clone()).or_insert(0);
+            *generation += 1;
+            let generation = *generation;
+            control.closed.insert(origin.clone());
+            if control.pending.as_ref().is_some_and(|p| &p.origin == origin) {
+                control.pending.take();
+            }
+            generation
+        };
+        // waits for a refresh / sign-in that is storing right now; afterwards none can
         let token = {
             let mut tokens = self.tokens.lock().await;
-            match tokens.remove(origin) {
-                Some(a) if a.expires_at > Instant::now() => Some(a.token),
-                // still revoke the device on the server: one refresh just to log out
-                _ => self.refresh_locked(origin, &mut tokens).await.ok().inspect(|_| {
-                    tokens.remove(origin);
-                }),
+            let orphan = tokens.orphans.remove(origin);
+            match tokens.access.remove(origin) {
+                Some(a) if a.expires_at > Instant::now() => Ok(a.token),
+                _ => match orphan {
+                    Some(token) => Ok(token),
+                    // still revoke the device on the server: one refresh just to log out (the
+                    // rotated token is never stored; the old one is dead after the rotation)
+                    None => self.refresh_for_logout(origin).await,
+                },
             }
         };
-        if let Some(token) = token {
-            let _ = tokio::time::timeout(Duration::from_secs(8), self.api.logout(origin, &token)).await;
+        let remote = match token {
+            Ok(token) => match tokio::time::timeout(LOGOUT_TIMEOUT, self.api.logout(origin, &token)).await {
+                Ok(Ok(())) => Remote::Revoked,
+                Ok(Err(ApiError::Unauthorized { .. })) => Remote::AlreadyEnded,
+                _ => Remote::NotConfirmed,
+            },
+            Err(remote) => remote,
+        };
+        let keychain_deleted = {
+            let mut tokens = self.tokens.lock().await;
+            if self.control().generation(origin) != generation {
+                // a sign-in completed after this sign-out began: its credentials stay
+                true
+            } else {
+                tokens.access.remove(origin);
+                tokens.orphans.remove(origin);
+                delete_with_retries(origin).await
+            }
+        };
+        SignOutReport {
+            remote,
+            keychain_deleted,
         }
-        let o = origin.clone();
-        let _ = tauri::async_runtime::spawn_blocking(move || secrets::delete_refresh_token(&o)).await;
-        self.cancel_sign_in_for(origin);
     }
 
-    fn cancel_sign_in_for(&self, origin: &ServerOrigin) {
-        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        if pending.as_ref().is_some_and(|p| &p.origin == origin) {
-            pending.take();
+    /// A fresh access token only to call `/auth/logout` (not stored anywhere). `Err`: what that
+    /// means for the device on the server.
+    async fn refresh_for_logout(&self, origin: &ServerOrigin) -> Result<String, Remote> {
+        let o = origin.clone();
+        let stored = tauri::async_runtime::spawn_blocking(move || secrets::load_refresh_token(&o))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+        let Some(refresh_token) = stored else {
+            return Err(Remote::NotConfirmed);
+        };
+        match self.api.refresh(origin, &refresh_token).await {
+            Ok(pair) => Ok(pair.access_token),
+            Err(e) => match SessionError::from(e) {
+                SessionError::SignedOut(_) => Err(Remote::AlreadyEnded),
+                _ => Err(Remote::NotConfirmed),
+            },
         }
     }
+
+    /// The keychain entry of `origin` only (another try after a failed sign-out cleanup).
+    pub async fn delete_stored_sign_in(&self, origin: &ServerOrigin) -> bool {
+        let _tokens = self.tokens.lock().await;
+        if !self.control().closed.contains(origin) {
+            // signed in again meanwhile: that sign-in's entry stays
+            return true;
+        }
+        delete_with_retries(origin).await
+    }
+
+    /// Marks `origin` as signed out without a network call (a cleanup left from an earlier run):
+    /// nothing is restored from a keychain entry that could not be deleted yet.
+    pub fn close(&self, origin: &ServerOrigin) {
+        self.control().closed.insert(origin.clone());
+    }
+}
+
+const LOGOUT_TIMEOUT: Duration = Duration::from_secs(8);
+
+fn signed_out() -> SessionError {
+    SessionError::SignedOut("You signed out of this server.".into())
+}
+
+async fn delete_with_retries(origin: &ServerOrigin) -> bool {
+    for attempt in 0..DELETE_TRIES {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let o = origin.clone();
+        match tauri::async_runtime::spawn_blocking(move || secrets::delete_refresh_token(&o)).await {
+            Ok(Ok(())) => return true,
+            Ok(Err(e)) => log::warn!("keychain entry not deleted (try {}): {e}", attempt + 1),
+            Err(e) => log::warn!("keychain entry not deleted (try {}): {e}", attempt + 1),
+        }
+    }
+    false
 }
 
 pub fn authorize_url(origin: &ServerOrigin, instance: &InstanceInfo, pkce: &PkcePair, device: &str) -> Url {
@@ -559,5 +739,135 @@ mod tests {
     #[test]
     fn device_name_is_never_empty() {
         assert!(!device_name().is_empty());
+    }
+
+    // ── the session epoch (codex review, finding 3) ─────────────────────────────
+
+    use crate::testing::{tokens, FakeServer};
+
+    fn session_for(_server: &FakeServer) -> std::sync::Arc<Session> {
+        std::sync::Arc::new(Session::new(ApiClient::loopback()))
+    }
+
+    const REFRESH: &str = "/api/v1/auth/refresh";
+    const EXCHANGE: &str = "/api/v1/auth/exchange";
+    const LOGOUT: &str = "/api/v1/auth/logout";
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_refresh_that_finishes_after_the_sign_out_began_stores_nothing() {
+        let server = FakeServer::start().await;
+        let origin = server.origin.clone();
+        crate::secrets::fake::store(&origin, "brr_0").unwrap();
+        server.reply(REFRESH, 200, tokens(1));
+        server.reply(LOGOUT, 204, serde_json::json!({}));
+        server.hold(REFRESH);
+        let session = session_for(&server);
+
+        // a native window asks for a token: the refresh is on the wire
+        let s = session.clone();
+        let o = origin.clone();
+        let refresh = tokio::spawn(async move { s.access_token(&o).await });
+        server.arrived(REFRESH).await;
+        // the user signs out meanwhile
+        let s = session.clone();
+        let o = origin.clone();
+        let sign_out = tokio::spawn(async move { s.sign_out(&o).await });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        server.release(REFRESH);
+
+        assert!(matches!(refresh.await.unwrap(), Err(SessionError::SignedOut(_))));
+        let report = sign_out.await.unwrap();
+        assert_eq!(report.remote, Remote::Revoked, "the refreshed token revoked the device");
+        assert!(report.keychain_deleted);
+        assert_eq!(
+            crate::secrets::fake::peek(&origin),
+            None,
+            "nothing restored in the keychain"
+        );
+        assert!(!session.has_access_token(&origin).await, "nothing restored in memory");
+        assert!(matches!(
+            session.access_token(&origin).await,
+            Err(SessionError::SignedOut(_))
+        ));
+        assert_eq!(server.hits(REFRESH).len(), 1, "no new refresh after the sign-out");
+        assert_eq!(server.hits(LOGOUT)[0].bearer.as_deref(), Some("bra_1"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sign_in_that_completes_after_the_sign_out_stores_nothing() {
+        let server = FakeServer::start().await;
+        let origin = server.origin.clone();
+        server.reply(EXCHANGE, 200, tokens(7));
+        server.reply(LOGOUT, 204, serde_json::json!({}));
+        server.hold(EXCHANGE);
+        let session = session_for(&server);
+        let info = InstanceInfo {
+            name: "Fake".into(),
+            ..Default::default()
+        };
+        let url = session.begin_sign_in(&origin, &info);
+        let state: String = url.query_pairs().find(|(k, _)| k == "state").unwrap().1.into_owned();
+
+        // the browser came back; the code is being exchanged …
+        let s = session.clone();
+        let complete = tokio::spawn(async move { s.complete_sign_in("code", &state).await });
+        server.arrived(EXCHANGE).await;
+        // … and the user signs out before it answered
+        let report = session.sign_out(&origin).await;
+        assert_eq!(report.remote, Remote::NotConfirmed, "nothing to revoke yet");
+        server.release(EXCHANGE);
+
+        assert!(matches!(complete.await.unwrap(), Err(SessionError::Cancelled)));
+        assert_eq!(
+            crate::secrets::fake::peek(&origin),
+            None,
+            "the new pair never reached the keychain"
+        );
+        assert!(!session.has_access_token(&origin).await);
+        assert!(!session.has_stored_sign_in(&origin).await);
+        // the device the late exchange created is revoked with its own token
+        assert_eq!(server.hits(LOGOUT)[0].bearer.as_deref(), Some("bra_7"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn no_token_is_handed_out_while_the_sign_out_runs_and_a_new_sign_in_works() {
+        let server = FakeServer::start().await;
+        let origin = server.origin.clone();
+        crate::secrets::fake::store(&origin, "brr_0").unwrap();
+        server.reply(REFRESH, 200, tokens(1));
+        server.reply(LOGOUT, 204, serde_json::json!({}));
+        server.hold(LOGOUT);
+        let session = session_for(&server);
+
+        let s = session.clone();
+        let o = origin.clone();
+        let sign_out = tokio::spawn(async move { s.sign_out(&o).await });
+        server.arrived(LOGOUT).await;
+        // the logout is on the wire: a request now gets no token (and starts no refresh)
+        assert!(matches!(
+            session.access_token(&origin).await,
+            Err(SessionError::SignedOut(_))
+        ));
+        assert!(matches!(
+            session.refresh(&origin).await,
+            Err(SessionError::SignedOut(_))
+        ));
+        assert!(!session.has_stored_sign_in(&origin).await);
+        server.release(LOGOUT);
+        let report = sign_out.await.unwrap();
+        assert_eq!(report.remote, Remote::Revoked);
+        assert_eq!(server.hits(REFRESH).len(), 1, "only the sign-out's own refresh");
+
+        // signing in again afterwards stores the new pair
+        server.reply(EXCHANGE, 200, tokens(2));
+        let info = InstanceInfo {
+            name: "Fake".into(),
+            ..Default::default()
+        };
+        let url = session.begin_sign_in(&origin, &info);
+        let state: String = url.query_pairs().find(|(k, _)| k == "state").unwrap().1.into_owned();
+        assert_eq!(session.complete_sign_in("code", &state).await.unwrap(), origin);
+        assert_eq!(crate::secrets::fake::peek(&origin).as_deref(), Some("brr_2"));
+        assert_eq!(session.access_token(&origin).await.unwrap(), "bra_2");
     }
 }

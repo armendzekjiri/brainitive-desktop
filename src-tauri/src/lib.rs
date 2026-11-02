@@ -39,6 +39,8 @@ pub mod shortcuts;
 pub mod startup;
 pub mod state;
 pub mod switcher;
+#[cfg(test)]
+mod testing;
 pub mod tray;
 pub mod updater;
 pub mod version;
