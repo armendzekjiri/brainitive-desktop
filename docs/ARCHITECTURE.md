@@ -3,7 +3,7 @@
 Brainitive Desktop is a **Tauri 2** shell: a main window that shows either a few bundled
 screens (connect a server, sign in) or the user's Brainitive server — the full web app, loaded
 remotely — plus extra app windows with pages of that server, and small **bundled native windows**
-(quick capture, quick switcher, settings) that talk to the server only through Rust. The native
+(quick capture, quick switcher, settings, the offline view) that talk to the server only through Rust. The native
 layer adds what a browser tab can't: system-browser sign-in with keychain storage, deep links,
 native menus, global shortcuts, a tray / menu-bar icon, native notifications and the badge, a
 Save dialog for downloads and launch at login. Server contract:
@@ -16,13 +16,15 @@ desktop/
 │   ├── capture.ts              quick capture (capture.html, window "capture")
 │   ├── switcher.ts             quick switcher (switcher.html, window "switcher")
 │   ├── settings.ts             Settings (settings.html, window "settings")
-│   └── native.ts/.css, popup.css   shared by the three native windows
+│   ├── offline.ts, offline.css the offline view (offline.html, window "offline", BRAI-366)
+│   └── native.ts/.css, popup.css   shared by the native windows
 ├── public/logo.png
 └── src-tauri/
     ├── tauri.conf.json         id app.brainitive.desktop, CSP, deep-link scheme, macOS ≥ 14
     ├── build.rs                app ACL manifest (every command needs a permission)
     ├── capabilities/           one file per bundled window, local origin + its own window only:
-    │                           local.json (main), settings.json, capture.json, switcher.json
+    │                           local.json (main), settings.json, capture.json, switcher.json,
+    │                           offline.json
     ├── src/
     │   ├── lib.rs              plugins, commands, menu, deep-link + notification wiring, run loop
     │   ├── server.rs           ServerOrigin: typed address → origin, TLS rule, store ids   (pure)
@@ -38,6 +40,8 @@ desktop/
     │   ├── settings.rs         settings.json: servers, pending wipes, Preferences, zoom steps (pure)
     │   ├── shortcuts.rs        global shortcut defaults, parsing, rules, labels              (pure)
     │   ├── queue.rs            offline quick-capture queue (capture-queue.json)              (pure)
+    │   ├── offline_cache.rs    offline copy from the sync feed: runs, tombstones, view model (pure)
+    │   ├── outbox.rs           offline changes for POST /api/v1/sync, result handling       (pure)
     │   ├── poll.rs             tray polling: backoff, wake detection, plan, clock            (pure)
     │   ├── badge.rs            Windows overlay badge bitmap                                  (pure)
     │   ├── api.rs              reqwest client for /api/v1 (instance, auth, and ApiRequest for any
@@ -51,6 +55,7 @@ desktop/
     │   ├── popup.rs            bundled windows: build / show / dismiss, caller check
     │   ├── hotkeys.rs          global shortcut registration (action registry)
     │   ├── capture.rs          quick-capture commands, queue flush, open_quick_capture(prefill)
+    │   ├── offline.rs          offline mode: files per server, sync, the offline window's commands
     │   ├── switcher.rs         quick-switcher commands (search, open, copy snippet, timer)
     │   ├── tray.rs             tray menu model + icon, the poller, My Day / timer actions
     │   ├── downloads.rs        staging + Save As dialog, unique names
@@ -145,6 +150,7 @@ the main frame on the bundled screens and the current origin. The user agent end
 | `capture` | `capture.html` | default | `capabilities/capture.json` |
 | `switcher` | `switcher.html` | default | `capabilities/switcher.json` |
 | `settings` | `settings.html` | default | `capabilities/settings.json` |
+| `offline` | `offline.html` (BRAI-366) | default | `capabilities/offline.json` |
 
 App windows share one navigation / page-load guard, downloads handler, user agent and zoom level;
 switching server, signing out or forgetting closes the `app-<n>` windows. The bundled windows are
@@ -210,6 +216,50 @@ sends `If-None-Match` when the last answer had an ETag. The poller also sets the
 the capture queue. Badge: macOS dock, Linux Unity launcher, Windows taskbar overlay icon
 (`badge.rs`); macOS also shows the count next to the menu-bar icon. "Keep running in the menu bar /
 tray" (default on): closing the main window hides it; the dock / tray brings it back.
+
+## Offline mode (BRAI-366)
+
+**The web's own offline mode** (BRAI-82: `public/sw.js` serves a cached `/offline` shell that reads
+IndexedDB; opt-in per browser profile, "Work offline on this device") **works inside WKWebView**:
+probed on macOS 26 with a `WKWebsiteDataStore(forIdentifier:)` store on the Cloud origin and on
+`http://localhost:8000` (`navigator.serviceWorker` present, `/sw.js` registers, activates and controls
+a reload, Cache API + IndexedDB work). Each server's data store is its own profile, so a user who
+turns it on in the desktop app gets it there ("Use the web app offline"). WebView2 supports service
+workers; WebKitGTK depends on the build (untested).
+
+**The native offline view** covers everyone else (the web's mode is off by default), a cold start
+without network and the tray. Rust keeps a copy of the user's own data per server and user, and the
+bundled `offline` window shows it:
+
+- **Cache** (`offline_cache.rs`, `<app local data>/offline/<store id>/cache.json`): records `work`,
+  `task_list`, `task`, `capture`, `my_day` from `GET /api/v1/sync/changes`. No cursor → a full run
+  (`scopes=work,task_lists,my_day,captures`, `task_lists=` the lists of the user's open list tasks +
+  the lists already kept, ≤ 50, `limit=100`): pages while `has_more`, then everything the run didn't
+  send goes and the last `next_cursor` is kept. Later: delta runs (upserts by `updated_at`, the
+  overlap of 10 s is harmless; `op: delete` tombstones drop). After every page, records of projects not
+  in `project_ids` drop (lost access). Only the newest My Day is kept. A list that is wanted but not in
+  the cursor's `task_lists` starts a full run; lists that went away don't (no churn). ≤ 200 pages per sync.
+- **Outbox** (`outbox.rs`, `outbox.json` next to it, ≤ 1000): `work.done` (with `base.fields.done`),
+  `my_day.add`, `list_task.create`, `list_task.update` (`base.fields` title / status),
+  `capture.create`, each with its own `request_id`. Unsent changes fold together (tick + untick =
+  nothing; an edit of an unsent new task changes its create); a change that went out once is never
+  edited, the next one is based on its value. Sent in order, ≤ 50 per `POST /api/v1/sync`; per
+  result: applied / conflict → done (a conflict is listed with mine / theirs: the server's value
+  stayed), deleted / forbidden / invalid → dropped and listed **with the user's text**, waiting →
+  kept (dropped after 5 tries), rate_limited / error → kept, stop. A batch refused with a 4xx is
+  sent one by one; a single change refused is dropped and listed. Nothing 4xx is retried forever.
+- **Sync** (`offline.rs`): `GET /me` once per session — another account's cache / outbox are deleted
+  first — then the outbox, then the feed. Runs after every tray poll while in the app, on **Sync now**
+  (tray, window; when the server answers while the unreachable screen is up, the app reconnects too)
+  and right after each change made in the window. One at a time (a request during a run runs it once
+  more); a sign-out during a run stops it from writing anything back (`epoch`). Files are written
+  outside the state lock, newest generation wins, 0600, atomic.
+- **Status**: the window title gets " (offline)" (unreachable screen, or the poller can't reach the
+  server); the tray shows "Offline — N changes will sync" / "N changes waiting to sync", **Open
+  Offline View…** and **Sync Now**; a notification says when queued changes were sent and when some
+  could not be applied (click → the offline window).
+- **Deleted** on sign-out, forget, and when another account signs in on the same server. Switching
+  servers keeps each server's files.
 
 ## Downloads and files (BRAI-363)
 

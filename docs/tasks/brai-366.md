@@ -60,4 +60,49 @@ What it does not cover, and what this card adds natively:
 
 ## Result
 
-(filled in at the end)
+**Built** (commits `5dfb107`, `3c40107`, `3f6716f`, `91619d7`, + docs):
+- `offline_cache.rs`, `outbox.rs` (pure, unit tested), `offline.rs` (files, sync, commands).
+- Offline window `offline.html` / `src/offline.ts` / `src/offline.css`: status banner (offline /
+  syncing / up to date / N waiting, "synced 3 min ago"), Sync now, Open Brainitive; tabs My Day,
+  My Work (+ My Day), Task lists (add, tick, rename by double-click or "Rename"), Captures (add,
+  inbox), "Needs a look" (problems with the user's text, Copy my text, Dismiss / Dismiss all).
+- `capabilities/offline.json` + 9 `offline_*` commands (build.rs), `tests/capabilities.rs` covers it
+  (and that no other window gets them). Main window: `open_offline` now opens the offline window,
+  `open_web_offline` = the old behaviour ("Use the web app offline").
+- Tray: offline line, Open Offline View…, Sync Now, tooltip; title "(offline)"; notifications
+  (sent / need a look → click opens the window). Poller: sync after every successful poll.
+- Sign-out, forget, account switch delete `offline/<store id>/`.
+
+**Tests**: 144 lib tests (+26: cache runs / reset / tombstones / project_ids / My Day / list choice /
+overlay / applied patching / persistence; outbox mutations JSON / folding / bases / order / bound /
+verdicts / per-change results / waiting give-up / batch errors / persistence; files per server and
+write order; clearing on sign-out and account switch; tray offline entries) + 4 capability tests.
+`cargo clippy --all-targets -D warnings` clean, `npm run build` ok.
+
+**Not verified**
+- No end-to-end sync: the local dev database has no `sync_tombstones` table yet (the routes answer
+  401 unauthenticated, so they exist). **Manual check after `php artisan migrate`**: sign in, wait a
+  minute (full run), stop the server, Open offline, tick / add / rename / capture, start the server,
+  Sync now → the notification, the web shows the changes; edit a task title on the web while
+  offline here → a conflict with mine / theirs.
+- The offline window was not clicked through in a running app: the user's debug Brainitive.app was
+  running (single instance), and it was not quit.
+- Windows / Linux: nothing run. 0600 is Unix only (Windows relies on the profile ACL); WebView2 /
+  WebKitGTK service workers, the window, tray labels and notification clicks are untested.
+
+**API gaps / questions** (not changed here)
+1. No way to ask which task lists a user works in: the feed needs explicit `task_lists` ids. The app
+   keeps the lists of the user's assigned open list tasks (+ those already kept). Pins are per
+   workspace (`/me/navigation`, one call each); a "my lists" set (pinned / recently opened, all
+   workspaces) would help.
+2. Changing `task_lists` restarts the run for **all** scopes (full download). An additive list
+   change, or a cursor per scope, would be cheaper.
+3. The `entity` of `work.done` / `list_task.*` results is the web engine's snapshot, not the API's
+   Task / Work item resource, so it can't replace a cached record; the app patches done / title and
+   waits for the next pull.
+4. The feed's `task_list` records carry no `can` (manage_items): the offline view can't hide "Add
+   task" for viewers; they learn it as `forbidden` on sync.
+5. Does a `work.done` change re-send the `my_day` record (its items' `done`)? Unclear from API.md;
+   the app patches its My Day copy locally.
+6. `captures` sends every state; the offline view only needs the inbox — a state filter would keep
+   the cache small.

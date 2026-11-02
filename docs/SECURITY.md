@@ -4,7 +4,7 @@ Brainitive Desktop shows a **remote** web app (the user's Brainitive server) ins
 shell that can touch the OS. The main risk is remote content getting native powers it should
 not have. Cards: BRAI-351 (remote IPC, CSP, navigation guard), BRAI-428 (app API security),
 phase 05: BRAI-359 / 360 / 361 / 362 / 363 / 364 / 401 (native windows, global shortcuts, tray,
-downloads, autostart).
+downloads, autostart), BRAI-366 (offline copy and outbox).
 
 ## Assets
 
@@ -16,6 +16,8 @@ downloads, autostart).
 | Web session cookie of the server | The webview's data store **for that server** (macOS 14+: `WKWebsiteDataStore(forIdentifier:)`; Windows / Linux: a data directory per server). |
 | Settings (current server, ≤ 5 recent servers, preferences: shortcuts, tray, downloads, zoom) | `settings.json` in the app config dir. No secrets. |
 | Quick captures waiting to be sent (text, link, type, server origin, request id) | `capture-queue.json` in the app's local data dir, **plain text** (like the webview's own cache), only while offline; deleted per server on sign-out / forget. |
+| Offline copy of the user's own data (BRAI-366): open work assigned to them, today's My Day, the kept task lists with their tasks, the private capture inbox, the account id and name, the sync cursor | `offline/<store id>/cache.json` in the app's local data dir, **plain JSON**, mode 0600, per server; no token, no cookie. Deleted on sign-out, forget and when another account signs in on that server. |
+| Offline changes waiting to be sent, and changes the server refused (with the user's text) | `offline/<store id>/outbox.json` next to it, same rules; refused ones until the user dismisses them. |
 | Downloads waiting for the Save dialog | `<app cache>/downloads/<uuid>/`, deleted on cancel and at start. |
 | Login item (launch at login) | macOS LaunchAgent plist / Windows Run registry key / Linux autostart `.desktop` file, written only when the user turns it on. |
 
@@ -77,6 +79,40 @@ start timers, change shortcuts, register a login item) reachable from the wrong 
   the current origin; opening one re-validates it in Rust (`links::resolve_on_instance`).
 - No plugin's JavaScript API is granted to any webview (global-shortcut, autostart, dialog,
   clipboard, fs, opener, notification): the plugins are used from Rust only.
+
+## The offline window and the offline copy (BRAI-366)
+
+Threat: the offline copy leaks (local data at rest), reaches the wrong account, or the offline
+window becomes a way to call the API.
+
+- **Window**: `offline.html`, label `offline`, its own `capabilities/offline.json` (`local: true`, no
+  `remote`, `windows: ["offline"]`, only `allow-offline-*` + listening for events). Every command
+  checks the caller (`popup::ensure_caller`). It renders with `textContent` only; it has no links that
+  navigate, and the same navigation guard as the other bundled windows. It only gets the event
+  `offline://changed`, emitted to that window.
+- **No token** reaches it: it reads the view model and hands over fixed changes (`offline_set_done
+  {work_id, done}`, `offline_my_day_add`, `offline_add_task`, `offline_update_task`, `offline_add_capture`,
+  `offline_sync_now`, `offline_dismiss_problem`, `offline_open_app`). Rust checks them against the cache
+  (work ids `issue:<digits>` / `task:<digits>`, list and task ids that are in the cache, titles ≤ 500
+  characters without control characters, captures as quick capture) and queues them; only
+  `POST /api/v1/sync` and `GET /api/v1/sync/changes` / `GET /api/v1/me` are called, from Rust, with
+  `Session::request` (`/api/v1/` paths only, no redirects). The server applies the same policies as
+  the web (forbidden / deleted come back as results and are shown as such).
+- **Local data at rest**: the cache and outbox are plain JSON (0600 on macOS / Linux; on Windows the
+  user's profile ACLs), readable by other processes of the same OS user — the same exposure as the
+  webview's own cache and IndexedDB of the server's pages, and the capture queue. They contain the
+  user's own work titles, task titles, My Day and private captures, never tokens, cookies or other
+  users' content (the feed only sends the user's own records and those of `project_ids`). Disk
+  encryption (FileVault / BitLocker / LUKS) is what protects them on a lost laptop; the app does not
+  encrypt them itself (a key would sit in the same keychain session anyway).
+- **Whose data**: kept per server (folder = the server's store id) and per account: `GET /me` is
+  asked once per session before anything is sent or shown as current; another account's cache and
+  outbox are deleted, never sent as the new account. Sign-out (menu, the web app) and Forget delete
+  the folder; a sync still running then writes nothing back.
+- Lost access: records of projects that are no longer in `project_ids` are dropped on the next sync,
+  deleted things by their tombstones.
+- No outbox entry is retried forever on a 4xx; refused changes stay listed with the user's text until
+  dismissed (so nothing typed offline is silently lost).
 
 ## Global shortcuts
 
@@ -210,3 +246,7 @@ store is deleted and it leaves the recent list.
 - A captured text queued under a server is sent to whoever is signed in to that server when the
   connection is back (sign-out deletes the queue, so this is only the same user after a session
   expiry).
+- **The offline copy is plain JSON on disk** (BRAI-366, see above): accepted like the webview cache;
+  it lives until sign-out / forget / an account switch. Offline changes are only sent after `GET /me`
+  confirmed the account they were made as (or, for changes made before the first sync, the account
+  signed in at that time).

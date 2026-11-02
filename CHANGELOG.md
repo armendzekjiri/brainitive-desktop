@@ -5,6 +5,20 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Offline mode (BRAI-366):
+
+- **Work offline**: when the server can't be reached, **Open offline** (it also opens by itself once)
+  shows this computer's copy of My Day, your open work, the task lists of your tasks and your capture
+  inbox. Tick work done or undone, add work to My Day, add, tick and rename tasks, capture ideas —
+  the changes wait on this computer and are sent in order when the server is back, never twice.
+- Honest results: a change someone else made meanwhile wins and yours is shown next to it (copy your
+  text); deleted, not allowed or not accepted changes are listed with your text instead of vanishing.
+- "Offline — changes will sync" in the window title and the tray, **Sync Now** and **Open Offline
+  View…** in the tray, a notification when queued changes were sent.
+- The copy is kept per server and account, refreshed every minute while you're online, and deleted
+  when you sign out, forget the server or another account signs in. The web app's own offline mode
+  (if you turned it on) still opens with "Use the web app offline".
+
 Phase 09, reliability and diagnostics:
 
 - **Performance pass, desktop side** (BRAI-369): start-up phases are timed in the log

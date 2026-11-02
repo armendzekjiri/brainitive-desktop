@@ -30,7 +30,8 @@ Date: 2026-11-01 · Tauri 2.12.5 / wry 0.57.1 · tested on macOS 26 (Darwin 25.2
 | File download | 🟡 saved to Downloads (unique name) + a notification; ⚠️ `blob:` / `data:` downloads to verify | ⏳ | ⏳ |
 | Clipboard (`navigator.clipboard`, ⌘C/⌘V) | 🟡 Edit menu present (needed for shortcuts) | ⏳ `enable_clipboard_access` set | ⏳ same |
 | Reverb realtime (websocket to the instance) | 🟡 same origin, no CSP change by the app | ⏳ | ⏳ |
-| Service worker + IndexedDB offline | ⚠️ 🟡 WKWebView supports service workers only for app-bound domains / custom setups — **highest macOS risk**, check `navigator.serviceWorker` in the app | ⏳ supported | ⚠️ ⏳ WebKitGTK SW support depends on version |
+| Service worker + IndexedDB offline | ✅ (BRAI-366 probe, 2026-11-02, macOS 26: WKWebView with a `forIdentifier:` store registers `/sw.js` on the Cloud origin and on `http://localhost:8000`, the worker controls a reload, Cache API + IndexedDB work); the native offline view covers users without the web's opt-in | ⏳ supported; native offline view untested | ⚠️ ⏳ WebKitGTK SW support depends on version; native offline view untested |
+| Native offline view + outbox (BRAI-366) | 🟡 unit tested; not clicked through in a running app, no end-to-end sync (dev DB lacks `sync_tombstones`) | ⏳ | ⏳ |
 | Web push | replaced by native notifications (`brainitive_notify`) 🟡; click → focus + open the page | 🟡 click reported only while the toast is on screen | 🟡 |
 | Dock / taskbar badge | 🟡 `set_badge_count` | ⏳ not implemented (needs an overlay icon) | 🟡 Unity launcher API only |
 | User agent ` BrainitiveDesktop/<v>` | 🟡 WKWebView default + marker | ⚠️ a fixed Chrome version is spelled out (wry can only replace the UA) — check UA sniffing | 🟡 |
@@ -49,9 +50,8 @@ Date: 2026-11-01 · Tauri 2.12.5 / wry 0.57.1 · tested on macOS 26 (Darwin 25.2
 
 **macOS: GO (preliminary)** for the Tauri remote-URL shell. Build, bundle, URL scheme, IPC from
 the bundled screens, per-server data stores, TLS policy and the server discovery work. The
-blocker to clear in the next pass is **service worker + IndexedDB offline in WKWebView**; if the
-service worker does not register, offline mode in the desktop app needs a native cache or the
-offline engine's IndexedDB-only path. Then the editor, whiteboard and Gantt/board drag checks
+service worker + IndexedDB check is cleared (BRAI-366): the web's own offline mode works in
+WKWebView, and a native offline view (Rust cache + outbox over the App API sync) covers the rest. Then the editor, whiteboard and Gantt/board drag checks
 with a signed-in session (needs v1.49.0 on a server).
 
 **Windows / Linux: pending.** Nothing verified yet; run the CI build first, then a manual pass on
