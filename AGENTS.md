@@ -50,6 +50,10 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
   `shortcuts`, `queue`, `offline_cache`, `outbox`, `poll`, `badge`, `voice::recorder`, and the pure
   parts of `tray` / `switcher` / `downloads` / `voice::model` / `voice::audio` / `updater`) with
   unit tests.
+- A page link that comes from outside the app's own flow (deep link, web notification, server
+  data in tray / menus / switcher) opens through `links::resolve_deep_link_target` (never the auth
+  pages); only the web-session step uses `resolve_on_instance` for `/app/session/<code>` (BRAI-377).
+- Files with user data are written through `private_fs` (0600 from creation, 0700 folders).
 - Offline data (`offline/<store id>/`) belongs to one server and one account: delete it wherever a
   sign-in ends (`offline::wipe`), never put a token in it.
 - Pin exact dependency versions.

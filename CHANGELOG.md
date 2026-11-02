@@ -5,6 +5,29 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Security review (BRAI-377):
+
+- **Links can't sign you in or out**: a `brainitive://open` link, a web notification or a server link
+  in the tray, menus or switcher never opens the server's sign-in, sign-out, session, password, OAuth
+  or API pages, however the address is encoded.
+- **Foreign pages are sent back sooner**: when the app window starts showing another website (macOS,
+  Linux), the app returns to your last page right away and opens the site in your browser.
+- **Downloads are marked as downloaded**: saved files carry macOS's quarantine flag (Gatekeeper checks
+  them on open) and Windows' Mark of the Web; file names lose hidden right-to-left characters,
+  trailing dots and Windows device names (`CON`, `NUL`, …).
+- **Safer server address check**: a server may no longer redirect the check from https to plain http
+  (also not to `localhost`); when it answers at another address than the one you typed, the app
+  shows that address and asks before using it.
+- **Signing out leaves nothing behind**: a running voice recording is cancelled, a transcript waiting
+  for Quick Capture is dropped, and the Quick Capture, Quick Switcher and offline windows are
+  cleared. Tray data that arrives after a sign-out or server switch is ignored.
+- **Updates**: changing the update channel during a download discards that download.
+- Pages may open at most 10 links per minute in the browser; quick captures waiting to be sent, the
+  offline copy and the downloaded update are created readable by your user only (folders included).
+- **CI**: the update signing key no longer reaches the build (a separate step signs the update
+  bundles), Apple / Azure secrets go only to the step that uses them, signing runs only for release
+  tags (or a manual run on the default branch), and the Windows signing tool is pinned.
+
 Auto-updates (BRAI-373, ready; switched on once the owner adds the update signing key):
 
 - **Updates install themselves — when you say so**: the app checks 30 seconds after it starts and

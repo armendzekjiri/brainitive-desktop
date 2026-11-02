@@ -31,7 +31,9 @@ desktop/
     ├── src/
     │   ├── lib.rs              plugins, commands, menu, deep-link + notification wiring, run loop
     │   ├── server.rs           ServerOrigin: typed address → origin, TLS rule, store ids   (pure)
-    │   ├── links.rs            navigation decisions, deep-link parsing, URL validation      (pure)
+    │   ├── links.rs            navigation + page-load decisions, deep-link parsing and target
+    │   │                       guard (no auth pages), bundled origin per OS, URL validation (pure)
+    │   ├── private_fs.rs       0600 files / 0700 folders, atomic writes (queue, offline, update)
     │   ├── pkce.rs             PKCE S256 + state                                             (pure)
     │   ├── version.rs          min_versions.desktop check, download link                     (pure)
     │   ├── problem.rs          why a server can't be used: kind, message, fix, retryable      (pure)
@@ -68,7 +70,7 @@ desktop/
     │   ├── updater.rs          auto-updates (BRAI-373): channels, manifest URLs, GitHub-only
     │   │                       client, key guard, schedule, labels (pure) + check / download /
     │   │                       Restart to Update with tauri-plugin-updater
-    │   ├── downloads.rs        staging + Save As dialog, unique names
+    │   ├── downloads.rs        staging + Save As dialog, unique safe names, quarantine flag
     │   ├── prefs.rs            Settings window commands, launch at login
     │   ├── flows.rs            startup, connect, sign-in, deep links, sign-out, switch, forget
     │   ├── commands.rs         commands of the bundled screens
@@ -141,9 +143,18 @@ window uses them (`settings.pending_wipes`, retried at start-up).
 - **Deep links** (BRAI-356): `brainitive://open?url=<path or URL on the current origin>` focuses the
   app and navigates (signed out → after sign-in); `brainitive://auth/callback` finishes a sign-in.
   A second launch focuses the running window (single-instance; on Windows / Linux it also carries
-  the link).
+  the link). Targets go through `links::resolve_deep_link_target` (also web notification URLs,
+  notification clicks, tray / menu / switcher links): never `/app/*`, `/login*`, `/logout*`,
+  `/register*`, `/password/*`, `/auth/*`, `/oauth/*`, `/api/*` and the other auth pages, compared
+  after decoding and normalising the path (BRAI-377). Only the app's own web-session step opens
+  `/app/session/<code>` (`resolve_on_instance`).
+- **Connect**: `/api/v1/instance` follows ≤ 5 redirects, never https → http (`api::redirect_refusal`);
+  when the server answers at another origin than the one entered, the confirm screen says so, and
+  `use_server` refuses an origin that changed since it was confirmed (BRAI-377).
 - **Sign out** (Server menu, or the web app's "Sign out" via `brainitive_sign_out`): `POST /auth/logout`, delete the keychain entry, clear this server's
-  webview data.
+  webview data; also (`flows::clear_account_traces`, BRAI-377) cancel a voice recording, drop a
+  waiting transcript and destroy the quick-capture / switcher / offline windows. The account epoch
+  (`Inner::account_epoch`) changes, so a tray poll still running writes nothing.
 
 ## Remote content and the bridge
 
@@ -339,6 +350,9 @@ bundled `offline` window shows it:
 `downloads.rs`: with "Ask where to save" (default on) a download goes to
 `<app cache>/downloads/<uuid>/<name>`; when complete a Save As dialog (`tauri-plugin-dialog`) moves
 it, cancel deletes it; the staging folder is cleared at start. Off: Downloads folder, unique name.
+Every saved file gets `com.apple.quarantine` (macOS, `0081;<hex time>;Brainitive;<UUID>`) /
+`Zone.Identifier` (Windows) (`mark_downloaded`, BRAI-377); `clean_name` drops bidi / format
+characters, trailing dots and spaces, and Windows device names.
 A notification click reveals the file. Tauri's drag & drop handler is disabled on every window, so
 OS file drops reach the page; `file:` navigations stay blocked.
 

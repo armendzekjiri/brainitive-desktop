@@ -16,14 +16,14 @@ model download, no audio retention), BRAI-373 (auto-updates: signed bundles, cha
 | PKCE verifier + `state` of a sign-in in progress | Rust memory only, 15 min, consumed by the first matching callback. |
 | Web session cookie of the server | The webview's data store **for that server** (macOS 14+: `WKWebsiteDataStore(forIdentifier:)`; Windows / Linux: a data directory per server). |
 | Settings (current server, ≤ 5 recent servers, preferences: shortcuts, tray, downloads, zoom) | `settings.json` in the app config dir. No secrets. |
-| Quick captures waiting to be sent (text, link, type, server origin, request id) | `capture-queue.json` in the app's local data dir, **plain text** (like the webview's own cache), only while offline; deleted per server on sign-out / forget. |
+| Quick captures waiting to be sent (text, link, type, server origin, request id) | `capture-queue.json` in the app's local data dir, **plain text** (like the webview's own cache), mode 0600 in a 0700 folder on macOS / Linux (`private_fs`, BRAI-377), only while offline; deleted per server on sign-out / forget. |
 | Offline copy of the user's own data (BRAI-366): open work assigned to them, today's My Day, the kept task lists with their tasks, the private capture inbox, the account id and name, the sync cursor | `offline/<store id>/cache.json` in the app's local data dir, **plain JSON**, mode 0600, per server; no token, no cookie. Deleted on sign-out, forget and when another account signs in on that server. |
 | Offline changes waiting to be sent, and changes the server refused (with the user's text) | `offline/<store id>/outbox.json` next to it, same rules; refused ones until the user dismisses them. |
 | Downloads waiting for the Save dialog | `<app cache>/downloads/<uuid>/`, deleted on cancel and at start. |
 | Voice capture audio (BRAI-439) | **Process memory only**, while recording and transcribing (≤ 2 min, mono f32), zeroed and freed afterwards. Never written to disk, never sent anywhere. |
 | Voice transcript | Memory, then the quick-capture window's text field (like typed text); saved / queued only when the user saves the capture. Never logged. |
 | Speech model (`ggml-small-q5_1.bin`, 190 MB) | `<app local data>/voice/`, a public file (no user data); removed with "Remove voice model". |
-| Update signing key (minisign / Ed25519, BRAI-373) | **Private key**: offline with the owner (backed up) and in the GitHub secrets `TAURI_SIGNING_PRIVATE_KEY` / `_PASSWORD`, used only by the tag build's `tauri build` step. **Public key**: compiled into the app (`tauri.conf.json` → `plugins.updater.pubkey`). |
+| Update signing key (minisign / Ed25519, BRAI-373) | **Private key**: offline with the owner (backed up) and in the GitHub secrets `TAURI_SIGNING_PRIVATE_KEY` / `_PASSWORD`, used only by the separate **Updater signing** step after `tauri build` of a signing build (BRAI-377: the build itself never sees it). **Public key**: compiled into the app (`tauri.conf.json` → `plugins.updater.pubkey`). |
 | A downloaded update waiting for "Restart to Update" | `<app cache>/update/pending.update`, mode 0600, deleted at start, on a channel change and after a failed install. |
 | Update preferences (automatic checks, channel, last check time) | `settings.json`. No secrets. |
 | Login item (launch at login) | macOS LaunchAgent plist / Windows Run registry key / Linux autostart `.desktop` file, written only when the user turns it on. |
@@ -41,7 +41,8 @@ model download, no audio retention), BRAI-373 (auto-updates: signed bundles, cha
   (after "Switch server" the old origin's capability still exists, the check rejects it).
   Notify / badge from an `app-<n>` window are accepted but ignored (the main window already
   reports them);
-- open `http`, `https` and `mailto` links in the system browser / mail client (validated in Rust).
+- open `http`, `https` and `mailto` links in the system browser / mail client (validated in Rust,
+  ≤ 10 per minute, BRAI-377).
 
 Remote content **cannot**: call any other app command (an app ACL manifest in `build.rs` makes
 every command need an explicit permission; the bundled-screen commands are granted to local
@@ -57,7 +58,9 @@ same navigation and page-load guard, same downloads handler, same bridge capabil
 open on a page of the current server while signed in and with the main window on that server's
 store, and close when the server is switched, the user signs out or the server is forgotten.
 
-**The bundled screens** (`index.html`, served from `tauri://localhost` / `http://tauri.localhost`)
+**The bundled screens** (`index.html`, served from `tauri://localhost` on macOS / Linux and
+`http://tauri.localhost` on Windows — only this platform's one origin counts as bundled,
+`links::bundled_origin`, BRAI-377)
 may call the local commands in `capabilities/local.json`. They never render server-provided text
 as HTML (`textContent` only) and run under a strict CSP:
 `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'`.
@@ -210,7 +213,9 @@ or an update replaces the app while the user works.
   user agent only (our manifest URLs are fixed: no version / OS / arch placeholders in them). Manifest request timeout 30 s.
 - **Channels.** Stable = GitHub's "latest" release, which is never a pre-release or draft; beta =
   `beta.json` of the rolling `updater-beta` pre-release **plus** stable, the higher version wins.
-  Switching channel never downgrades; a waiting update of the other channel is dropped.
+  Switching channel never downgrades; a waiting update of the other channel is dropped, and a check
+  or download of the old channel still running is discarded when it ends (generation counter,
+  BRAI-377).
 - **The user decides when.** Checks and downloads run in the background; installing happens only on
   a click on "Restart to Update" (app menu, tray, Settings, the "Please update" screen). Nothing
   restarts by itself. Windows runs the NSIS installer in passive mode (progress bar) and restarts the
@@ -226,15 +231,19 @@ Accepted risks: the manifest is not signed, so whoever controls the GitHub repo 
 github.com) can **withhold** updates (freeze users on the current version) or offer a version that
 doesn't exist (the download then fails verification) — but cannot install anything without the
 private key. **A stolen private key plus control of the releases is a full compromise** of every
-installed app: the key is kept offline, only GitHub Actions has a copy, and only the tag build's
-`tauri build` step sees it. Rotating it needs one release signed with the old key that carries the
+installed app: the key is kept offline, only GitHub Actions has a copy, and only the "Updater
+signing" step of a `v*` tag build (or a manual run on the default branch) sees it — after
+`tauri build`, which never gets it; Apple / Azure secrets reach only the `tauri build` step of their
+OS, never `$GITHUB_ENV` (BRAI-377). Rotating it needs one release signed with the old key that carries the
 new public key (docs/RELEASING.md). The repo must publish its releases publicly for updates to work.
 
 ## Tray, polling, clipboard
 
 - The tray menu is native (no webview). Its actions call fixed endpoints with validated ids.
 - Polling uses the app token from Rust, about once a minute while signed in, backing off on errors;
-  nothing is polled while signed out.
+  nothing is polled while signed out. An answer is written (badge, timer, My Day, ETag cache) only
+  while the server and the sign-in it was asked for are still current (`tray::PollTicket`,
+  BRAI-377): a sign-out or switch during the request drops it.
 - The switcher writes a snippet's content to the clipboard only on an explicit ⌘C / Ctrl+C.
 
 ## Downloads (BRAI-363)
@@ -242,7 +251,14 @@ new public key (docs/RELEASING.md). The repo must publish its releases publicly 
 - A download's destination is chosen by the app: a private staging folder (then the user's choice
   in the native Save dialog) or the Downloads folder. The server's suggested name is reduced to its
   last path component without reserved characters (`downloads::clean_name`), so it can't escape the
-  folder or overwrite a file (`unique_path`).
+  folder or overwrite a file (`unique_path`). BRAI-377: the name also loses Unicode bidi / format
+  characters (no `invoice_\u202Efdp.exe` that reads as `.pdf`), trailing dots and spaces, and never
+  is a Windows device name (`CON`, `NUL.txt`, `COM1` → `_CON` …).
+- Every saved file is marked as downloaded (`downloads::mark_downloaded`): `com.apple.quarantine`
+  (`0081;<hex time>;Brainitive;<UUID>`, one WebKit set is kept) on macOS, so Gatekeeper checks an
+  app or script opened from it; `Zone.Identifier` (zone 3, Mark of the Web) on Windows.
+  `LSFileQuarantineEnabled` is **not** set: it would quarantine every file the app writes (settings,
+  logs, the offline copy, the voice model and the updater's freshly unpacked app bundle).
 - The dialog is opened from Rust (`tauri-plugin-dialog`); no webview can open file dialogs or read
   the chosen path.
 
@@ -259,7 +275,7 @@ new public key (docs/RELEASING.md). The repo must publish its releases publicly 
 |---|---|
 | bundled screens, `about:blank`, `data:`/`blob:` (frames) | allowed |
 | current server, any path | allowed — except `/login` → a fresh web session from the stored sign-in (no password form in the webview, no social login inside a webview), and `/` → `/dashboard` |
-| another http(s) site, top level | cancelled (`window.stop()` on load start, navigate back if it got through) and opened in the system browser |
+| another http(s) site, top level | Windows: cancelled in the navigation handler. macOS / Linux: reverted on page-load **start** (`window.stop()` + navigate back to the last good page, `links::decide_page_load`, BRAI-377); opened in the system browser |
 | another http(s) site in an iframe | allowed, but no IPC (see above) |
 | `target=_blank` / `window.open` | denied; server pages navigate the main window, other http(s)/mailto open outside |
 | `mailto:` | mail client |
@@ -268,6 +284,12 @@ new public key (docs/RELEASING.md). The repo must publish its releases publicly 
 
 macOS / Linux report iframe navigations to the handler too, hence the page-load step for
 top-level loads; Windows (WebView2) only reports top-level ones and opens them outside directly.
+wry 0.57.1 (tauri 2.12.5) passes the navigation handler the URL only — not
+`WKNavigationAction.targetFrame.isMainFrame` (WebKit) or the frame of the WebKitGTK policy
+decision — so a foreign main-frame load can't be refused up front there. Page-load events are
+main-frame only (`didCommitNavigation` / `load-changed: committed`), so on `Started` the app
+reverts at once instead of waiting for `Finished` (BRAI-377). The foreign page may run for the
+few milliseconds until the navigation back; it never has IPC.
 
 ## Sign-in (OAuth 2.1 code + PKCE, first party)
 
@@ -286,8 +308,19 @@ top-level loads; Windows (WebView2) only reports top-level ones and opens them o
 6. `POST /api/v1/auth/web-session` → a one-time `/app/session/<code>` URL **on the same origin**
    (checked) that the webview opens to get its cookie.
 
+Deep links, web notification URLs, notification clicks and links the server hands the tray / menu /
+switcher never open the auth endpoints (`links::resolve_deep_link_target`, BRAI-377): `/app/*`,
+`/login*`, `/logout*`, `/register*`, `/password/*`, `/auth/*`, `/oauth/*`, `/api/*`,
+`/forgot-password`, `/reset-password`, `/confirm-password`, `/verify-email`, `/github-app`,
+`/github/app`, compared after percent-decoding (also nested), `\` → `/`, `//`, dot segments and
+`;params` collapsed, and lower-casing. Without it, `brainitive://open?url=/app/session/<code>` with
+an attacker's code would sign the webview into the attacker's account (login CSRF; the server also
+asks "Continue as …?" when another user is signed in). Only step 6 opens `/app/session/<code>`.
+
 Sign out (menu, or the web app's own "Log out"): `POST /api/v1/auth/logout`, delete the keychain
-entry, clear that server's webview data. "Forget this server": the same, plus its webview data
+entry, clear that server's webview data, and (BRAI-377) cancel a running voice recording, drop a
+transcript waiting for quick capture and destroy the quick-capture, switcher and offline windows (their
+text and last results). "Forget this server": the same, plus its webview data
 store is deleted and it leaves the recent list.
 
 ## Unreachable and "update required" screens (BRAI-367)
@@ -329,8 +362,11 @@ store is deleted and it leaves the recent list.
 - Certificates are verified against the **OS trust store** (rustls-platform-verifier): a company CA
   installed on the machine works; self-signed, expired or wrong-host certificates are shown as an
   error and are **never** auto-trusted. There is no "continue anyway".
-- The instance check follows at most 5 redirects, each to an allowed origin (no http hop), and
-  shows the final origin to the user before it is used.
+- The instance check follows at most 5 redirects, each to an allowed origin, and **never from
+  https down to http, also not to localhost** (`api::redirect_refusal`, BRAI-377); http hops only
+  while the whole chain is http (the user entered `http://localhost`). When the final origin
+  differs from the one entered, the confirm screen says so before "Use this server", and
+  `use_server` refuses an origin that changed since it was confirmed (a recent server too).
 
 ## Known gaps / accepted risks (v0.1)
 
@@ -361,3 +397,23 @@ store is deleted and it leaves the recent list.
   it lives until sign-out / forget / an account switch. Offline changes are only sent after `GET /me`
   confirmed the account they were made as (or, for changes made before the first sync, the account
   signed in at that time).
+
+## Desktop security review (BRAI-377)
+
+Findings of the review and what became of them (details in the sections above; plan and tests in
+`docs/tasks/brai-377-desktop.md`).
+
+| # | Finding | State |
+| --- | --- | --- |
+| 1 | Deep links / notification URLs could open `/app/session/<code>` and other auth pages (login CSRF) | **Resolved**: `links::resolve_deep_link_target` for deep links, web notifications, notification clicks, tray / menu / switcher links; normalised path deny list. Server side ("Continue as …?" when another user is signed in) is in the app repo. |
+| 2 | CI: updater key in the `tauri build` env; Apple / Azure secrets in `$GITHUB_ENV`; signing on any ref; unpinned signing CLI and actions | **Resolved**, except the action SHAs: exact tags with `# TODO pin SHA`, a release blocker in `docs/RELEASING.md` (could not be verified offline). |
+| 3 | macOS / Linux navigation guard reverted a foreign top-level page only on `Finished` | **Resolved** as far as wry allows: revert on `Started`. **Accepted**: no up-front refusal of foreign main-frame navigations on macOS / Linux — wry 0.57.1 gives the navigation handler no frame information; the page never gets IPC and is gone within milliseconds. |
+| 4 | Downloads without quarantine | **Resolved**: `com.apple.quarantine` / `Zone.Identifier` on every saved file; `LSFileQuarantineEnabled` deliberately not set. |
+| 5 | Both `tauri://localhost` and `http(s)://tauri.localhost` counted as bundled on every OS | **Resolved**: one origin per platform (`links::bundled_origin`, from tauri 2.12.5's `protocol::origin`). |
+| 6 | Queue / outbox temp files created with the default mode, folders world-readable | **Resolved**: `private_fs` (0600 files from creation, 0700 folders) for queue, offline, update, voice. |
+| 7 | Instance check allowed https → http://localhost; final origin used without a new confirm | **Resolved**: `api::redirect_refusal`, redirect notice on the confirm screen, `use_server` refuses an unconfirmed origin. |
+| 8 | Changing the update channel during a download still installed the old channel's update | **Resolved**: generation counter, stale results discarded. |
+| 9 | Download names kept bidi / format characters, Windows device names, trailing dots | **Resolved** in `downloads::clean_name`. |
+| 10 | Tray poller wrote results after a sign-out / switch | **Resolved**: `tray::PollTicket` (server + account epoch) checked under the lock of each write. |
+| 11 | `brainitive_open_external` had no rate limit | **Resolved**: 10 per minute (`bridge::allow_rate`, shared with notify's 20). |
+| 12 | Sign-out left a voice transcript, the capture text, switcher results and a running recording | **Resolved**: `flows::clear_account_traces`. |
