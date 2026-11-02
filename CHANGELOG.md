@@ -3,9 +3,15 @@
 Brainitive Desktop has its own version numbers (0.x until Desktop 1.0). It needs a Brainitive
 server with the App API v1 (Brainitive v1.49.0 or later).
 
-## Unreleased
+## [Unreleased]
 
-Several servers:
+## [1.0.0] - unreleased
+
+The first stable release of Brainitive Desktop for macOS, Windows and Linux.
+
+### Sign-in & servers
+
+**Several servers**
 
 - **Switch servers in a second**: Brainitive (macOS) / File → **Servers** lists every server you
   added, the current one checked; **⌃⌘1…⌃⌘9** (macOS) / **Alt+1…Alt+9** (Windows, Linux) switch to
@@ -23,7 +29,23 @@ Several servers:
   you are back on it; they can never go to another server (fixed: a sync running during a switch
   could pick up the other server's waiting changes).
 
-New task:
+### Windows & menus
+
+- **Menus and shortcuts** (BRAI-362): full app menu with ⌘ on macOS / Ctrl on Windows and Linux:
+  Settings (⌘,), New Issue (⌘N), New Doc (⌥⌘N), New Window (⇧⌘N), Back / Forward (⌘[ / ⌘]), Reload,
+  zoom (⌘0 / ⌘= / ⌘-, remembered), Search (⌘K), Dashboard, My Work, Captures, Notifications,
+  Account Settings. **Open in a new window**: pages of the server in extra windows with the same
+  sign-in and the same security rules (also for links that open a new tab, e.g. attachments).
+- **Files** (BRAI-363): downloads ask where to save them (native Save dialog, can be turned off);
+  drag & drop of files from Finder / Explorer into the app keeps working; attachments open in an
+  app window.
+- **Launch at login** (BRAI-364): optional, off by default; can start in the menu bar / tray.
+- **Settings window**: global shortcuts (record, default, off), tray, launch at login, downloads,
+  zoom, account link.
+
+### Quick capture, New task, Quick switcher and the Brainitive key
+
+**New task**
 
 - **Create a task from any app**: press **⌃⌘T** (macOS) / **Ctrl+Alt+T** (Windows), or the
   Brainitive key and **T**. A small window asks for the project (type to search; it starts with the
@@ -39,25 +61,7 @@ New task:
   task gets **N** (or the first free letter).
 - Also in the tray menu (**New Task…**) and the menu-bar panel's footer (**New Task**).
 
-Menu-bar panel:
-
-- **Click the menu-bar / tray icon** for a panel like the macOS Weather extra: frosted glass right
-  under the icon (Windows: above the tray; Linux: tray menu → Open Panel…). **Today** (next events,
-  work due or overdue), **My Day** and **Assigned** (grouped by project; tick to finish),
-  **Inbox** (latest notifications, unread badge, open + mark read, Mark all read) and **Timer**
-  (live clock, Stop & log with an inline activity choice, Discard, start a timer on one of your
-  issues, today's entries and total). ⌘1–5, arrow keys, Esc; it remembers the last tab.
-- **Right-click** (or ⌃-click) the icon for the menu with Quit, Settings and the rest.
-- **Offline** the panel shows what was loaded last (or the offline copy); ticks wait in the offline
-  outbox and sync later; timer and mark-read wait for the connection.
-- The tray's timer now counts from when it really started.
-
-Title bars (macOS 26):
-
-- Settings, the offline view and the app windows no longer show scrolled content behind the
-  see-through title bar of macOS 26 (Tahoe); the title bar matches the page in light and dark.
-
-Brainitive key (BRAI-440):
+**Brainitive key (BRAI-440)**
 
 - **One key, then a letter**: press **⌃⌘K** (macOS) / **Ctrl+Alt+K** (Windows, Linux) in any app and
   a small panel lists what comes next: **C** quick capture, **K** quick switcher (so ⌃⌘K K),
@@ -78,7 +82,102 @@ Brainitive key (BRAI-440):
   another app refuses a key; one refused shortcut no longer keeps the others from working.
 - **Brainitive Key…** in the File menu and the tray (with the key next to it).
 
-Security review (BRAI-377):
+- **Quick capture** (BRAI-359): ⇧⌘Space / Ctrl+Shift+Space from any app opens a small capture
+  window; captures go to your private inbox, or wait on this computer while you're offline and are
+  sent later (never twice).
+- **Quick switcher** (BRAI-401): ⌥⌘K / Ctrl+Alt+K opens a Spotlight-like search over the server:
+  jump to an issue, doc or plan, copy a snippet, start the timer on an issue.
+
+### Menu-bar panel
+
+
+- **Click the menu-bar / tray icon** for a panel like the macOS Weather extra: frosted glass right
+  under the icon (Windows: above the tray; Linux: tray menu → Open Panel…). **Today** (next events,
+  work due or overdue), **My Day** and **Assigned** (grouped by project; tick to finish),
+  **Inbox** (latest notifications, unread badge, open + mark read, Mark all read) and **Timer**
+  (live clock, Stop & log with an inline activity choice, Discard, start a timer on one of your
+  issues, today's entries and total). ⌘1–5, arrow keys, Esc; it remembers the last tab.
+- **Right-click** (or ⌃-click) the icon for the menu with Quit, Settings and the rest.
+- **Offline** the panel shows what was loaded last (or the offline copy); ticks wait in the offline
+  outbox and sync later; timer and mark-read wait for the connection.
+- The tray's timer now counts from when it really started.
+
+- **Menu bar / tray** (BRAI-360): quick capture, quick switcher, today's My Day (tick work done),
+  the running timer (stop and log, or discard), unread notifications, Open, Settings, Quit. The app
+  can keep running there when the window is closed (on by default).
+
+### Offline
+
+**Sync v2 (BRAI-441)**
+
+- **Offline copy follows the server's v2 feed**: the lists you work in come from the server
+  (`task_lists=mine`), only your inbox is kept (`captures=inbox`), and a deleted list takes its
+  tasks with it. What the server answers to a change you made offline replaces the stored copy at
+  once. Viewers no longer see "Add task" offline.
+
+
+- **Work offline**: when the server can't be reached, **Open offline** (it also opens by itself once)
+  shows this computer's copy of My Day, your open work, the task lists of your tasks and your capture
+  inbox. Tick work done or undone, add work to My Day, add, tick and rename tasks, capture ideas —
+  the changes wait on this computer and are sent in order when the server is back, never twice.
+- Honest results: a change someone else made meanwhile wins and yours is shown next to it (copy your
+  text); deleted, not allowed or not accepted changes are listed with your text instead of vanishing.
+- "Offline — changes will sync" in the window title and the tray, **Sync Now** and **Open Offline
+  View…** in the tray, a notification when queued changes were sent.
+- The copy is kept per server and account, refreshed every minute while you're online, and deleted
+  when you sign out, forget the server or another account signs in. The web app's own offline mode
+  (if you turned it on) still opens with "Use the web app offline".
+
+### Voice capture
+
+
+- **Speak instead of typing**: hold ⇧⌘V (macOS) / Ctrl+Shift+V (Windows, Linux), talk, let go — the
+  text opens in quick capture to check and save. A short tap starts a recording that runs until you
+  press the shortcut again or ↩. Also **Voice Capture…** in the File menu, the menu bar / tray and a
+  microphone button in quick capture. A small indicator shows the level and the time (max 2
+  minutes); Esc cancels.
+- **On this computer**: the speech is turned into text locally with Whisper (whisper.cpp; Metal on
+  Apple Silicon). The audio is kept in memory only — never saved, never sent anywhere — so it works
+  the same for Cloud and self-hosted, offline too.
+- **Off by default.** While it is off the shortcut is not registered (⇧⌘V / Ctrl+Shift+V stay
+  "paste as plain text" in your other apps); File → Voice Capture…, the tray and quick capture's
+  microphone button explain it and offer **Turn on**; the speech model (190 MB)
+  is downloaded once, with progress and a checksum check. Settings → Voice capture: on / off, the
+  shortcut, the language (detect automatically, English, German, Albanian, …) and **Remove voice
+  model**.
+- macOS asks for the microphone once; if it is blocked, the indicator says how to allow it and
+  opens the privacy settings.
+
+### Notifications
+
+- **Notifications and badge** (BRAI-361): the unread badge also on the Windows taskbar (overlay
+  icon) and kept up to date while the window is closed; clicking a notification opens its page.
+
+### Updates
+
+**Auto-updates (BRAI-373, ready; switched on once the owner adds the update signing key)**
+
+- **Updates install themselves — when you say so**: the app checks 30 seconds after it starts and
+  every 6 hours, downloads a new version in the background and tells you "Update ready — restart to
+  install". It installs only when you choose **Restart to Update** (app menu, tray, Settings).
+  "Check for Updates…" is in the app menu (macOS) / Help menu (Windows, Linux) and the tray.
+- **Signed updates only**: every update is checked against the signing key built into the app and
+  must be signed for exactly the version it claims; older or equal versions are never installed.
+  Downloads come from GitHub over https only.
+- **Beta channel**: Settings → Updates → "Get beta updates" for pre-release versions; stable is the
+  default. Settings also shows the version, the last check and lets you turn automatic checks off.
+- **"Please update" screen**: when your server needs a newer app, "Check for update now" fetches it
+  right there.
+- Builds without the signing key (and development builds) never check or install updates; the menu
+  item is greyed out and Settings says why.
+
+**Also**
+
+- **"Please update" while the app is running**: the server's minimum desktop version is checked
+  again about every 6 hours and after the computer wakes up, not only when connecting.
+
+### Security
+
 
 - **Links can't sign you in or out**: a `brainitive://open` link, a web notification or a server link
   in the tray, menus or switcher never opens the server's sign-in, sign-out, session, password, OAuth
@@ -101,78 +200,8 @@ Security review (BRAI-377):
   bundles), Apple / Azure secrets go only to the step that uses them, signing runs only for release
   tags (or a manual run on the default branch), and the Windows signing tool is pinned.
 
-Auto-updates (BRAI-373, ready; switched on once the owner adds the update signing key):
+### Reliability & diagnostics
 
-- **Updates install themselves — when you say so**: the app checks 30 seconds after it starts and
-  every 6 hours, downloads a new version in the background and tells you "Update ready — restart to
-  install". It installs only when you choose **Restart to Update** (app menu, tray, Settings).
-  "Check for Updates…" is in the app menu (macOS) / Help menu (Windows, Linux) and the tray.
-- **Signed updates only**: every update is checked against the signing key built into the app and
-  must be signed for exactly the version it claims; older or equal versions are never installed.
-  Downloads come from GitHub over https only.
-- **Beta channel**: Settings → Updates → "Get beta updates" for pre-release versions; stable is the
-  default. Settings also shows the version, the last check and lets you turn automatic checks off.
-- **"Please update" screen**: when your server needs a newer app, "Check for update now" fetches it
-  right there.
-- Builds without the signing key (and development builds) never check or install updates; the menu
-  item is greyed out and Settings says why.
-
-Build and distribution (phase 10, prepared; needs the owner's accounts to sign):
-
-- **CI build** (`.github/workflows/build.yml`): macOS universal `.dmg`, Windows x64 NSIS installer,
-  Linux `.deb` + AppImage on tags `v*` (draft release with `SHA256SUMS`) or by hand; tests only on pull
-  requests. Signing steps run only when their secrets exist.
-- **Signing config, inactive until the secrets are added**: macOS hardened runtime with
-  `entitlements.plist` (microphone, network), minimum macOS 14; notarization through Apple ID or an API key;
-  Windows through Azure Trusted Signing. Per-user NSIS install, WebView2 bootstrapper, `.deb` depends
-  on ALSA. Step by step in `docs/RELEASING.md`.
-
-Also:
-
-- **"Please update" while the app is running**: the server's minimum desktop version is checked
-  again about every 6 hours and after the computer wakes up, not only when connecting.
-
-Sync v2 (BRAI-441):
-
-- **Offline copy follows the server's v2 feed**: the lists you work in come from the server
-  (`task_lists=mine`), only your inbox is kept (`captures=inbox`), and a deleted list takes its
-  tasks with it. What the server answers to a change you made offline replaces the stored copy at
-  once. Viewers no longer see "Add task" offline.
-
-Voice capture (BRAI-439):
-
-- **Speak instead of typing**: hold ⇧⌘V (macOS) / Ctrl+Shift+V (Windows, Linux), talk, let go — the
-  text opens in quick capture to check and save. A short tap starts a recording that runs until you
-  press the shortcut again or ↩. Also **Voice Capture…** in the File menu, the menu bar / tray and a
-  microphone button in quick capture. A small indicator shows the level and the time (max 2
-  minutes); Esc cancels.
-- **On this computer**: the speech is turned into text locally with Whisper (whisper.cpp; Metal on
-  Apple Silicon). The audio is kept in memory only — never saved, never sent anywhere — so it works
-  the same for Cloud and self-hosted, offline too.
-- **Off by default.** While it is off the shortcut is not registered (⇧⌘V / Ctrl+Shift+V stay
-  "paste as plain text" in your other apps); File → Voice Capture…, the tray and quick capture's
-  microphone button explain it and offer **Turn on**; the speech model (190 MB)
-  is downloaded once, with progress and a checksum check. Settings → Voice capture: on / off, the
-  shortcut, the language (detect automatically, English, German, Albanian, …) and **Remove voice
-  model**.
-- macOS asks for the microphone once; if it is blocked, the indicator says how to allow it and
-  opens the privacy settings.
-
-Offline mode (BRAI-366):
-
-- **Work offline**: when the server can't be reached, **Open offline** (it also opens by itself once)
-  shows this computer's copy of My Day, your open work, the task lists of your tasks and your capture
-  inbox. Tick work done or undone, add work to My Day, add, tick and rename tasks, capture ideas —
-  the changes wait on this computer and are sent in order when the server is back, never twice.
-- Honest results: a change someone else made meanwhile wins and yours is shown next to it (copy your
-  text); deleted, not allowed or not accepted changes are listed with your text instead of vanishing.
-- "Offline — changes will sync" in the window title and the tray, **Sync Now** and **Open Offline
-  View…** in the tray, a notification when queued changes were sent.
-- The copy is kept per server and account, refreshed every minute while you're online, and deleted
-  when you sign out, forget the server or another account signs in. The web app's own offline mode
-  (if you turned it on) still opens with "Use the web app offline".
-
-Phase 09, reliability and diagnostics:
 
 - **Performance pass, desktop side** (BRAI-369): start-up phases are timed in the log
   (`startup: bundled shell loaded +…ms`, `remote page loaded`); the download-staging clean-up no
@@ -189,29 +218,22 @@ Phase 09, reliability and diagnostics:
   Open offline keeps working. A server that needs a newer desktop app shows "Please update
   Brainitive Desktop" (server, both versions, download link) and the web app is not loaded.
 
-Phase 05, native desktop experience:
+### Platform support
 
-- **Menus and shortcuts** (BRAI-362): full app menu with ⌘ on macOS / Ctrl on Windows and Linux:
-  Settings (⌘,), New Issue (⌘N), New Doc (⌥⌘N), New Window (⇧⌘N), Back / Forward (⌘[ / ⌘]), Reload,
-  zoom (⌘0 / ⌘= / ⌘-, remembered), Search (⌘K), Dashboard, My Work, Captures, Notifications,
-  Account Settings. **Open in a new window**: pages of the server in extra windows with the same
-  sign-in and the same security rules (also for links that open a new tab, e.g. attachments).
-- **Quick capture** (BRAI-359): ⇧⌘Space / Ctrl+Shift+Space from any app opens a small capture
-  window; captures go to your private inbox, or wait on this computer while you're offline and are
-  sent later (never twice).
-- **Menu bar / tray** (BRAI-360): quick capture, quick switcher, today's My Day (tick work done),
-  the running timer (stop and log, or discard), unread notifications, Open, Settings, Quit. The app
-  can keep running there when the window is closed (on by default).
-- **Notifications and badge** (BRAI-361): the unread badge also on the Windows taskbar (overlay
-  icon) and kept up to date while the window is closed; clicking a notification opens its page.
-- **Files** (BRAI-363): downloads ask where to save them (native Save dialog, can be turned off);
-  drag & drop of files from Finder / Explorer into the app keeps working; attachments open in an
-  app window.
-- **Launch at login** (BRAI-364): optional, off by default; can start in the menu bar / tray.
-- **Quick switcher** (BRAI-401): ⌥⌘K / Ctrl+Alt+K opens a Spotlight-like search over the server:
-  jump to an issue, doc or plan, copy a snippet, start the timer on an issue.
-- **Settings window**: global shortcuts (record, default, off), tray, launch at login, downloads,
-  zoom, account link.
+**Title bars (macOS 26)**
+
+- Settings, the offline view and the app windows no longer show scrolled content behind the
+  see-through title bar of macOS 26 (Tahoe); the title bar matches the page in light and dark.
+
+**Build and distribution (prepared; needs the owner's accounts to sign)**
+
+- **CI build** (`.github/workflows/build.yml`): macOS universal `.dmg`, Windows x64 NSIS installer,
+  Linux `.deb` + AppImage on tags `v*` (draft release with `SHA256SUMS`) or by hand; tests only on pull
+  requests. Signing steps run only when their secrets exist.
+- **Signing config, inactive until the secrets are added**: macOS hardened runtime with
+  `entitlements.plist` (microphone, network), minimum macOS 14; notarization through Apple ID or an API key;
+  Windows through Azure Trusted Signing. Per-user NSIS install, WebView2 bootstrapper, `.deb` depends
+  on ALSA. Step by step in `docs/RELEASING.md`.
 
 ## 0.1.0 (unreleased)
 
