@@ -53,6 +53,15 @@
           </span>
         </div>
         <p class="error letter-error" data-for="capture" hidden></p>
+        <div class="setting letter-row" data-letter="task">
+          <label class="text" for="letter-task">New task <small>Create an issue on a board.</small></label>
+          <span class="controls">
+            <span class="muted then"><span class="leader-label"></span>, then</span>
+            <input id="letter-task" class="letter" type="text" maxlength="1" autocomplete="off" autocapitalize="characters" spellcheck="false" />
+            <button class="reset" type="button" title="Back to the default letter">Default</button>
+          </span>
+        </div>
+        <p class="error letter-error" data-for="task" hidden></p>
         <div class="setting letter-row" data-letter="switcher">
           <label class="text" for="letter-switcher">Quick switcher <small>Jump to an issue, doc or plan, copy a snippet, start a timer.</small></label>
           <span class="controls">
@@ -81,7 +90,7 @@
         </div>
         <p class="error letter-error" data-for="main" hidden></p>
         <h3>Direct shortcuts (optional)</h3>
-        <p class="muted small">One shortcut straight to an action, without the letter. Quick switcher and voice capture are off unless you set them.</p>
+        <p class="muted small">One shortcut straight to an action, without the letter. Quick switcher and voice capture are off unless you set them; New task is off on Linux, where Ctrl+Alt+T opens the terminal.</p>
         <div class="setting" data-shortcut="capture">
           <span class="text">Quick capture <small>Save an idea to your inbox from any app.</small></span>
           <span class="controls">
@@ -92,6 +101,16 @@
           </span>
         </div>
         <p class="error shortcut-error" data-for="capture" hidden></p>
+        <div class="setting" data-shortcut="task">
+          <span class="text">New task <small>Create an issue on a board from any app.</small></span>
+          <span class="controls">
+            <kbd class="current"></kbd>
+            <button class="record" type="button">Change</button>
+            <button class="reset" type="button" title="Back to the default">Default</button>
+            <button class="off" type="button">Off</button>
+          </span>
+        </div>
+        <p class="error shortcut-error" data-for="task" hidden></p>
         <div class="setting" data-shortcut="switcher">
           <span class="text">Quick switcher <small>Jump to an issue, doc or plan, copy a snippet, start a timer.</small></span>
           <span class="controls">

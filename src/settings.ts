@@ -16,6 +16,9 @@ interface Prefs {
     capture_shortcut: string;
     switcher_shortcut: string;
     voice_shortcut: string;
+    task_shortcut: string;
+    // what Default gives New task here ('' on Linux: off)
+    task_default: string;
     voice_enabled: boolean;
     voice_language: string;
     voice_languages: { code: string; name: string }[];
@@ -29,7 +32,7 @@ interface Prefs {
 }
 
 // the Brainitive key's letters (BRAI-440)
-type LetterId = 'capture' | 'switcher' | 'voice' | 'main';
+type LetterId = 'capture' | 'task' | 'switcher' | 'voice' | 'main';
 
 interface Letter {
     id: LetterId;
@@ -57,7 +60,7 @@ interface Updates {
 
 type Toggle = 'keep_in_tray' | 'ask_where_to_save' | 'launch_at_login' | 'start_hidden' | 'voice_enabled';
 
-type Which = 'leader' | 'capture' | 'switcher' | 'voice';
+type Which = 'leader' | 'capture' | 'switcher' | 'voice' | 'task';
 type Choice = { mode: 'off' } | { mode: 'default' } | { mode: 'keys'; keys: string };
 
 let recording: { which: Which; button: HTMLButtonElement } | null = null;
@@ -85,10 +88,14 @@ function render(p: Prefs): void {
             capture: p.capture_shortcut,
             switcher: p.switcher_shortcut,
             voice: p.voice_shortcut,
+            task: p.task_shortcut,
         }[which];
         const current = row.querySelector<HTMLElement>('.current');
         if (current) current.textContent = label || 'Off';
     });
+    // New task has no default on Linux (Ctrl+Alt+T opens the terminal): Default = Off there
+    const taskReset = document.querySelector<HTMLButtonElement>('[data-shortcut="task"] .reset');
+    if (taskReset) taskReset.title = p.task_default ? `Back to ${p.task_default}` : 'Off by default here (Ctrl+Alt+T opens the terminal)';
     renderLetters(p);
     renderVoice(p);
     renderUpdates(p.updates);

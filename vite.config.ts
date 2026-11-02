@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 
 // The bundled pages only: the connect / sign-in screens (index.html) and the native windows
 // (quick capture, quick switcher, settings, offline view, voice-capture indicator, Brainitive key
-// overlay, menu-bar panel). The web app itself is loaded from the server.
+// overlay, menu-bar panel, New task). The web app itself is loaded from the server.
 // Port 1420 is `build.devUrl` in src-tauri/tauri.conf.json.
 export default defineConfig({
     clearScreen: false,
@@ -29,6 +29,7 @@ export default defineConfig({
                 voice: 'voice.html',
                 leader: 'leader.html',
                 panel: 'panel.html',
+                task: 'task.html',
             },
         },
     },

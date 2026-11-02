@@ -7,7 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { $, errorMessage, onShown } from './native';
 
 interface Action {
-    id: 'capture' | 'switcher' | 'voice' | 'main';
+    id: 'capture' | 'task' | 'switcher' | 'voice' | 'main';
     name: string;
     letter: string;
     enabled: boolean;

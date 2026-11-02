@@ -1,0 +1,334 @@
+/* The New task window (task.html): grows with its content, the window follows (task_resize). */
+body.task-body {
+    height: auto;
+    min-height: 100%;
+}
+
+.task {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 16px 14px;
+}
+
+.task-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* flex containers would otherwise show despite `hidden` */
+.task [hidden] {
+    display: none !important;
+}
+
+.field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.field.grow {
+    flex: 1;
+}
+
+.field-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+}
+
+.field-error {
+    margin: 0;
+    font-size: 12px;
+    color: var(--danger);
+}
+
+.invalid,
+input.invalid,
+select.invalid {
+    border-color: var(--danger);
+}
+
+.task select {
+    width: 100%;
+    padding: 7px 10px;
+    background: var(--bg);
+}
+
+/* project + board side by side */
+.dest {
+    display: flex;
+    gap: 10px;
+}
+
+#board-field {
+    width: 38%;
+    flex: none;
+}
+
+/* the searchable project select */
+.combo {
+    position: relative;
+}
+
+.combo input {
+    padding-right: 28px;
+}
+
+.combo-caret {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    font-size: 11px;
+    pointer-events: none;
+}
+
+.combo-list {
+    position: absolute;
+    z-index: 10;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    max-height: 232px;
+    overflow-y: auto;
+    margin: 0;
+    padding: 4px;
+    list-style: none;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+
+.combo-group {
+    padding: 6px 8px 2px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+}
+
+.combo-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: default;
+}
+
+.combo-option span:first-child {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.combo-option[aria-selected='true'] {
+    background: var(--accent);
+    color: var(--accent-text);
+}
+
+.combo-option[aria-selected='true'] .combo-key {
+    color: inherit;
+    opacity: 0.85;
+}
+
+.combo-key {
+    font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted);
+}
+
+.combo-empty {
+    padding: 8px;
+}
+
+/* title: the main line, like the web's Create dialog */
+.title-input {
+    font-size: 17px;
+    font-weight: 500;
+    padding: 8px 2px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 0;
+}
+
+.title-input:focus-visible {
+    outline: none;
+    border-bottom-color: var(--accent);
+}
+
+.title-input.invalid {
+    border-bottom-color: var(--danger);
+}
+
+.disclosure {
+    align-self: flex-start;
+    border: none;
+    padding: 2px 4px 2px 0;
+    font-size: 13px;
+    color: var(--muted);
+}
+
+.disclosure:hover {
+    color: var(--text);
+}
+
+.disclosure-caret {
+    display: inline-block;
+    width: 1em;
+}
+
+.disclosure[aria-expanded='true'] .disclosure-caret {
+    transform: rotate(90deg);
+}
+
+.task textarea {
+    background: var(--panel);
+    border-color: transparent;
+    font-size: 14px;
+}
+
+/* priority chips */
+.chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    font-size: 12.5px;
+    border-radius: 999px;
+    color: var(--muted);
+}
+
+.chip:hover {
+    color: var(--text);
+}
+
+.chip[aria-checked='true'] {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+.chip-mark {
+    font-weight: 700;
+    min-width: 0.8em;
+    text-align: center;
+}
+
+.chips.invalid .chip {
+    border-color: var(--danger);
+}
+
+.task-form .status:empty {
+    display: none;
+}
+
+.actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+    margin: 2px -16px 0;
+    padding: 12px 16px 0;
+}
+
+.actions .spacer {
+    flex: 1;
+}
+
+.actions button {
+    flex: none;
+    white-space: nowrap;
+}
+
+/* Type: a compact select at the left of the footer */
+.type-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.type-field select {
+    width: auto;
+    min-width: 120px;
+    max-width: 200px;
+    padding: 5px 8px;
+}
+
+/* created */
+.done {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 4px;
+    padding: 14px 8px 4px;
+}
+
+.done-mark {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--ok);
+    color: #fff;
+    font-size: 19px;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.done-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.done-name {
+    margin: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.done-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+/* signed out / no server */
+.blocked {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 6px;
+    padding: 12px 8px 6px;
+}
+
+.blocked h2 {
+    margin: 6px 0 0;
+    font-size: 16px;
+}
+
+.blocked p {
+    margin: 0 0 8px;
+}
