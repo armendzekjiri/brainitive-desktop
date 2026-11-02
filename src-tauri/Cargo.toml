@@ -70,7 +70,7 @@ msstore = ["dep:windows", "dep:tauri-winrt-notification"]
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros"] }
 # updater tests (BRAI-373): a mock app for the plugin, a throwaway minisign key made in the test
 tauri = { version = "=2.12.5", features = ["tray-icon", "test"] }
-minisign = "=0.9.1"
+minisign = "=0.10.0"
 
 # Release profile, see docs/PERFORMANCE.md. Everything heavy (rendering, JS) is in the system
 # webview, so Rust speed hardly matters; binary size and start-up do.
