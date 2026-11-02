@@ -24,6 +24,8 @@ desktop/
 ├── public/logo.png
 └── src-tauri/
     ├── tauri.conf.json         id app.brainitive.desktop, CSP, deep-link scheme, macOS ≥ 14
+    ├── tauri.msstore.conf.json Microsoft Store overlay (BRAI-442): no updater config, no bundle
+    ├── msix/AppxManifest.xml.tmpl  the Store package manifest (identity, protocol, startup task)
     ├── Info.plist              merged by Tauri: NSMicrophoneUsageDescription (voice capture)
     ├── .cargo/config.toml      GGML_NATIVE=OFF: a portable whisper.cpp build
     ├── build.rs                app ACL manifest (every command needs a permission)
@@ -81,12 +83,20 @@ desktop/
     │   │                       Restart to Update with tauri-plugin-updater
     │   ├── downloads.rs        staging + Save As dialog, unique safe names, quarantine flag
     │   ├── prefs.rs            Settings window commands, launch at login
+    │   ├── msstore/            the Microsoft Store build (BRAI-442): identity, Store URL, UA marks,
+    │   │                       startup-task decision, AppData → package copy (mod.rs, pure);
+    │   │                       packaged.rs: WinRT StartupTask / package / toast (Windows + msstore)
     │   ├── flows.rs            startup, connect, sign-in, deep links, sign-out, switch, forget
     │   ├── commands.rs         commands of the bundled screens
     │   └── bridge.rs           brainitive_notify / _set_badge / _open_external (remote origin)
     └── tests/
         ├── live_network.rs     `--ignored` checks against real hosts (TLS errors, 404 detection)
+        ├── msix_manifest.rs    the MSIX template = MICROSOFT-STORE-LISTING.md = msstore constants
         └── capabilities.rs     every bundled window's capability: local, own window, own commands
+scripts/
+    ├── build-msix.ps1          Store variant → package folder → makepri → makeappx (BRAI-442)
+    ├── msix-manifest.mjs       renders the MSIX manifest (X.Y.Z → X.Y.Z.0)
+    └── msix-assets.mjs         the MSIX logos from src-tauri/icons/icon.png
 ```
 
 ## Servers: Cloud or self-hosted
@@ -589,6 +599,14 @@ OS file drops reach the page; `file:` navigations stay blocked.
 default; the OS login item is read back as the truth. The login item passes `--autostart`; with
 "Start in the menu bar / tray" the main window stays hidden until the user opens it.
 
+The Microsoft Store build, packaged (BRAI-442): the plugin's Run key would be copied into the
+package's private registry, which Windows never reads at login, so `prefs::launch_at_login` /
+`set_launch_at_login` use the manifest's startup task `BrainitiveStartup` instead
+(`msstore::packaged`: WinRT `StartupTask`, waited for on its own thread; `msstore::startup_step`
+decides: enable / disable / nothing / refuse with a message when the user turned it off in
+Task Manager or a policy decides). A startup task passes no arguments: "start hidden" reads the
+activation kind (`AppInstance::GetActivatedEventArgs` = `StartupTask`).
+
 ## Build and distribution (phase 10)
 
 `.github/workflows/build.yml`: matrix macOS-14 (`--target universal-apple-darwin`, app + dmg),
@@ -616,10 +634,42 @@ then checks one signed bundle with the plugin against the committed key. The rel
 `v*-*` tags pre-releases. The job `beta-manifest` runs when a pre-release is published and copies its
 `latest.json` to `beta.json` of the rolling `updater-beta` pre-release.
 
+### The Microsoft Store package (BRAI-442)
+
+Job `msstore` in `build.yml` (windows-latest; `v*` tags without a pre-release part and manual runs;
+no secrets): `node --test scripts/`, `cargo test` / `clippy` with `--features msstore`, then
+`scripts/build-msix.ps1 -SignForTest`: `tauri build --no-bundle --features msstore --config
+src-tauri/tauri.msstore.conf.json` → `src-tauri/target/msix/package/` (`Brainitive.exe`, the
+rendered `AppxManifest.xml`, `Assets/` from `scripts/msix-assets.mjs`, `resources.pri` from
+`makepri`) → `makeappx pack` (schema-validated) → `Brainitive_<X.Y.Z>_x64.msix`, **unsigned** (the
+Store signs it). It is uploaded as `installers-msstore`, so the draft release attaches it; the
+self-signed sideload copy + `.cer` go to `msstore-sideload-test`; WACK runs when the image has
+`appcert.exe` (informational, report artifact `msstore-wack-report`). `ci.yml` runs the msstore
+clippy / tests on Windows for every PR.
+
+What the `msstore` feature changes (`msstore/`; without it every function there is inert):
+
+| | NSIS / other builds | Store build |
+| --- | --- | --- |
+| Updates | `tauri-plugin-updater` (BRAI-373) | plugin not registered, `plugins.updater` removed by the overlay; `Availability::Store`: "Check for Updates…", Settings → Updates ("Open Microsoft Store") and the "Please update" screen open `ms-windows-store://pdp/?productid=9N08DHPCF7WB` |
+| User agent | ` BrainitiveDesktop/<v>`; API `(windows)` | ` BrainitiveDesktop/<v> (MSStore)`; API `(windows; MSStore)` |
+| Open at login | autostart plugin (HKCU Run) | packaged: startup task `BrainitiveStartup` |
+| Notifications | plugin, AUMID = identifier | packaged: `tauri-winrt-notification` with `Ndize.al.Brainitive_x9qbckpnnsjh8!Brainitive`; click → `bridge::on_notification_action` |
+| Open Logs Folder | the folder | packaged: `msstore::outside_view` → `%LOCALAPPDATA%\Packages\<family>\LocalCache\Local\…` when that copy exists |
+| `brainitive://` | HKCU from the NSIS installer | manifest `windows.protocol`, `Parameters="%1"`: the same single-argument launch the deep-link / single-instance plugins read |
+
+Unchanged in a package: the data folders (same identifier; MSIX writes new files under AppData to
+the package's LocalCache, which the app sees at the usual paths and Windows deletes on uninstall),
+`private_fs` (the profile's ACLs cover the package copy too), WebView2 (its user data folder is in
+that copy), the keyring (Credential Manager is not virtualized), downloads (a real folder the user
+or Windows chose; staging → move falls back to copy + delete), global shortcuts, tray, the voice
+model download (in the package copy) and the microphone (declared `microphone` capability).
+
 ## Auto-updates (BRAI-373)
 
 `updater.rs`, `tauri-plugin-updater` from Rust only (no JS permission anywhere).
-- **Guard** (`availability`): `plugins.updater.pubkey` must decode to a minisign Ed25519 public key
+- **Guard** (`build_availability`): the Microsoft Store build is always `Store` (no plugin; every
+  update action opens the Store page). Otherwise (`availability`) `plugins.updater.pubkey` must decode to a minisign Ed25519 public key
   (the committed placeholder doesn't) and the build must not be a development build; otherwise
   `init` logs why and nothing runs (menu item greyed, no tray line, Settings explains).
 - **Channels** (`Channel`, `settings.preferences.update_channel`, default stable): stable reads
@@ -670,3 +720,11 @@ checks discovery against real hosts (badssl.com certificate errors, Cloud 404 de
 `BRAINITIVE_VOICE_MODEL_DIR=<dir> cargo test --lib real_transcription -- --ignored --nocapture`
 downloads the real model once into `<dir>` and transcribes clips spoken by macOS `say` (Metal and
 CPU timings).
+
+The Microsoft Store build (BRAI-442): `cargo test --features msstore` runs the same suite as that
+build (the update guard is `Store`, the user agents carry `(MSStore)`, the "Please update" link is
+the Store page); `msstore::tests` cover the startup-task decision, the AppData → package copy
+mapping and the identity; `tests/msix_manifest.rs` and `node --test scripts/` check the manifest
+template against `docs/MICROSOFT-STORE-LISTING.md`, the version mapping (`1.2.3` → `1.2.3.0`,
+pre-releases refused) and the generated logos. The WinRT calls (`msstore/packaged.rs`) compile only
+on Windows: `ci.yml` runs clippy / tests with `--features msstore` there.

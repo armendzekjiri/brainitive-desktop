@@ -542,6 +542,38 @@ Use a debug build for the devtools steps (19.1 and 19.5). Use a real signed-in s
 
 ---
 
+## 20. Microsoft Store package (MSIX, Windows, BRAI-442)
+
+Use the **sideload test copy** from the `msstore-sideload-test` artifact of the Build workflow (or
+`pwsh scripts/build-msix.ps1 -SignForTest`), on a Windows 10 1809+ / 11 PC that has never had the
+NSIS build, or after uninstalling it (the Store build reuses its data folders and Credential Manager
+entries). Install: see docs/MICROSOFT-STORE.md § "Sideload test". Then repeat the core of sections 1–3
+and these rows. Help → Copy Diagnostics / the log's first line says "Microsoft Store build, package
+Ndize.al.Brainitive_x9qbckpnnsjh8".
+
+| Step | Expected | Windows |
+|---|---|---|
+| 20.1 Trust the `.cer` (Local Machine → Trusted People), double-click the sideload `.msix`, Install. | App Installer shows "Brainitive", publisher "CN=B7545416-…", version X.Y.Z.0; it installs without admin rights and appears in Start with the logo (not a white plate). | [ ] |
+| 20.2 Start it from Start. Taskbar, Alt+Tab, Start list. | The Brainitive icon everywhere (unplated, sharp at 100 % / 150 % / 200 % scaling). The first-run choice appears (section 1). | [ ] |
+| 20.3 Sign in to Cloud (browser → back to the app). | The browser opens the sign-in; approving it returns to the **running** app (Windows starts `Brainitive.exe "brainitive://…"`, the single instance takes over); no second window. | [ ] |
+| 20.4 With the app closed, open a `brainitive://` page link (Win+R). | The app starts and opens the page (section 3 rows apply). | [ ] |
+| 20.5 Global shortcuts: Brainitive key, quick capture, switcher, New task, voice. | All work like the NSIS build (section 4 / 4A). | [ ] |
+| 20.6 Tray icon: left click (panel), right click (menu). Panel tabs, timer, mark read. | As section 8 / 8A. | [ ] |
+| 20.7 Settings → **Open at login** on. Task Manager → Startup apps. | Toggle on; "Brainitive" listed as **Enabled** in Startup apps (no Run key under `HKCU\…\Run`). | [ ] |
+| 20.8 Sign out of Windows and back in, with **Start hidden** on. | The app starts by itself, tray icon only (the startup task is recognised as "at login"). | [ ] |
+| 20.9 Task Manager → Startup apps → disable Brainitive. Open Settings. Try turning **Open at login** on. | Settings shows it off; turning it on shows "Windows has Brainitive turned off as a startup app…" and stays off (only the user can re-enable it there). Re-enable in Task Manager: Settings shows on. | [ ] |
+| 20.10 Settings → **Open at login** off. | Startup apps shows Brainitive **Disabled**. | [ ] |
+| 20.11 Voice capture: turn it on, download the model, hold to talk. | First use: Windows asks for microphone access (or Settings → Privacy → Microphone lists Brainitive); allowed: text appears in quick capture; denied: the app's "microphone blocked" message with the settings link. | [ ] |
+| 20.12 Notifications: a web notification, a quick-capture result, "Brainitive is up to date" style messages. | Toasts show **"Brainitive"** with its icon (the package identity, not "PowerShell" or nothing); a click while on screen opens the page / window. Settings → System → Notifications lists Brainitive. | [ ] |
+| 20.13 Help / app menu → **Check for Updates…**; Settings → Updates. | The menu item is enabled and opens the Microsoft Store app on Brainitive's page. Settings → Updates says "Brainitive from the Microsoft Store is updated by the Store", has no auto-check / beta toggles, and its button "Open Microsoft Store" opens the Store page. | [ ] |
+| 20.14 "Please update" screen (server's minimum desktop version above the app's, e.g. Local server with a high `min_versions.desktop`). | No "Check for update now"; the text says to update in the Microsoft Store; "Open Microsoft Store" opens the Store page. | [ ] |
+| 20.15 Web app: open it in the main window, check the user agent (Help → Copy Diagnostics or the server's access log). | ends with ` BrainitiveDesktop/X.Y.Z (MSStore)`; the one-step `/app/session` sign-in still works (section 2). | [ ] |
+| 20.16 Downloads: an export with "Ask where to save" on, then off. | Save dialog → file where chosen; off → `Downloads\`. Mark of the Web set (section 10). | [ ] |
+| 20.17 Help → **Open Logs Folder**. | Explorer opens the folder that has `brainitive.log` (under `%LOCALAPPDATA%\Packages\Ndize.al.Brainitive_x9qbckpnnsjh8\LocalCache\Local\app.brainitive.desktop\logs`), not an empty or missing one. | [ ] |
+| 20.18 Offline: go offline, use the offline view, come back. | As section 12; the offline copy lives in the package folder. | [ ] |
+| 20.19 Uninstall (Settings → Apps → Brainitive → Uninstall) **without** signing out first. Look in `%LOCALAPPDATA%\Packages\` and Credential Manager → Windows Credentials. | The package folder `Ndize.al.Brainitive_x9qbckpnnsjh8` is gone (settings, logs, offline copy, voice model, WebView2 data), and Startup apps no longer lists Brainitive. **Credential Manager keeps the `app.brainitive.desktop` entries** (Windows doesn't remove them with the package; expected): note it, delete them by hand. Signed out first: no entries left. | [ ] |
+| 20.20 WACK: `appcert.exe test -appxpackagepath <sideload .msix> -reportoutputpath report.xml` (docs/MICROSOFT-STORE.md). | Overall result PASS (or only warnings explained in the submission notes). | [ ] |
+
 ## Known gaps per OS
 
 Taken from the task files (`docs/tasks/*.md`, `docs/SPIKE.md`, CHANGELOG "Unreleased"). Each one is
@@ -592,6 +624,9 @@ a row above or must be recorded as a result.
   are string-matched and untested.
 - Tray icon may sit in the overflow area.
 - Mark of the Web and SmartScreen behaviour on downloads: not run.
+- Microsoft Store package (section 20): built and validated by `makeappx` in CI only; the WinRT
+  startup task, package toasts, the protocol launch and the LocalCache log path were not run in an
+  installed package yet.
 
 **Linux**
 

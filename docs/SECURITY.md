@@ -329,6 +329,42 @@ signing" step of a `v*` tag build (or a manual run on the default branch) sees i
 OS, never `$GITHUB_ENV` (BRAI-377). Rotating it needs one release signed with the old key that carries the
 new public key (docs/RELEASING.md). The repo must publish its releases publicly for updates to work.
 
+## The Microsoft Store build (BRAI-442)
+
+The MSIX for the Microsoft Store (`--features msstore`, `tauri.msstore.conf.json`,
+`scripts/build-msix.ps1`, docs/MICROSOFT-STORE.md) is the same app with these differences:
+
+- **No updater at all.** `tauri-plugin-updater` is not registered and the overlay removes
+  `plugins.updater` (no public key, no endpoints in the binary); `updater::build_availability` is
+  `Store` whatever the key, so no check, download or install can run. Updates come only from the
+  Store, which installs packages signed by Microsoft for our reserved identity. "Check for
+  Updates…", Settings → Updates and the "Please update" screen open one constant URL,
+  `ms-windows-store://pdp/?productid=9N08DHPCF7WB` (`msstore::STORE_URL`, never an argument).
+  Store policy forbids an app updating itself outside the Store; this build can't.
+- **runFullTrust.** The package declares the restricted capability `runFullTrust`
+  (`EntryPoint="Windows.FullTrustApplication"`): the app runs as a normal medium-integrity Win32
+  process, **not** in an AppContainer, with the same rights as the NSIS install (global shortcuts,
+  tray, Credential Manager, files the user picks). The package adds no sandbox, so everything in
+  this document applies unchanged. Other declared capabilities: `internetClient`, `microphone`
+  (voice capture; Windows shows the app in Settings → Privacy → Microphone).
+- **Signing.** The `.msix` CI builds is **unsigned**; Partner Center signs it after certification.
+  No signing secret exists for it. `-SignForTest` makes a self-signed certificate on the machine
+  (CI runner or a developer's PC) for a separate sideload copy and deletes its private key right
+  after signing; that copy is never uploaded to the Store. Trusting its `.cer` (Local Machine →
+  Trusted People) lets that one throwaway key sign packages your PC accepts: remove it after
+  testing.
+- **Identity-bound code.** The WinRT calls (`msstore/packaged.rs`) only read the package identity,
+  read / switch the app's own startup task (no prompt; a task the user turned off in Task Manager
+  stays off, the app says where to change it) and show toasts with the package's AUMID. A toast's
+  text is set with `SetInnerText` (no XML from remote content) and a click goes through the same
+  `bridge::on_notification_action` as the plugin's.
+- **Data.** Same identifier, folders, keychain service and `private_fs` rules. MSIX writes new files
+  under AppData to the package's private copy (same user-only ACLs) and deletes it on uninstall;
+  **Credential Manager entries are not part of the package and stay after an uninstall** (sign out
+  first, or remove the `app.brainitive.desktop` entries in Credential Manager).
+- **User agent** ` BrainitiveDesktop/<version> (MSStore)` (API: `(windows; MSStore)`): tells the web
+  which build it is; the web app's ` BrainitiveDesktop/<semver>` match is unchanged.
+
 ## Tray, polling, clipboard
 
 - The tray menu is native (no webview). Its actions call fixed endpoints with validated ids.
@@ -360,6 +396,9 @@ new public key (docs/RELEASING.md). The repo must publish its releases publicly 
   login item starts the app's own executable with `--autostart`, which only decides whether the
   main window starts hidden. It does not change the security model: the stored sign-in is
   restored the same way as on a manual start.
+- The Microsoft Store build, packaged: the manifest's startup task `BrainitiveStartup` (declared
+  off; WinRT `StartupTask`, only from the same Settings command) instead of a registry Run key. The
+  user and policies keep the last word (Task Manager → Startup apps).
 
 ## Navigation guard (`links.rs`, `shell.rs`)
 

@@ -178,8 +178,10 @@ logo looks small.
 
 ## 7. Packages
 
-This section waits for the MSIX from the GitHub build (BRAI-442). The package must use exactly
-the identity below.
+Upload the unsigned `Brainitive_<X.Y.Z>_x64.msix` that the Build workflow's `msstore` job makes
+(artifact `installers-msstore`, also on the draft release). How it is built, tested and submitted:
+[MICROSOFT-STORE.md](MICROSOFT-STORE.md). The package uses exactly the identity below (the tests
+compare the manifest with this table).
 
 | Field | Value |
 | --- | --- |

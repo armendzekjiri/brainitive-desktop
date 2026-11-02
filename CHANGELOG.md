@@ -248,6 +248,19 @@ The first stable release of Brainitive Desktop for macOS, Windows and Linux.
   Windows through Azure Trusted Signing. Per-user NSIS install, WebView2 bootstrapper, `.deb` depends
   on ALSA. Step by step in `docs/RELEASING.md`.
 
+**Microsoft Store (BRAI-442, package built in CI; submission by the owner)**
+- **Brainitive in the Microsoft Store**: an x64 MSIX (`Brainitive_<version>_x64.msix`) for
+  Partner Center, built by the new `msstore` job on release tags and attached to the draft release.
+  The Store signs and updates it, so it installs without a SmartScreen warning; the NSIS installer
+  on GitHub stays as it is.
+- **The Store version updates through the Store**: it has no updater of its own. "Check for
+  Updates…", Settings → Updates and the "Please update" screen open Brainitive's Store page.
+- **Open at login** in the Store version uses Windows' startup apps (Settings → Apps → Startup);
+  turned off there, the app says so instead of switching it back on.
+- `brainitive://` links, notifications (from the app's package), the tray, shortcuts and voice
+  capture work the same in the Store version. Uninstalling it removes its data; sign-ins stored in
+  Credential Manager stay until you sign out or delete them.
+
 ## 0.1.0 (unreleased)
 
 - Tauri 2 shell: the bundled connect / sign-in screens, then the server's web app in the main window.

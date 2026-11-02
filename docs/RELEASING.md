@@ -11,7 +11,7 @@ and the auto-updater (BRAI-373) stays **off** in every build until its key exist
 | CI matrix (macOS universal, Windows x64 NSIS, Linux AppImage + .deb), tests, clippy, draft release | ready; runs once the repo is on GitHub |
 | macOS entitlements, hardened runtime, min. macOS 14 | ready (`src-tauri/entitlements.plist`, `bundle.macOS`) |
 | macOS signing + notarization | **waits for the certificate + notarization secrets** from the team holder (Burim Bilali, individual team `65NCF3DHKS`); handover in [`APPLE-SIGNING.md`](APPLE-SIGNING.md) |
-| Windows signing | **waits for Azure Trusted Signing (or a certificate)** and 6 secrets |
+| Windows signing | the **Microsoft Store** package is signed by the Store (no secret; CI builds it, section 2); the NSIS installer on GitHub stays unsigned unless Azure Trusted Signing (or a certificate) and 6 secrets are added |
 | NSIS per-user install, Start menu, `brainitive://`, WebView2 bootstrapper; Linux `.desktop` MimeType, `.deb` deps | ready (`bundle.*` in `tauri.conf.json`) |
 | Download buttons on the website | **waits for the first published release** (3 env values) |
 | Auto-updater: plugin, stable / beta channels, signed updater bundles, `latest.json`, beta manifest | code + CI ready; **waits for the update key pair** (public key in `tauri.conf.json`, 2 secrets) and **public release assets** |
@@ -59,7 +59,19 @@ split into two matrix entries (`--target aarch64-apple-darwin` / `x86_64-apple-d
 
 ## 2. Windows: signing
 
-**Preferred: Azure Trusted Signing** (about 10 USD/month, no hardware token, builds SmartScreen
+**The signed path is the Microsoft Store (BRAI-442).** The `msstore` job of `build.yml` builds an
+unsigned `Brainitive_<X.Y.Z>_x64.msix` on every `v*` tag (not on pre-release tags) and manual run,
+and the draft release attaches it. You upload it in Partner Center → Brainitive → Packages; the
+Store signs it with Microsoft's certificate for our reserved identity, so Store installs show no
+SmartScreen warning and update through the Store. No certificate, no Azure account, no secret.
+Building, sideload testing, WACK and the submission steps: [`MICROSOFT-STORE.md`](MICROSOFT-STORE.md).
+Each submission needs a **higher** version than the last one (the MSIX version is
+`tauri.conf.json`'s `X.Y.Z` + `.0`), so bump as usual before tagging.
+
+**The NSIS installer on GitHub stays unsigned** (SmartScreen warns on first run) until someone pays
+for code signing; it keeps its own auto-updater (section 4). Optional, for that installer only:
+
+**Azure Trusted Signing** (about 10 USD/month, no hardware token, builds SmartScreen
 reputation; identity validation needed, individuals in some regions only, check availability).
 
 1. Azure: create a **Trusted Signing account**, complete identity validation, create a

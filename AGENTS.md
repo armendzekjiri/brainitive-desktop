@@ -50,6 +50,12 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
   you made: the owner does (docs/RELEASING.md). Tests make throwaway keys in the test. Updater
   requests stay https on GitHub hosts (`updater::allowed_url`); nothing installs without the user's
   "Restart to Update" click.
+- The Microsoft Store build (BRAI-442, `--features msstore` + `tauri.msstore.conf.json`,
+  docs/MICROSOFT-STORE.md) has no updater: anything that checks, downloads or installs updates
+  must go through `updater::Availability` (`Store` there). Its WinRT code (`msstore/packaged.rs`)
+  only compiles on Windows; keep `msstore/mod.rs`'s stubs in step. The MSIX identity lives in
+  `src-tauri/msix/AppxManifest.xml.tmpl`, `msstore` constants and MICROSOFT-STORE-LISTING.md:
+  change all three or none (the tests compare them).
 - Pure logic goes in the pure modules (`server`, `servers`, `links`, `pkce`, `version`, `settings`,
   `shortcuts`, `queue`, `offline_cache`, `outbox`, `poll`, `badge`, `voice::recorder`, and the pure
   parts of `tray` / `switcher` / `downloads` / `voice::model` / `voice::audio` / `updater`) with
@@ -69,6 +75,8 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
 ```bash
 npm run build
 cd src-tauri && cargo test && cargo clippy --all-targets -- -D warnings && cargo build
+cargo clippy --all-targets --features msstore -- -D warnings   # the Store variant
+node --test scripts/                                           # from the repo root
 ```
 
 Commits: conventional messages, author `armendzekjiri <armendzekjiri@outlook.de>`.
