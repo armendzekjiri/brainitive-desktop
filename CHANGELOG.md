@@ -5,6 +5,27 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Brainitive key (BRAI-440):
+
+- **One key, then a letter**: press **⌃⌘K** (macOS) / **Ctrl+Alt+K** (Windows, Linux) in any app and
+  a small panel lists what comes next: **C** quick capture, **K** quick switcher (so ⌃⌘K K),
+  **V** voice capture — hold V to talk, let go to finish — and **O** to bring Brainitive to the
+  front. Esc, clicking elsewhere or 3 seconds without a key close it. Only the key itself is taken
+  from other apps; the letters are read by the panel. Ctrl+Alt+K types no AltGr character on German
+  and most European layouts.
+- **Settings → Shortcuts**: change or turn off the Brainitive key, pick another letter (A–Z) for
+  each action, and set **direct shortcuts** if you prefer one combination per action. New
+  defaults: quick capture ⇧⌘Space stays on, the quick switcher and voice capture have no direct
+  shortcut until you set one (⌥⌘K and ⇧⌘V are suggested with **Default**; on Windows / Linux the
+  switcher suggestion is now Ctrl+Alt+Shift+K).
+- **Updating keeps your choices**: shortcuts you recorded yourself (or turned off) stay as they
+  were; only the old untouched defaults of the switcher (⌥⌘K / Ctrl+Alt+K) and voice capture
+  (⇧⌘V / Ctrl+Shift+V) are switched off. If you had recorded ⌃⌘K / Ctrl+Alt+K for something else,
+  the Brainitive key starts off.
+- Settings names the clash ("Quick capture already uses ⇧⌘Space.") and shows when the system or
+  another app refuses a key; one refused shortcut no longer keeps the others from working.
+- **Brainitive Key…** in the File menu and the tray (with the key next to it).
+
 Security review (BRAI-377):
 
 - **Links can't sign you in or out**: a `brainitive://open` link, a web notification or a server link

@@ -123,10 +123,42 @@ Use **File** on Windows and Linux where macOS shows the app menu (Settings, Quit
 | 4.11 Edit menu: Copy, Paste, Select All in a text field on a page. | Standard editing works (⌘C / ⌘V). Clipboard access from the page works. | [ ] | [ ] | [ ] |
 | 4.12 Rebind quick capture in Settings to another ⌘/Ctrl+Shift+letter combo. | The new combo opens quick capture; the old one no longer does. | [ ] | [ ] | [ ] |
 | 4.13 Try to bind a reserved combination (for example Ctrl+C or ⌘Q). | Refused with a message; the old binding stays. | [ ] | [ ] | [ ] |
-| 4.14 Bind quick capture and switcher to the same combo. | Refused: the two shortcuts must differ. | [ ] | [ ] | [ ] |
+| 4.14 Settings → Shortcuts → Direct shortcuts: turn on the quick switcher (**Default**), then bind quick capture to the same combo. | Refused, naming the other one ("Quick switcher already uses …"): the shortcuts must differ. | [ ] | [ ] | [ ] |
 | 4.15 Set quick capture to **off** in Settings. | The shortcut no longer opens quick capture; the menu item still does. | [ ] | [ ] | [ ] |
 | 4.16 Wayland session: press the quick capture shortcut. | No global shortcut is registered (known gap). Menu, tray and the quick capture item still work. | n/a | n/a | [ ] |
 | 4.17 Help menu: Copy Diagnostics, Open Logs Folder, Check for Updates (Help on Windows and Linux; app menu on macOS). | Items exist; Copy Diagnostics and Open Logs Folder work (section 16); Check for Updates is greyed out in this build (section 17). | [ ] | [ ] | [ ] |
+
+## 4A. Brainitive key (BRAI-440)
+
+One global shortcut, then one letter. Defaults: **⌃⌘K** (macOS), **Ctrl+Alt+K** (Windows, Linux);
+letters **C** quick capture, **K** quick switcher, **V** voice capture (hold), **O** open Brainitive.
+Settings → Shortcuts holds the key, the letters and the optional direct shortcuts.
+
+| Step | Expected | macOS | Windows | Linux |
+|---|---|---|---|---|
+| 4A.1 Fresh install: open Settings → Shortcuts. | Brainitive key ⌃⌘K / Ctrl+Alt+K; letters C, K, V, O; Direct shortcuts: quick capture ⇧⌘Space / Ctrl+Shift+Space, quick switcher **Off**, voice capture **Off**. | [ ] | [ ] | [ ] |
+| 4A.2 In another app press the Brainitive key. | A small centred panel takes the focus and lists the four letters with their actions; the key is shown in its title. | [ ] | [ ] | [ ] |
+| 4A.3 Press the key, then **C**. | Quick capture opens with the text field focused; the panel is gone. Esc in quick capture returns to the app you came from. | [ ] | [ ] | [ ] |
+| 4A.4 Press the key, then **K**. Then press the key and **K** while still holding ⌃⌘ (Ctrl+Alt). | Both open the quick switcher (the key pressed again counts as its letter K). | [ ] | [ ] | [ ] |
+| 4A.5 Main window hidden or behind another app: press the key, then **O**. | The main Brainitive window comes to the front. | [ ] | [ ] | [ ] |
+| 4A.6 Press the key, then wait. | The panel closes by itself after about 3 seconds; the focus goes back to the app you were in. | [ ] | [ ] | [ ] |
+| 4A.7 Press the key, then Esc; again, then click another app. | Esc closes it; clicking elsewhere closes it. Nothing runs. | [ ] | [ ] | [ ] |
+| 4A.8 Press the key, then a letter that has no action (for example **X**). | The panel says "X does nothing here." and stays a moment; nothing runs. | [ ] | [ ] | [ ] |
+| 4A.9 Voice capture **off**: press the key. | **V** is greyed out with "Off. Turn it on in Settings → Voice capture."; pressing V shows that message, the microphone stays closed. | [ ] | [ ] | [ ] |
+| 4A.10 Voice capture on (model downloaded): press the key, then **hold V**, speak, let go. | Key-down starts the recording (indicator with meter and timer, hint "Let go of V to finish"), the release stops it, the text opens in quick capture. | [ ] | [ ] | [ ] |
+| 4A.11 Same as 4A.10, but tap V (under half a second). | Toggle mode: the recording goes on, the hint says ↩ to finish; ↩ / Done ends it. | [ ] | [ ] | [ ] |
+| 4A.12 First voice use after an app start (the indicator window is built then): hold V for 2 s, let go. | The release is still seen (by the panel or the indicator) and the recording stops. If it is missed, record it (fallback: Done / ↩ / 2-minute cut-off). | [ ] | [ ] | [ ] |
+| 4A.13 Settings → Shortcuts → Brainitive key → **Change**, press ⌃⌥⌘B (Ctrl+Alt+Shift+B). | The new key opens the panel, the old one no longer does; File menu and tray show the new key next to **Brainitive Key…**. | [ ] | [ ] | [ ] |
+| 4A.14 Record the Brainitive key on quick capture's keys (⇧⌘Space / Ctrl+Shift+Space). | Refused inline: "Quick capture already uses ⇧⌘Space."; the old key stays. | [ ] | [ ] | [ ] |
+| 4A.15 Record the Brainitive key on keys another app has registered globally (for example another launcher's shortcut). | Refused inline with "… is already used by another app or the system"; the previous key keeps working. | [ ] | [ ] | [ ] |
+| 4A.16 Start another app that registers ⌃⌘K / Ctrl+Alt+K first, then start Brainitive. | Settings shows the refusal at the top of Shortcuts; quick capture's direct shortcut still works (one refused key no longer blocks the others). | [ ] | [ ] | [ ] |
+| 4A.17 Letters: change quick capture's letter to **n**; then try **v**, **1**, **ä**. | N is taken (shown upper case, the panel lists it); "V is already used for Voice capture."; "Use one letter, A–Z." for 1 and ä; leaving the field shows the letter in use. **Default** brings back C. | [ ] | [ ] | [ ] |
+| 4A.18 Brainitive key **Off**. | The key does nothing in other apps; the letters are greyed in Settings; File → **Brainitive Key…** and the tray item still open the panel (the tray item is hidden while the key is off). | [ ] | [ ] | [ ] |
+| 4A.19 Direct shortcuts: turn on the quick switcher (**Default**: ⌥⌘K / Ctrl+Alt+Shift+K) and voice capture (⇧⌘V / Ctrl+Shift+V). | Both work as before alongside the Brainitive key; the File menu and tray show them. | [ ] | [ ] | [ ] |
+| 4A.20 Upgrade from a build before BRAI-440 with untouched shortcuts. | After the update: Brainitive key on; quick switcher and voice direct shortcuts **Off**; quick capture unchanged. | [ ] | [ ] | [ ] |
+| 4A.21 Upgrade from a build before BRAI-440 where you had **recorded** a quick switcher or voice shortcut (or set one Off). | Your recorded keys and your Off stay as they were. If you had recorded ⌃⌘K / Ctrl+Alt+K yourself, the Brainitive key starts Off (no clash). | [ ] | [ ] | [ ] |
+| 4A.22 German / Swiss / French / Polish layout: type `@`, `€`, `{`, `[` and `µ` with AltGr in another app while Brainitive runs. | All characters type normally. Czech / Slovak / Hungarian layouts: AltGr+K types `ł` there, so Ctrl+Alt+K is taken; record it and change the key in Settings. | n/a | [ ] | [ ] |
+| 4A.23 Wayland session: press the Brainitive key. | No global shortcut (known gap, like 4.16). File → **Brainitive Key…** and the tray still open the panel. | n/a | n/a | [ ] |
 
 ## 5. Extra windows
 
@@ -165,14 +197,14 @@ Use **File** on Windows and Linux where macOS shows the app menu (Settings, Quit
 
 | Step | Expected | macOS | Windows | Linux |
 |---|---|---|---|---|
-| 7.1 Press ⌥⌘K (Ctrl+Alt+K). | A Spotlight-like window opens with the search field focused. | [ ] | [ ] | [ ] |
+| 7.1 Press ⌃⌘K, then K (Ctrl+Alt+K, then K); with the direct shortcut turned on (4A.19) also ⌥⌘K (Ctrl+Alt+Shift+K). | A Spotlight-like window opens with the search field focused. | [ ] | [ ] | [ ] |
 | 7.2 Type two letters of an issue title. | Results appear after a short pause (debounced), at most 12. | [ ] | [ ] | [ ] |
 | 7.3 Use the arrow keys, press ↩ on an issue. | The main window comes to the front and opens that issue. The switcher hides. | [ ] | [ ] | [ ] |
 | 7.4 Open a doc or plan from the results and press ↩. | Same as 7.3 for the doc or plan. | [ ] | [ ] | [ ] |
 | 7.5 Select a snippet and press ⌘C (Ctrl+C), or use its copy button. | Snippet content is on the clipboard: paste in another app to check. | [ ] | [ ] | [ ] |
 | 7.6 Select an issue and press ⌘T (Ctrl+T). | A timer starts on that issue; the tray shows the running timer (section 8). | [ ] | [ ] | [ ] |
 | 7.7 Press Esc, or click another app. | Switcher hides. | [ ] | [ ] | [ ] |
-| 7.8 Sign out, then press ⌥⌘K. | No results from the previous account (sign-out clears them). | [ ] | [ ] | [ ] |
+| 7.8 Sign out, then open the switcher (⌃⌘K K). | No results from the previous account (sign-out clears them). | [ ] | [ ] | [ ] |
 | 7.9 Switcher with the network off. | Shows a clear message; does not hang or show stale results as live. | [ ] | [ ] | [ ] |
 
 ## 8. Tray / menu bar
@@ -180,7 +212,7 @@ Use **File** on Windows and Linux where macOS shows the app menu (Settings, Quit
 | Step | Expected | macOS | Windows | Linux |
 |---|---|---|---|---|
 | 8.1 Look for the icon after start. | macOS: menu bar; Windows: notification area (may sit under the ^ overflow, pin it); Linux: system tray (needs libayatana-appindicator). | [ ] | [ ] | [ ] |
-| 8.2 Open the tray menu. | Server and account line; Quick Capture; Quick Switcher; My Day; running timer entry; unread notifications; Open Brainitive; Settings; Check for Updates (greyed); Quit. | [ ] | [ ] | [ ] |
+| 8.2 Open the tray menu. | Server and account line; Brainitive Key… (with the key); Quick Capture; Quick Switcher; My Day; running timer entry; unread notifications; Open Brainitive; Settings; Check for Updates (greyed); Quit. | [ ] | [ ] | [ ] |
 | 8.3 Linux: left-click the icon. | Shows the menu (left click shows the menu on this desktop). | n/a | n/a | [ ] |
 | 8.4 My Day: tick an item in the tray menu. | The item is done in the web My Day within a minute. The tray entry shows the change. | [ ] | [ ] | [ ] |
 | 8.5 Start a timer in the web on an issue. | Tray shows the running timer with its time, updating. | [ ] | [ ] | [ ] |
@@ -272,13 +304,15 @@ desktop. The first sync is a full run; wait about a minute after sign-in before 
 
 ## 13. Voice capture
 
-Voice is off by default. The shortcut is only registered while it is on.
+Voice is off by default. Its direct shortcut is off by default too (BRAI-440: ⌃⌘K, then hold V, see
+4A.10); turn it on in Settings → Shortcuts → Direct shortcuts to test the rows that name ⇧⌘V. A direct
+shortcut is only registered while voice capture is on.
 
 | Step | Expected | macOS | Windows | Linux |
 |---|---|---|---|---|
-| 13.1 With voice off, press ⇧⌘V (Ctrl+Shift+V) in another app with a text field. | The key is not taken by Brainitive; it works as the app's own shortcut (for example "paste as plain text"). | [ ] | [ ] | [ ] |
+| 13.1 With voice off (or its direct shortcut off), press ⇧⌘V (Ctrl+Shift+V) in another app with a text field. | The key is not taken by Brainitive; it works as the app's own shortcut (for example "paste as plain text"). | [ ] | [ ] | [ ] |
 | 13.2 With voice off, choose **File → Voice Capture…**. | An explanation with a **Turn on** button appears. | [ ] | [ ] | [ ] |
-| 13.3 Turn voice on from each entry point in turn: Settings, File menu, tray, quick capture mic button. | Each one turns it on; the shortcut is then active. Test each entry at least once. | [ ] | [ ] | [ ] |
+| 13.3 Turn voice on from each entry point in turn: Settings, File menu, tray, quick capture mic button. | Each one turns it on; ⌃⌘K V (and a direct shortcut, if set) then starts it. Test each entry at least once. | [ ] | [ ] | [ ] |
 | 13.4 Turn it on and click **Turn on**: the speech model download starts (190 MB). | Progress is shown; a checksum check runs; the download finishes; the model file is in the app data `voice/` folder. | [ ] | [ ] | [ ] |
 | 13.5 Interrupt the download (disconnect the network midway). | The partial file is removed or resumed cleanly; a retry works; no broken model is used. | [ ] | [ ] | [ ] |
 | 13.6 Second use after the model exists. | No new download. | [ ] | [ ] | [ ] |
@@ -301,7 +335,7 @@ Voice is off by default. The shortcut is only registered while it is on.
 | 13.23 Windows: hold the shortcut, release it. | Release is detected by polling; recording stops within about half a second. If release is missed, the 2-minute cut-off is the fallback: record it. | n/a | [ ] | n/a |
 | 13.24 Linux on X11: hold the shortcut, release it. | Release is detected through detectable auto-repeat: recording stops on release. | n/a | n/a | [ ] |
 | 13.25 Linux on Wayland: the voice shortcut. | No global shortcut (known gap). Start the recording from the tray, File menu or quick capture mic button instead. | n/a | n/a | [ ] |
-| 13.26 Settings → Voice capture → rebind the voice shortcut, then use the new one. | Works; the old one stops working. | [ ] | [ ] | [ ] |
+| 13.26 Settings → Shortcuts → Direct shortcuts → rebind the voice shortcut, then use the new one. | Works; the old one stops working. | [ ] | [ ] | [ ] |
 | 13.27 Settings → Voice capture → **Remove voice model**. | The model file is gone from the `voice/` folder; the next use asks to download it again. | [ ] | [ ] | [ ] |
 | 13.28 Turn voice off in Settings. | Shortcut no longer registered: ⇧⌘V (Ctrl+Shift+V) works in other apps again (13.1). | [ ] | [ ] | [ ] |
 | 13.29 Signed release build only: check the microphone prompt. | Requires the `audio-input` entitlement in a signed build (not configured yet). Unsigned debug builds may not show the prompt; record what happens. | [ ] | [ ] | [ ] |

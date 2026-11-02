@@ -27,7 +27,7 @@ desktop/
     ├── build.rs                app ACL manifest (every command needs a permission)
     ├── capabilities/           one file per bundled window, local origin + its own window only:
     │                           local.json (main), settings.json, capture.json, switcher.json,
-    │                           offline.json, voice.json
+    │                           offline.json, voice.json, leader.json
     ├── src/
     │   ├── lib.rs              plugins, commands, menu, deep-link + notification wiring, run loop
     │   ├── server.rs           ServerOrigin: typed address → origin, TLS rule, store ids   (pure)
@@ -59,6 +59,7 @@ desktop/
     │   ├── menu.rs             the app menu and its actions (BRAI-362)
     │   ├── popup.rs            bundled windows: build / show / dismiss, caller check
     │   ├── hotkeys.rs          global shortcut registration (action registry)
+    │   ├── leader.rs           the Brainitive key: letters, overlay commands       (pure + glue)
     │   ├── capture.rs          quick-capture commands, queue flush, open_quick_capture(prefill)
     │   ├── offline.rs          offline mode: files per server, sync, the offline window's commands
     │   ├── switcher.rs         quick-switcher commands (search, open, copy snippet, timer)
@@ -176,12 +177,13 @@ the main frame on the bundled screens and the current origin. The user agent end
 | `settings` | `settings.html` | default | `capabilities/settings.json` |
 | `offline` | `offline.html` (BRAI-366) | default | `capabilities/offline.json` |
 | `voice` | `voice.html` (BRAI-439) | default | `capabilities/voice.json` |
+| `leader` | `leader.html` (BRAI-440, the Brainitive key overlay) | default | `capabilities/leader.json` |
 
 App windows share one navigation / page-load guard, downloads handler, user agent and zoom level;
 switching server, signing out or forgetting closes the `app-<n>` windows. The bundled windows are
 built on first use (from the async runtime: never inside a main-thread handler, which can deadlock
-on Windows), hidden instead of closed, centred, and the floating ones (capture, switcher) hide when
-they lose focus (the voice indicator floats too but stays: a recording goes on while the user
+on Windows), hidden instead of closed, centred, and the floating ones (capture, switcher, the
+Brainitive key overlay) hide when they lose focus (the voice indicator floats too but stays: a recording goes on while the user
 clicks elsewhere). A bundled window opened from another one that has the focus (voice → quick
 capture) inherits where the focus goes back to. Dismissing one with Esc gives the focus back to the app the user came from (macOS:
 `app.hide()` when another app was in front). The window-state plugin keeps app windows only.
@@ -201,7 +203,7 @@ opens the directory. Nothing is ever sent anywhere.
 ## Menus and shortcuts (BRAI-362)
 
 `menu.rs`: Brainitive (macOS) / File: Settings… ⌘, · New Issue ⌘N · New Doc ⌥⌘N · New Window ⇧⌘N
-· Quick Capture / Quick Switcher (their global shortcut shown) · Close Window ⌘W · Quit; Edit;
+· Brainitive Key… / Quick Capture / Quick Switcher / Voice Capture (their global shortcut shown) · Close Window ⌘W · Quit; Edit;
 View: Back ⌘[ · Forward ⌘] · Reload ⌘R · Actual Size ⌘0 · Zoom In ⌘= · Zoom Out ⌘-; Go: Search… ⌘K ·
 Dashboard ⇧⌘H · My Work ⇧⌘M · Captures · Notifications · Account Settings; Server; Window (macOS);
 Help. `CmdOrCtrl` = Ctrl on Windows / Linux. Actions go to the app window focused last.
@@ -212,12 +214,46 @@ nothing claims it, the web app's own ⌘. (palette, commands) / ⌘K (search) ha
 ## Global shortcuts, quick capture, quick switcher (BRAI-359 / BRAI-401)
 
 `tauri-plugin-global-shortcut`, Rust side only. Each shortcut is a `hotkeys::HotkeyAction`
-(registry: shortcut id → action) with an accelerator in the preferences: quick capture ⇧⌘Space /
-Ctrl+Shift+Space, quick switcher ⌥⌘K / Ctrl+Alt+K, voice capture ⇧⌘V / Ctrl+Shift+V (the only one
-that also gets the key-up). Settings records new keys (the current
-shortcuts are paused while recording); `shortcuts.rs` refuses one-modifier shortcuts (except
-F-keys), system combinations and duplicates; the OS refusing a shortcut keeps the previous ones
-and the reason shows in Settings.
+(registry: shortcut id → action) with an accelerator in the preferences: the **Brainitive key**
+⌃⌘K / Ctrl+Alt+K (`Leader`, below), quick capture ⇧⌘Space / Ctrl+Shift+Space, and the optional
+direct shortcuts quick switcher and voice capture (off by default since BRAI-440; **Default** sets
+⌥⌘K / Ctrl+Alt+Shift+K and ⇧⌘V / Ctrl+Shift+V; voice is the only one that also gets the key-up).
+Settings records new keys (the current shortcuts are paused while recording); `shortcuts.rs`
+refuses one-modifier shortcuts (except F-keys), system combinations and duplicates
+(`hotkeys::conflict` names the other one). `hotkeys::register` tries every shortcut, so one taken
+by another app doesn't keep the others away; a change in Settings is rolled back only when its own
+shortcut was refused, and the reason shows in Settings.
+
+### The Brainitive key (BRAI-440)
+
+One global shortcut, then one letter. `HotkeyAction::Leader` opens the overlay (`leader.html`,
+window `leader`, floating, hides on blur, `capabilities/leader.json`); the overlay reads the next
+key **in its own window** (no letter is registered globally) and sends it to `leader_press`; Rust
+maps it (`Preferences.leader_letters`, default C / K / V / O, A–Z, unique, `leader.rs` pure) to
+quick capture, the quick switcher, voice capture or `shell::focus_main`. The new window is shown
+while the overlay still has the focus, so it inherits where the focus returns. Esc / blur / 3 s
+without a key (a page timer → `leader_close`, which ignores a hidden overlay) close it. The key
+pressed again while the overlay is in front counts as its own letter (⌃⌘K K → switcher), else
+closes it.
+
+- **Hold V**: key-down → `voice::start_from_leader` (hold mode, `release_letter` kept); the
+  indicator takes the focus, so the key-up arrives in whichever window has it: the overlay
+  (`leader_release`) or the indicator (`voice_release`; `VoiceView.release_key` tells it which
+  key). Both feed `Input::HotkeyUp`; the same 0.5 s tap / hold rule applies. The press / release
+  commands are synchronous so a quick tap's key-up can't overtake its key-down. While voice
+  capture is off, V is greyed out and refused with a hint.
+- **Letters**: the page sends what the layout types (`KeyboardEvent.key`, so Z / Y follow QWERTZ),
+  else the key position (`code`) when modifiers change the character.
+- **Preferences**: `leader_shortcut`, `leader_letters` (loaded leniently: a broken entry falls back
+  to the defaults, never loses the file), `shortcut_scheme`. `Preferences::migrate` (scheme 0 → 1,
+  at load, then saved) turns off only the **literal** old defaults (`CommandOrControl+Alt+K`,
+  `CommandOrControl+Shift+KeyV`; recorded keys are stored canonical, e.g. `alt+super+KeyK`), keeps
+  explicit Off, and starts the leader Off when a kept direct shortcut already uses its keys.
+- **Settings → Shortcuts**: the key (Change / Default / Off), a letter field + Default per action
+  (`settings_set_leader_letter`), then "Direct shortcuts (optional)". Menus: **Brainitive Key…** in
+  File and the tray (`tray::add_leader_entry`, only while the key is on), the key as its
+  accelerator (display only). The voice indicator says "Press ⌃⌘K, then hold V" when no direct
+  shortcut is set (`leader::voice_how_to`).
 
 - **Quick capture**: `capture_submit` → `POST /api/v1/captures {text, url?, intended_type?,
   source: "Brainitive Desktop", request_id}`. Offline / 5xx / 429 → `capture-queue.json` (app data
@@ -233,8 +269,8 @@ and the reason shows in Settings.
 
 ## Voice capture (BRAI-439)
 
-Hold a global shortcut (default ⇧⌘V / Ctrl+Shift+V, `HotkeyAction::Voice`, rebindable or off;
-**not final**: it may move under a "Brainitive key" chord), speak, let go: the speech becomes text
+Press the Brainitive key and hold V (BRAI-440), or hold the optional direct shortcut (off by
+default, ⇧⌘V / Ctrl+Shift+V when set, `HotkeyAction::Voice`), speak, let go: the speech becomes text
 on this computer and opens in quick capture (`capture::open_quick_capture(app, Some(text))`, added to
 what is already typed) to check and save as usual. Also **Voice Capture…** in the File menu, the
 tray and a microphone button in quick capture (those start a recording that runs until Enter /
@@ -278,14 +314,16 @@ Done / the shortcut again).
   denied, downloading, ready, recording (level meter, timer up to 2:00, Done / Cancel), transcribing,
   errors. Rust sends it `voice://view` (the screen) and `voice://level` (level + elapsed, every
   80 ms), to that window only; it calls `voice_view`, `voice_start`, `voice_stop`, `voice_cancel`,
-  `voice_turn_on`, `voice_download`, `voice_open_privacy`, `voice_close`.
+  `voice_turn_on`, `voice_download`, `voice_open_privacy`, `voice_close`, `voice_release` (the held
+  Brainitive-key letter went up in this window).
 - **Build**: whisper.cpp needs CMake and a C++ compiler (and libclang for bindgen, with a bundled
   fallback); `GGML_NATIVE=OFF` (`src-tauri/.cargo/config.toml`) keeps release builds portable
   (Apple Silicon baseline M1; x86-64 AVX2 + FMA + F16C).
 
 ## Tray / menu bar (BRAI-360) and badge (BRAI-361)
 
-A native menu (`tray.rs`, no webview): server line, Quick Capture, Quick Switcher, My Day (check
+A native menu (`tray.rs`, no webview): server line, Brainitive Key… (while the key is on), Quick
+Capture, Quick Switcher, Voice Capture, My Day (check
 items → `PATCH /me/my-day/items/{id}`), the running timer (Stop and Log Time → `POST /me/timer/stop`
 with the default activity when one is required; Discard), unread notifications (→ `/notifications`),
 Open Brainitive, Settings…, Quit. The menu is a pure model (`tray::model`) rebuilt only when it
@@ -420,7 +458,8 @@ then checks one signed bundle with the plugin against the committed key. The rel
 
 `cargo test` runs the pure logic (server URL rules, PKCE incl. the RFC 7636 vector, deep links,
 navigation decisions incl. the bundled windows', versions, settings / preferences / zoom, token /
-error parsing, API request paths, call-error classification, shortcut rules and labels, the capture
+error parsing, API request paths, call-error classification, shortcut rules and labels, the
+Brainitive key (letters, conflicts, migration of old defaults, labels per OS), the capture
 queue, the voice recorder state machine, model download verification / removal, resampling and the
 meter, transcript clean-up, polling backoff / wake / plan, tray menu model and API parsing, switcher result parsing,
 download names / moves, the overlay badge, menu ids / accelerators, updater channels / URLs /

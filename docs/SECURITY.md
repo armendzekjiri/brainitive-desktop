@@ -128,6 +128,21 @@ window becomes a way to call the API.
 
 Threat: a global shortcut steals keys from other apps, or something else changes / triggers it.
 
+- **The Brainitive key** (BRAI-440, ⌃⌘K / Ctrl+Alt+K) is one registered combination; the letter
+  after it is read by the overlay window (`leader.html`, label `leader`) only while that window
+  has the focus — no letter is registered globally and no key is read from other apps. The
+  overlay has its own `capabilities/leader.json` (`local: true`, no `remote`,
+  `windows: ["leader"]`, only `allow-leader-view` / `-press` / `-release` / `-close`, no events);
+  every command checks the caller (`popup::ensure_caller`). The page only reports a letter A–Z;
+  Rust decides the action from the preferences, and the actions are the same ones the menu and
+  tray offer (open quick capture / switcher / the main window, start voice capture **only while
+  voice capture is turned on**). It holds no account data. Voice's key-up in the indicator is
+  its own command `voice_release` (voice capability), which only ends a recording started by a
+  held letter.
+- Letters and the key are changed only through Settings' commands (`settings_set_shortcut`,
+  `settings_set_leader_letter`: A–Z, unique); a broken letters entry in `settings.json` falls back
+  to the defaults.
+
 - Registered from Rust only; changed only through the Settings window's command (its capability),
   validated by `shortcuts.rs`: at least two modifiers incl. Ctrl / Alt / Cmd (F-keys: one), no
   system combination (Spotlight, screenshots, input sources, lock, force quit, Ctrl+Alt+Del, Alt+F4
@@ -144,7 +159,8 @@ Threats: the microphone records when the user doesn't expect it; audio or transc
 network, logs, another webview); a tampered speech model is loaded; the model download is
 redirected somewhere else.
 
-- **Microphone only on purpose**: opened when the user holds / presses the voice shortcut, picks
+- **Microphone only on purpose**: opened when the user holds / presses the voice shortcut or the
+  Brainitive key's voice letter (held, in the focused overlay), picks
   Voice Capture in the menu or tray, or clicks the microphone in quick capture — and only after
   voice capture was turned on (off by default; while off the shortcut is not registered and the menu, the tray and the
   microphone button only explain it and offer "Turn on").
@@ -385,11 +401,13 @@ store is deleted and it leaves the recent list.
 - A captured text queued under a server is sent to whoever is signed in to that server when the
   connection is back (sign-out deletes the queue, so this is only the same user after a session
   expiry).
-- **Voice capture shortcut ⇧⌘V / Ctrl+Shift+V** (BRAI-439) takes the combination from other apps
-  ("paste as plain text" in browsers, Slack, VS Code, and **paste in most Linux terminals**) while
-  voice capture is **on** (it is off by default and registered only then; also the menu / tray
-  labels show it only then). The key is not final (a "Brainitive key" chord is planned); users can
-  change it or turn voice capture off in Settings.
+- **Voice capture's direct shortcut ⇧⌘V / Ctrl+Shift+V** (BRAI-439) takes the combination from
+  other apps ("paste as plain text" in browsers, Slack, VS Code, and **paste in most Linux
+  terminals**) only when the user sets it (off by default since BRAI-440: ⌃⌘K, then hold V) and
+  voice capture is on.
+- **The Brainitive key** ⌃⌘K / Ctrl+Alt+K (BRAI-440) is taken from other apps while it is on (the
+  default). On Czech, Slovak and Hungarian keyboard layouts AltGr+K types `ł`, which Windows
+  reports as Ctrl+Alt+K: those users need to change or turn off the key in Settings → Shortcuts.
 - **Signed macOS builds** with the hardened runtime will need the
   `com.apple.security.device.audio-input` entitlement for the microphone (not set yet: signing is
   not configured; part of the beta checklist).

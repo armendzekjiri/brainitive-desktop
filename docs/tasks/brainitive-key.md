@@ -60,3 +60,43 @@ One easy global shortcut (the **Brainitive key**), then one letter for the actio
 Letter validation (A–Z, case, unique, lenient load), migration default vs. explicit, labels per
 OS for the leader, leader ≠ any direct shortcut (defaults and recorded), overlay key handling
 (letter → action, leader key again), voice how-to text, tray entry.
+
+## Result
+
+**Built**
+
+- Brainitive key ⌃⌘K (macOS) / Ctrl+Alt+K (Windows, Linux), `HotkeyAction::Leader`, opening the
+  overlay `leader.html` (window `leader`, `capabilities/leader.json`: 4 commands, local only, each
+  with `ensure_caller`). Letters C / K / V (hold) / O; Esc, blur and a 3 s timer close it; the key
+  again = its letter (⌃⌘K K → switcher). V greyed with a hint while voice capture is off.
+- Hold V: `voice::start_from_leader` / `leader_released`; key-up from the overlay
+  (`leader_release`) or the voice indicator (new `voice_release`, voice capability); voice texts
+  say "Press ⌃⌘K, then hold V" when no direct shortcut is set.
+- Direct shortcuts optional: capture on, switcher / voice Off by default; Default suggests ⌥⌘K
+  (Ctrl+Alt+Shift+K on Windows / Linux, so it never equals the key) and ⇧⌘V / Ctrl+Shift+V.
+- `Preferences::migrate` (`shortcut_scheme`), lenient letters, `hotkeys::conflict` (names the
+  other shortcut), registration of every shortcut even if one is refused; Settings rolls back only
+  the changed one.
+- Settings → Shortcuts (key, letters, "Direct shortcuts (optional)"; voice's direct row moved
+  there). File menu and tray: **Brainitive Key…** with the key.
+- Docs: ARCHITECTURE, SECURITY, README, CHANGELOG (Unreleased), QA-CHECKLIST (section 4A + updated
+  rows in 4, 7, 8, 13).
+
+**Tests**: `cargo test` 240 passed (232 lib + 8 capabilities; 6 ignored as before), 15 of them new:
+letters (A–Z, unique, lenient load), migration (old defaults off, recorded keys / explicit Off
+kept, leader off on a clash, runs once, saved at load), leader ≠ any direct shortcut, labels per
+OS, key-again → letter, voice how-to text, tray entry, overlay capability. `cargo clippy
+--all-targets -D warnings`, `cargo fmt --check`, `npm run build` green;
+`npx tauri build --debug --bundles app` built `src-tauri/target/debug/bundle/macos/Brainitive.app`.
+
+**Not tested / open**
+
+- The app was not launched (by request): the overlay, focus hand-over and hold-V are untested
+  on every OS — QA-CHECKLIST 4A.
+- Hold V's key-up after the focus moves to the voice indicator relies on the webview delivering a
+  key-up without its key-down (WKWebView / WebView2 / WebKitGTK); the first use (indicator built
+  then) is the riskiest (4A.12). Fallback: Done / ↩ / the 2-minute cut-off.
+- Windows / Linux not built or run here: focus-stealing rules (Windows foreground lock, GNOME) may
+  keep the overlay from getting the keys; Wayland has no global shortcuts (known gap).
+- Ctrl+Alt+K is AltGr+K (`ł`) on Czech, Slovak and Hungarian layouts (documented in SECURITY.md,
+  QA 4A.22); those users must change the key.
