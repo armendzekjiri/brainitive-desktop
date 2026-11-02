@@ -641,53 +641,105 @@ pub fn parse_unread(body: &Value) -> Option<u64> {
     body.get("unread_count").and_then(Value::as_u64)
 }
 
-/// GET with the ETag of the last answer: a 304 gives the cached body back.
-async fn get_cached(app: &AppHandle, origin: &ServerOrigin, path: &'static str) -> Result<Value, CallError> {
+/// Who a poll was made for: the server and the sign-in (`Inner::account_epoch`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollTicket {
+    pub origin: ServerOrigin,
+    pub account: u64,
+}
+
+impl PollTicket {
+    pub fn now(inner: &crate::state::Inner) -> Option<Self> {
+        let origin = inner.current_origin().filter(|_| inner.phase == Phase::InApp)?;
+        Some(Self {
+            origin,
+            account: inner.account_epoch,
+        })
+    }
+
+    /// Whether an answer to this poll may still be shown (BRAI-377): the same server, the same
+    /// sign-in, and still in the app. A sign-out, a server switch or another account while the
+    /// request ran → the answer is dropped (no badge, timer or My Day of the old account).
+    pub fn still_current(&self, origin: Option<&ServerOrigin>, account: u64, in_app: bool) -> bool {
+        in_app && origin == Some(&self.origin) && account == self.account
+    }
+
+    fn holds(&self, inner: &crate::state::Inner) -> bool {
+        self.still_current(
+            inner.current_origin().as_ref(),
+            inner.account_epoch,
+            inner.phase == Phase::InApp,
+        )
+    }
+}
+
+/// GET with the ETag of the last answer: a 304 gives the cached body back. `None`: the answer
+/// came after the ticket expired.
+async fn get_cached(app: &AppHandle, ticket: &PollTicket, path: &'static str) -> Result<Option<Value>, CallError> {
+    let origin = &ticket.origin;
     let cached = state(app).lock().etags.get(path).cloned();
     let request = ApiRequest::get(path).etag(cached.as_ref().map(|(etag, _)| etag.clone()));
     let response = state(app).session.request(origin, &request).await?;
     if response.not_modified() {
         if let Some((_, body)) = cached {
-            return Ok(body);
+            return Ok(Some(body));
         }
         // a 304 without a cached body (should not happen): ask again without the ETag
         let response = state(app).session.request(origin, &ApiRequest::get(path)).await?;
-        return Ok(response.body);
+        return Ok(Some(response.body));
+    }
+    let s = state(app);
+    let mut inner = s.lock();
+    if !ticket.holds(&inner) {
+        return Ok(None);
     }
     if let Some(etag) = response.etag.clone() {
-        state(app)
-            .lock()
-            .etags
-            .insert(path.to_string(), (etag, response.body.clone()));
+        inner.etags.insert(path.to_string(), (etag, response.body.clone()));
     }
-    Ok(response.body)
+    Ok(Some(response.body))
 }
 
 /// One poll: unread count + timer, My Day when due. Returns whether the server answered.
-async fn poll_once(app: &AppHandle, origin: &ServerOrigin, plan: poll::Plan) -> Result<(), CallError> {
+/// Every answer is written only while `ticket` still holds (checked under the same lock as the
+/// write): a sign-out or switch during the request drops it.
+async fn poll_once(app: &AppHandle, ticket: &PollTicket, plan: poll::Plan) -> Result<(), CallError> {
     if plan.unread {
-        let body = get_cached(app, origin, "/api/v1/notifications/unread-count").await?;
-        if let Some(n) = parse_unread(&body) {
-            state(app).lock().tray_data.unread = Some(n);
-            crate::bridge::set_badge(app, n as i64);
+        let body = get_cached(app, ticket, "/api/v1/notifications/unread-count").await?;
+        if let Some(n) = body.as_ref().and_then(parse_unread) {
+            let current = {
+                let s = state(app);
+                let mut inner = s.lock();
+                let current = ticket.holds(&inner);
+                if current {
+                    inner.tray_data.unread = Some(n);
+                }
+                current
+            };
+            if current {
+                crate::bridge::set_badge(app, n as i64);
+            }
         }
     }
     if plan.timer {
-        let body = get_cached(app, origin, "/api/v1/me/timer").await?;
-        if let Some(timer) = parse_timer(&body) {
+        let body = get_cached(app, ticket, "/api/v1/me/timer").await?;
+        if let Some(timer) = body.as_ref().and_then(parse_timer) {
             let s = state(app);
             let mut inner = s.lock();
-            inner.tray_data.timer = timer;
-            inner.tray_data.timer_known = true;
+            if ticket.holds(&inner) {
+                inner.tray_data.timer = timer;
+                inner.tray_data.timer_known = true;
+            }
         }
     }
     if plan.my_day {
-        let body = get_cached(app, origin, "/api/v1/me/my-day").await?;
-        if let Some(items) = parse_my_day(&body) {
+        let body = get_cached(app, ticket, "/api/v1/me/my-day").await?;
+        if let Some(items) = body.as_ref().and_then(parse_my_day) {
             let s = state(app);
             let mut inner = s.lock();
-            inner.tray_data.my_day = Some(items);
-            inner.tray_data.my_day_stale = false;
+            if ticket.holds(&inner) {
+                inner.tray_data.my_day = Some(items);
+                inner.tray_data.my_day_stale = false;
+            }
         }
     }
     Ok(())
@@ -699,7 +751,7 @@ pub fn start_poller(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut backoff = Backoff::default();
         let mut tick: u32 = 0;
-        let mut polled_origin: Option<ServerOrigin> = None;
+        let mut polled: Option<PollTicket> = None;
         let mut delay = Duration::from_secs(3);
         let mut recheck = crate::version::Recheck::default();
         loop {
@@ -718,9 +770,10 @@ pub fn start_poller(app: &AppHandle) {
                 tokio::time::sleep(poll::WAKE_GRACE).await;
             }
 
-            let Some(origin) = current(&app) else {
+            let ticket = PollTicket::now(&state(&app).lock());
+            let Some(ticket) = ticket else {
                 // signed out / no server / a bundled screen: nothing to poll
-                if polled_origin.take().is_some() {
+                if polled.take().is_some() {
                     state(&app).lock().tray_data = TrayData::default();
                     refresh(&app);
                 }
@@ -729,8 +782,10 @@ pub fn start_poller(app: &AppHandle) {
                 delay = poll::INTERVAL;
                 continue;
             };
-            if polled_origin.as_ref() != Some(&origin) {
-                polled_origin = Some(origin.clone());
+            let origin = ticket.origin.clone();
+            // another server or another sign-in: nothing of the previous one stays
+            if polled.as_ref() != Some(&ticket) {
+                polled = Some(ticket.clone());
                 tick = 0;
                 recheck.reset();
                 let s = state(&app);
@@ -739,7 +794,7 @@ pub fn start_poller(app: &AppHandle) {
                 inner.tray_data = TrayData::default();
             }
             let stale = state(&app).lock().tray_data.my_day_stale;
-            let result = poll_once(&app, &origin, poll::plan(tick, stale)).await;
+            let result = poll_once(&app, &ticket, poll::plan(tick, stale)).await;
             tick = tick.wrapping_add(1);
             crate::offline::note_poll(&app, &result);
             match result {
@@ -778,6 +833,24 @@ pub type EtagCache = HashMap<String, (String, Value)>;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn poll_answers_for_another_server_or_account_are_dropped() {
+        let a = ServerOrigin::parse("https://a.example.com").unwrap();
+        let b = ServerOrigin::parse("https://b.example.com").unwrap();
+        let ticket = PollTicket {
+            origin: a.clone(),
+            account: 3,
+        };
+        assert!(ticket.still_current(Some(&a), 3, true));
+        assert!(!ticket.still_current(Some(&a), 4, true), "signed out / another account");
+        assert!(!ticket.still_current(Some(&b), 3, true), "server switched");
+        assert!(!ticket.still_current(None, 3, true), "server forgotten");
+        assert!(
+            !ticket.still_current(Some(&a), 3, false),
+            "left the app (sign-in screen)"
+        );
+    }
+
     use super::*;
 
     #[test]

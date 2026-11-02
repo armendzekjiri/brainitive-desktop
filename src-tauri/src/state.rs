@@ -114,6 +114,9 @@ pub struct Inner {
     pub last_good: Option<Url>,
     /// When the webview last reached the server's `/login` (sign-in loop detection).
     pub reauth_at: Option<Instant>,
+    /// Bumped whenever a sign-in begins or ends (completed sign-in, sign-out, forget): work that
+    /// started for the previous account (a tray poll) drops its answer (BRAI-377).
+    pub account_epoch: u64,
     /// Origins that already got their remote capability (Tauri can add, not remove, them).
     pub capabilities: HashSet<String>,
     /// Native notification id → what a click opens.
@@ -197,6 +200,7 @@ impl AppState {
                 rebuilding: false,
                 last_good: None,
                 reauth_at: None,
+                account_epoch: 0,
                 capabilities: HashSet::new(),
                 notifications: HashMap::new(),
                 next_notification: 1,

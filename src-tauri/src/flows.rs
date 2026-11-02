@@ -472,7 +472,11 @@ pub async fn handle_deep_link(app: &AppHandle, url: Url) {
             }
             shell::show_local(app, Phase::Connecting, None);
             match state(app).session.complete_sign_in(&code, &st).await {
-                Ok(origin) => restore(app, origin, None).await,
+                Ok(origin) => {
+                    // possibly another account than before
+                    state(app).lock().account_epoch += 1;
+                    restore(app, origin, None).await
+                }
                 Err(SessionError::StateMismatch) => {
                     // keep waiting for the real callback
                     shell::show_local(
@@ -571,6 +575,7 @@ pub async fn sign_out(app: &AppHandle) {
         let s = state(app);
         let mut inner = s.lock();
         inner.last_good = None;
+        inner.account_epoch += 1;
     }
     shell::show_local(app, Phase::SignIn, Some(Notice::info("You are signed out.")));
 }
@@ -591,6 +596,7 @@ pub async fn forget_server(app: &AppHandle, origin: ServerOrigin) {
         let s = state(app);
         let mut inner = s.lock();
         let was_current = inner.current_origin().as_ref() == Some(&origin);
+        inner.account_epoch += 1;
         inner.settings.forget(&origin);
         inner.save_settings();
         if was_current {
