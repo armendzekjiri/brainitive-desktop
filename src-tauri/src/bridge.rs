@@ -45,10 +45,18 @@ pub fn allow_rate(times: &mut std::collections::VecDeque<Instant>, now: Instant,
 fn ensure_current_server(app: &AppHandle, webview: &Webview) -> Result<crate::server::ServerOrigin, String> {
     let origin = state(app).lock().current_origin().ok_or("not connected")?;
     let url = webview.url().map_err(|_| "unknown caller")?;
-    if !shell::is_app_window(webview.label()) || !origin.contains(&url) {
+    if !is_bridge_caller(webview.label(), &url, &origin) {
         return Err("not allowed".into());
     }
     Ok(origin)
+}
+
+/// The bridge's own check (next to the origin-scoped runtime capability): an app window whose
+/// page is on the current server's exact origin. A foreign page that committed in the main
+/// window for the few milliseconds before the page-load guard reverts it (macOS / Linux, codex
+/// review 7) is refused here, and the capability (`<origin>/*`) never matches it either.
+pub fn is_bridge_caller(label: &str, url: &url::Url, current: &crate::server::ServerOrigin) -> bool {
+    shell::is_app_window(label) && current.contains(url)
 }
 
 fn clip(text: &str, max: usize) -> String {
@@ -245,5 +253,41 @@ mod tests {
         assert_eq!(clip("  Hello\u{0007}  ", 10), "Hello");
         assert_eq!(clip("abcdef", 3), "abc…");
         assert_eq!(clip("line1\nline2", 20), "line1\nline2");
+    }
+
+    #[test]
+    fn a_foreign_page_in_an_app_window_never_reaches_the_bridge() {
+        let current = crate::server::ServerOrigin::parse("brainitive.example.com").unwrap();
+        let u = |s: &str| url::Url::parse(s).unwrap();
+        assert!(is_bridge_caller(
+            "main",
+            &u("https://brainitive.example.com/dashboard"),
+            &current
+        ));
+        assert!(is_bridge_caller(
+            "app-3",
+            &u("https://brainitive.example.com/x"),
+            &current
+        ));
+        // the foreign page committed before the revert (macOS / Linux), a look-alike, http
+        for foreign in [
+            "https://evil.com/phish",
+            "https://brainitive.example.com.evil.com/",
+            "https://evil.brainitive.example.com/",
+            "http://brainitive.example.com/dashboard",
+            "https://brainitive.example.com:8443/",
+            "tauri://localhost/index.html",
+            "about:blank",
+        ] {
+            assert!(!is_bridge_caller("main", &u(foreign), &current), "{foreign}");
+        }
+        // bundled windows never, whatever they show
+        assert!(!is_bridge_caller(
+            "capture",
+            &u("https://brainitive.example.com/"),
+            &current
+        ));
+        // the runtime capability is scoped to the exact origin as well
+        assert_eq!(current.capability_pattern(), "https://brainitive.example.com/*");
     }
 }

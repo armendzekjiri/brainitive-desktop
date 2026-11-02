@@ -32,7 +32,8 @@ devices and **can't** be used for distribution: signed with it, the app is block
 and isn't accepted by the App Store.
 
 **Done in this repo:**
-- the CI workflow with signing and notarization;
+- the CI workflow with signing and notarization **after** the build (`scripts/macos-sign.sh`: the
+  build never sees the certificate or the notarization key, codex review 11);
 - the entitlements and hardened runtime;
 - the actions pinned to commit SHAs;
 - this checklist.
@@ -134,8 +135,10 @@ gh secret set APPLE_API_KEY_P8 -R armendzekjiri/brainitive-desktop < AuthKey_XXX
 ```
 
 Then test it: GitHub → Actions → **Build** → **Run workflow** on `main`. Signing runs only for a `v*`
-tag or a manual run on `main`. The macOS job should log "signing" and "notarizing". The
-draft release then holds a signed `.dmg`.
+tag or a manual run on `main`. In the macOS job, `tauri build` builds unsigned; the next step,
+**macOS signing + notarization**, should log "signing with the Developer ID identity",
+"notarizing (this waits for Apple)" and finally "signed, notarized and stapled". The run's
+`installers-macos` artifact (and a tag's draft release) then holds the signed `.dmg`.
 
 ## 5. Or: a signed build on your own Mac
 
@@ -151,14 +154,23 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 git clone git@github.com:armendzekjiri/brainitive-desktop.git && cd brainitive-desktop
 npm ci
 
-# each build (option B shown; for A set APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID instead)
+# each build: first UNSIGNED, with no APPLE_* variable set (like CI: the build never sees them)
+unset APPLE_SIGNING_IDENTITY APPLE_CERTIFICATE APPLE_ID APPLE_PASSWORD APPLE_API_KEY APPLE_API_KEY_PATH
+npx tauri build --target universal-apple-darwin --bundles app,dmg
+
+# then sign + notarize + staple what it made (option B shown; for A set APPLE_ID /
+# APPLE_PASSWORD / APPLE_TEAM_ID instead of the three APPLE_API_* values)
 export APPLE_SIGNING_IDENTITY="Developer ID Application: <Name> (<TEAMID>)"
 export APPLE_API_KEY=<Key ID> APPLE_API_ISSUER=<Issuer ID>
 export APPLE_API_KEY_PATH=$HOME/keys/AuthKey_<Key ID>.p8
-npx tauri build --target universal-apple-darwin
+B=src-tauri/target/universal-apple-darwin/release/bundle
+scripts/macos-sign.sh "$B/macos/Brainitive.app" "$B"/dmg/Brainitive_*_universal.dmg
 ```
 
-The output is `src-tauri/target/universal-apple-darwin/release/bundle/dmg/Brainitive_<version>_universal.dmg`.
+`APPLE_CERTIFICATE` stays unset here: the script then uses the identity in your login keychain
+(macOS may ask once to allow `codesign` to use the key). It replaces Tauri's `.dmg` with a signed
+one of the same name, notarizes it and staples the `.dmg` and the `.app`. The output is
+`src-tauri/target/universal-apple-darwin/release/bundle/dmg/Brainitive_<version>_universal.dmg`.
 
 ## 6. Check the result
 
@@ -178,8 +190,9 @@ voice capture is used.
 
 - **"errSecInternalComponent" while signing:** the keychain is locked, or the certificate has no
   private key. Re-export the `.p12` from **My Certificates**, not from Certificates.
-- **Notarization "Invalid":** run `xcrun notarytool log <submission-id> --key … --key-id … --issuer …`.
-  The log names the binary and the problem.
+- **Notarization "Invalid":** the script stops with the submission id; run
+  `xcrun notarytool log <submission-id> --key … --key-id … --issuer …`. The log names the binary
+  and the problem.
 - **The x86_64 half fails to compile** (whisper.cpp): build the two architectures separately, as
   described in `RELEASING.md` § 1.
 - **The signed app crashes at launch with a code-signing or JIT error:** add only the entitlement

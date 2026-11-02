@@ -11,6 +11,11 @@ name: Build
 # Signing runs only for a v* tag push or a manual run on the default branch (SIGNING_ALLOWED);
 # pull requests and other refs never see a signing secret. Secrets are passed per step through
 # `env:` to the steps that use them, never written to $GITHUB_ENV (BRAI-377).
+# Platform signing happens AFTER the build (codex review 11): `tauri build` (npm, cargo and every
+# crate's build script) runs without any Apple / Azure secret and makes unsigned bundles; only the
+# dedicated signing steps get the secrets, and they run Apple's tools (scripts/macos-sign.sh) or
+# the pinned trusted-signing-cli on the files the build produced. On Windows the exe is built with
+# --no-bundle, signed, then bundled (`tauri bundle`) and the installer is signed.
 # Auto-updates (BRAI-373): with TAURI_SIGNING_PRIVATE_KEY, signing builds also make signed
 # updater bundles and the draft release gets latest.json; without it they are skipped, nothing
 # fails. The bundles are built WITHOUT the key; a separate step after the build signs them with
@@ -58,7 +63,8 @@ jobs:
             updater-glob: src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz
           - name: Windows (x64)
             os: windows-2022
-            args: --bundles nsis
+            # bundled after the exe is signed (step "tauri bundle (Windows)")
+            args: --no-bundle
             rust-targets: ""
             artifact: windows
             bundle-glob: |
@@ -134,78 +140,91 @@ jobs:
             echo "updater=$HAS_UPDATER_KEY"
           } >> "$GITHUB_OUTPUT"
 
-      # Notarization with an App Store Connect API key (used when the Apple ID option is absent):
-      # notarytool needs the .p8 as a file. It goes to the runner's temp folder, mode 0600, and is
-      # deleted after the build; only its path is an output.
-      - name: macOS notarization key file
-        id: notary_key
-        if: runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id != 'true' && steps.signing.outputs.apple_notary_key == 'true'
+      # Windows: Azure Trusted Signing through trusted-signing-cli (pinned). Installed here, in a
+      # step WITHOUT secrets (cargo install compiles crates and runs build scripts), into the
+      # runner's temp folder (not ~/.cargo/bin, which rust-cache restores).
+      - name: Windows signing tool
+        id: wintool
+        if: runner.os == 'Windows' && steps.signing.outputs.azure == 'true' && github.event_name != 'pull_request'
         shell: bash
-        env:
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
         run: |
-          mkdir -p "$RUNNER_TEMP/private_keys"
-          umask 077
-          printf '%s' "$APPLE_API_KEY_P8" > "$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8"
-          echo "path=$RUNNER_TEMP/private_keys/AuthKey_${APPLE_API_KEY}.p8" >> "$GITHUB_OUTPUT"
+          cargo install trusted-signing-cli --version 0.11.0 --locked --root "$RUNNER_TEMP/signing-tools"
+          echo "cli=$RUNNER_TEMP/signing-tools/bin/trusted-signing-cli" >> "$GITHUB_OUTPUT"
 
-      # Windows: Azure Trusted Signing through trusted-signing-cli (pinned), wired up with a config
-      # overlay written here (tauri.conf.json stays unsigned so local builds never need Azure). The
-      # Azure credentials go to the tauri build step only (its signCommand runs the CLI).
-      - name: Windows signing (Azure Trusted Signing)
-        id: winsign
-        if: runner.os == 'Windows' && steps.signing.outputs.azure == 'true'
+      # Bundles are not built for pull requests. No secret of any kind reaches this step (codex
+      # review 11): the Apple / Azure signing below works on what it produced, and
+      # tauri.conf.json keeps createUpdaterArtifacts off (the updater bundles are signed later).
+      - name: tauri build
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: npx tauri build ${{ matrix.args }}
+
+      # macOS: sign the .app (hardened runtime, entitlements), make a new signed .dmg from it,
+      # notarize it and staple both (scripts/macos-sign.sh: Apple's tools only). The only step
+      # with the Apple secrets; the certificate goes into a throwaway keychain, the .p8 into a
+      # 0600 temp file, both deleted when the script exits.
+      - name: macOS signing + notarization
+        if: runner.os == 'macOS' && github.event_name != 'pull_request' && steps.signing.outputs.apple == 'true'
         shell: bash
         env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # notarization option A: Apple ID + app-specific password
+          APPLE_ID: ${{ steps.signing.outputs.apple_notary_id == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ steps.signing.outputs.apple_notary_id == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ steps.signing.outputs.apple_notary_id == 'true' && secrets.APPLE_TEAM_ID || '' }}
+          # option B: App Store Connect API key (used when A is absent)
+          APPLE_API_KEY: ${{ steps.signing.outputs.apple_notary_id != 'true' && steps.signing.outputs.apple_notary_key == 'true' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_ISSUER: ${{ steps.signing.outputs.apple_notary_id != 'true' && steps.signing.outputs.apple_notary_key == 'true' && secrets.APPLE_API_ISSUER || '' }}
+          APPLE_API_KEY_P8: ${{ steps.signing.outputs.apple_notary_id != 'true' && steps.signing.outputs.apple_notary_key == 'true' && secrets.APPLE_API_KEY_P8 || '' }}
+        run: |
+          shopt -s nullglob
+          apps=(src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app)
+          dmgs=(src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)
+          [ ${#apps[@]} -eq 1 ] || { echo "::error::expected one .app, found ${#apps[@]}"; exit 1; }
+          [ ${#dmgs[@]} -eq 1 ] || { echo "::error::expected one .dmg, found ${#dmgs[@]}"; exit 1; }
+          /bin/bash scripts/macos-sign.sh "${apps[0]}" "${dmgs[0]}"
+
+      # Windows: the app's exe, then the installer around it, then the installer. The Azure
+      # credentials reach the two signing steps only (trusted-signing-cli reads them from env).
+      - name: Windows signing (app)
+        if: steps.wintool.outputs.cli != ''
+        shell: bash
+        env:
+          SIGN_CLI: ${{ steps.wintool.outputs.cli }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
           ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
           PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
         run: |
-          cargo install trusted-signing-cli --version 0.11.0 --locked
-          printf '{"bundle":{"windows":{"signCommand":"trusted-signing-cli -e %s -a %s -c %s -d Brainitive %%1"}}}' \
-            "$ENDPOINT" "$ACCOUNT" "$PROFILE" > "$RUNNER_TEMP/sign.conf.json"
-          echo "config=$RUNNER_TEMP/sign.conf.json" >> "$GITHUB_OUTPUT"
+          exe=src-tauri/target/release/brainitive-desktop.exe
+          [ -f "$exe" ] || { echo "::error::no $exe"; exit 1; }
+          "$SIGN_CLI" -e "$ENDPOINT" -a "$ACCOUNT" -c "$PROFILE" -d Brainitive "$exe"
 
-      # Bundles are not built for pull requests. No updater key here: tauri.conf.json keeps
-      # createUpdaterArtifacts off, the updater bundles are signed in the next step. Each Apple /
-      # Azure variable is empty unless this runner signs (signing allowed, secret present, right
-      # OS); empty ones are unset, because Tauri treats a set-but-empty variable as set.
-      - name: tauri build
-        if: github.event_name != 'pull_request'
+      - name: tauri bundle (Windows)
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
+        shell: bash
+        run: npx tauri bundle --bundles nsis
+
+      - name: Windows signing (installer)
+        if: steps.wintool.outputs.cli != ''
         shell: bash
         env:
-          SIGN_CONFIG: ${{ steps.winsign.outputs.config }}
-          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          # notarization option A: Apple ID + app-specific password
-          APPLE_ID: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id == 'true' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id == 'true' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && steps.signing.outputs.apple == 'true' && steps.signing.outputs.apple_notary_id == 'true' && secrets.APPLE_TEAM_ID || '' }}
-          # option B: App Store Connect API key (the file from the step above)
-          APPLE_API_KEY: ${{ steps.notary_key.outputs.path != '' && secrets.APPLE_API_KEY || '' }}
-          APPLE_API_ISSUER: ${{ steps.notary_key.outputs.path != '' && secrets.APPLE_API_ISSUER || '' }}
-          APPLE_API_KEY_PATH: ${{ steps.notary_key.outputs.path }}
-          AZURE_TENANT_ID: ${{ steps.winsign.outputs.config != '' && secrets.AZURE_TENANT_ID || '' }}
-          AZURE_CLIENT_ID: ${{ steps.winsign.outputs.config != '' && secrets.AZURE_CLIENT_ID || '' }}
-          AZURE_CLIENT_SECRET: ${{ steps.winsign.outputs.config != '' && secrets.AZURE_CLIENT_SECRET || '' }}
+          SIGN_CLI: ${{ steps.wintool.outputs.cli }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          ACCOUNT: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT }}
+          PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_PROFILE }}
         run: |
-          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID \
-            APPLE_PASSWORD APPLE_TEAM_ID APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH \
-            AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET; do
-            [ -n "${!name}" ] || unset "$name"
-          done
-          configs=()
-          [ -n "$SIGN_CONFIG" ] && configs+=(--config "$SIGN_CONFIG")
-          npx tauri build ${{ matrix.args }} "${configs[@]}"
-
-      - name: Remove the notarization key file
-        if: always() && steps.notary_key.outputs.path != ''
-        shell: bash
-        env:
-          KEY_FILE: ${{ steps.notary_key.outputs.path }}
-        run: rm -f "$KEY_FILE"
+          shopt -s nullglob
+          installers=(src-tauri/target/release/bundle/nsis/*-setup.exe)
+          [ ${#installers[@]} -eq 1 ] || { echo "::error::expected one installer, found ${#installers[@]}"; exit 1; }
+          "$SIGN_CLI" -e "$ENDPOINT" -a "$ACCOUNT" -c "$PROFILE" -d Brainitive "${installers[0]}"
 
       # Updater bundles (BRAI-373), signed AFTER the build so the updater key never reaches the
       # build (npm scripts, build.rs of every crate). Only this step gets the key. The bundle is

@@ -185,13 +185,28 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// Tests talk to a loopback server: no system proxy in between.
+    #[cfg(test)]
+    pub fn loopback() -> Self {
+        Self::build(true)
+    }
+
+    fn build(no_proxy: bool) -> Self {
         let user_agent = crate::msstore::api_user_agent(APP_VERSION, platform(), crate::msstore::STORE_BUILD);
         let base = || {
-            reqwest::Client::builder()
+            let builder = reqwest::Client::builder()
                 .user_agent(user_agent.clone())
                 .timeout(TIMEOUT)
                 .connect_timeout(Duration::from_secs(10))
-                .https_only(false) // http is allowed for loopback only, enforced by ServerOrigin
+                .https_only(false); // http is allowed for loopback only, enforced by ServerOrigin
+            if no_proxy {
+                builder.no_proxy()
+            } else {
+                builder
+            }
         };
         let http = base().redirect(redirect::Policy::none()).build().expect("http client");
         let discovery = base()

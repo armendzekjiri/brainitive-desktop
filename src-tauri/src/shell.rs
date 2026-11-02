@@ -192,6 +192,7 @@ pub fn show_local(app: &AppHandle, phase: Phase, notice: Option<crate::state::No
             if on_local {
                 let _ = tauri::Emitter::emit_to(&w, MAIN, "desktop://changed", ());
             } else {
+                grant_local(app, MAIN, &local);
                 let _ = w.navigate(local);
             }
         }
@@ -242,6 +243,7 @@ pub fn open_main(app: &AppHandle, store: [u8; 16], url: WebviewUrl) {
                 WebviewUrl::External(u) => u.clone(),
                 _ => local_url(app),
             };
+            grant_local(app, MAIN, &target);
             let _ = w.navigate(target);
         }
         Some(w) => {
@@ -309,6 +311,13 @@ fn build_app_window(
         (1100.0, 780.0)
     };
 
+    // a new webview: its first load is the app's own
+    {
+        let s = state(app);
+        let mut inner = s.lock();
+        inner.committed.remove(label);
+        inner.native_navigation.remove(label);
+    }
     let builder = WebviewWindowBuilder::new(app, label, url)
         .title(window_title(app))
         .inner_size(width, height)
@@ -475,9 +484,40 @@ fn webview_data_dir(app: &AppHandle, store: &[u8; 16]) -> tauri::Result<PathBuf>
         .join(server::hex(store)))
 }
 
+/// A native transition to a bundled page (show a screen, revert a foreign page) announces itself:
+/// the next navigation of `label` to a bundled page within a few seconds is the app's own.
+fn grant_local(app: &AppHandle, label: &str, url: &Url) {
+    if links::is_app_page(url, None, &local_origins(app)) && url.as_str() != "about:blank" {
+        state(app)
+            .lock()
+            .native_navigation
+            .insert(label.to_string(), Instant::now());
+    }
+}
+
+/// Who navigates `label` to `url` (codex review 6): the window's committed page, or a fresh
+/// native grant for a bundled target (consumed).
+fn initiator_of(app: &AppHandle, label: &str, url: &Url) -> links::Initiator {
+    let locals = local_origins(app);
+    let s = state(app);
+    let mut inner = s.lock();
+    let target_local = links::is_app_page(url, None, &locals) && url.as_str() != "about:blank";
+    let granted = target_local
+        && inner
+            .native_navigation
+            .remove(label)
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(10));
+    links::initiator(inner.committed.get(label), granted, &locals)
+}
+
 fn on_navigation(app: &AppHandle, label: &str, url: &Url) -> bool {
     let instance = state(app).lock().current_origin();
-    match links::decide_navigation(url, instance.as_ref(), &local_origins(app)) {
+    let initiator = initiator_of(app, label, url);
+    let decision = links::decide_navigation(url, instance.as_ref(), &local_origins(app), initiator);
+    if decision == Navigation::Block && initiator == links::Initiator::Content {
+        log::info!("navigation by server content to a bundled page / deep link blocked");
+    }
+    match decision {
         Navigation::Allow => true,
         Navigation::Home => {
             // the logo link (→ `/`): stay in the app; "Sign out" calls brainitive_sign_out
@@ -496,10 +536,13 @@ fn on_navigation(app: &AppHandle, label: &str, url: &Url) -> bool {
         }
         Navigation::Foreign(url) => {
             // Windows reports top-level navigations only → open outside right away. macOS and
-            // Linux also report iframes (YouTube, Figma embeds), and wry 0.57 hands this handler
-            // the URL only (no WKNavigationAction.targetFrame / WebKitGTK frame name), so a
-            // top-level load can't be told apart here: allow, the page-load guard reverts a
-            // top-level one as soon as it commits (`links::decide_page_load`, BRAI-377).
+            // Linux also report iframes (YouTube, Figma embeds), and wry 0.57.1 hands this handler
+            // the URL only (no WKNavigationAction.targetFrame / WebKitGTK frame name; re-checked
+            // for the codex review, finding 7: still so in the pinned tauri 2.12.5 / wry 0.57.1),
+            // so a top-level load can't be told apart here: allow, the page-load guard reverts a
+            // top-level one as soon as it commits (`links::decide_page_load`, BRAI-377). Until
+            // then the foreign page has no IPC: the bridge capability is `<origin>/*` and every
+            // bridge command checks the current origin again (`bridge::is_bridge_caller`).
             if cfg!(windows) {
                 open_external(app, &url);
                 false
@@ -521,7 +564,13 @@ fn on_navigation(app: &AppHandle, label: &str, url: &Url) -> bool {
 }
 
 fn on_page_load(app: &AppHandle, window: &WebviewWindow, url: &Url, event: PageLoadEvent) {
-    let instance = state(app).lock().current_origin();
+    let instance = {
+        let s = state(app);
+        let mut inner = s.lock();
+        // page-load events are main-frame only and come after the commit on every platform
+        inner.committed.insert(window.label().to_string(), url.clone());
+        inner.current_origin()
+    };
     let allowed = links::is_app_page(url, instance.as_ref(), &local_origins(app));
     if event == PageLoadEvent::Finished && window.label() == MAIN && allowed {
         // the bundled screens are the first paint (cached shell); the server's page is "loaded"
@@ -608,6 +657,7 @@ pub fn open_external(app: &AppHandle, url: &Url) {
 
 /// Navigation from inside a webview handler must not re-enter the webview synchronously.
 fn defer_navigate(app: &AppHandle, label: &str, url: Url) {
+    grant_local(app, label, &url);
     let handle = app.clone();
     let label = label.to_string();
     tauri::async_runtime::spawn(async move {

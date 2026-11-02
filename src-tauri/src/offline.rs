@@ -26,7 +26,7 @@ use crate::popup::{self, Popup};
 use crate::queue::CaptureInput;
 use crate::server::{self, ServerOrigin};
 use crate::session::CallError;
-use crate::state::{state, Inner, Phase};
+use crate::state::{state, AccountTicket, Inner, Phase};
 
 /// The offline data of the current server, kept in `AppState`.
 pub struct OfflineData {
@@ -56,6 +56,12 @@ pub struct OfflineData {
     pub load: u64,
     /// The generation of the last snapshot / clear (see [`next_generation`]).
     generation: u64,
+    /// The sign-in (`RecentServer::sign_in`) the data is loaded for.
+    pub sign_in: Option<String>,
+    /// The files on disk were made under another sign-in of this server (an expired session and
+    /// a new sign-in, maybe of another account): held back — not shown, not sent, not written
+    /// over — until `GET /me` says whose they are (codex review 2).
+    held: Option<(Cache, Outbox)>,
 }
 
 impl OfflineData {
@@ -74,6 +80,8 @@ impl OfflineData {
             epoch: 0,
             load: 0,
             generation: 0,
+            sign_in: None,
+            held: None,
         }
     }
 
@@ -81,12 +89,21 @@ impl OfflineData {
         self.base_dir.join(server::hex(&origin.store_id()))
     }
 
-    /// Loads `origin`'s files when another server's (or nothing) is loaded.
+    /// [`Self::load`] without a sign-in id (tests).
+    #[cfg(test)]
     pub fn ensure(&mut self, origin: &ServerOrigin) {
-        if self.origin.as_ref() == Some(origin) && self.cache.is_some() {
+        self.load(origin, None);
+    }
+
+    /// Loads `origin`'s files for the sign-in `sign_in` when another server's / sign-in's (or
+    /// nothing) is loaded. Files of another sign-in are held back until `GET /me` confirmed them
+    /// ([`Self::adopt_user`]); meanwhile the data is empty.
+    pub fn load(&mut self, origin: &ServerOrigin, sign_in: Option<&str>) {
+        let same_sign_in = self.sign_in.as_deref() == sign_in;
+        if self.origin.as_ref() == Some(origin) && self.cache.is_some() && same_sign_in {
             return;
         }
-        if self.origin.as_ref() != Some(origin) {
+        if self.origin.as_ref() != Some(origin) || !same_sign_in {
             // a sync of the other server still running must not go on with this one's data
             self.epoch += 1;
             self.load += 1;
@@ -94,8 +111,19 @@ impl OfflineData {
             self.again = false;
         }
         let dir = self.dir_for(origin);
-        self.cache = Some(Cache::load(&dir.join("cache.json"), origin));
-        self.outbox = Outbox::load(&dir.join("outbox.json"));
+        let cache = Cache::load(&dir.join("cache.json"), origin);
+        let outbox = Outbox::load(&dir.join("outbox.json"));
+        self.sign_in = sign_in.map(str::to_string);
+        if owned_by(&cache, &outbox, sign_in) {
+            self.held = None;
+            self.cache = Some(cache);
+            self.outbox = outbox;
+        } else {
+            log::info!("offline data of an earlier sign-in held back until the account is confirmed");
+            self.held = Some((cache, outbox));
+            self.cache = Some(Cache::new(origin));
+            self.outbox = Outbox::default();
+        }
         self.origin = Some(origin.clone());
         self.verified = false;
         self.online = None;
@@ -109,6 +137,8 @@ impl OfflineData {
         self.epoch += 1;
         self.load += 1;
         self.origin = None;
+        self.held = None;
+        self.sign_in = None;
         self.cache = None;
         self.outbox = Outbox::default();
         self.verified = false;
@@ -117,6 +147,11 @@ impl OfflineData {
         self.again = false;
         self.auto_opened = false;
         self.last_error = None;
+    }
+
+    /// A sync of `origin` that started at `epoch` may still read / write this data.
+    pub fn still(&self, origin: &ServerOrigin, epoch: u64) -> bool {
+        self.epoch == epoch && self.origin.as_ref() == Some(origin)
     }
 
     fn cache_mut(&mut self) -> &mut Cache {
@@ -131,6 +166,7 @@ impl OfflineData {
         if self.origin.as_ref() == Some(origin) {
             self.cache = Some(Cache::new(origin));
             self.outbox = Outbox::default();
+            self.held = None;
             self.verified = false;
             self.last_error = None;
         }
@@ -140,16 +176,36 @@ impl OfflineData {
     /// `GET /me` answered `id`: takes the data over for that account. `true` when the data is
     /// another account's (it must be deleted first).
     pub fn adopt_user(&mut self, id: u64, name: Option<String>) -> bool {
+        if let Some((cache, outbox)) = self.held.take() {
+            // data of an earlier sign-in: it is this account's only when it says so
+            let theirs = |user: Option<u64>, content: bool| match user {
+                Some(u) => u != id,
+                None => content,
+            };
+            if theirs(cache.user_id, !cache.is_empty()) || theirs(outbox.user_id, outbox.has_content()) {
+                return true;
+            }
+            self.cache = Some(cache);
+            self.outbox = outbox;
+        }
         let cache_user = self.cache.as_ref().and_then(|c| c.user_id);
         if matches!(cache_user, Some(u) if u != id) || matches!(self.outbox.user_id, Some(u) if u != id) {
             return true;
         }
+        let sign_in = self.sign_in.clone();
         let cache = self.cache_mut();
         cache.user_id = Some(id);
         cache.user_name = name;
+        cache.sign_in = sign_in.clone();
         self.outbox.user_id = Some(id);
+        self.outbox.sign_in = sign_in;
         self.verified = true;
         false
+    }
+
+    /// Files of another sign-in are held back (nothing of them is shown, sent or changed).
+    pub fn awaiting_account(&self) -> bool {
+        self.held.is_some()
     }
 
     /// Whether this server has anything to show offline.
@@ -159,6 +215,10 @@ impl OfflineData {
 
     /// What has to be written, with its generation (serialised under the state lock).
     fn snapshot(&mut self) -> Option<Snapshot> {
+        if self.held.is_some() {
+            // never write the empty stand-in over the held files
+            return None;
+        }
         let origin = self.origin.clone()?;
         self.generation = next_generation();
         let cache = self.cache.as_ref().filter(|c| !c.is_empty() || c.cursor.is_some());
@@ -169,6 +229,14 @@ impl OfflineData {
             outbox: self.outbox.clone(),
         })
     }
+}
+
+/// Whether files on disk belong to the sign-in `sign_in`: made under it (or confirmed by its
+/// `GET /me`), or holding nothing of anybody.
+fn owned_by(cache: &Cache, outbox: &Outbox, sign_in: Option<&str>) -> bool {
+    let cache_ok = cache.sign_in.as_deref() == sign_in || (cache.is_empty() && cache.user_id.is_none());
+    let outbox_ok = outbox.sign_in.as_deref() == sign_in || !outbox.has_content();
+    cache_ok && outbox_ok
 }
 
 struct Snapshot {
@@ -294,8 +362,8 @@ pub fn on_unreachable(app: &AppHandle) {
         let mut inner = s.lock();
         let Some(origin) = inner.current_origin() else { return };
         let start_hidden = inner.start_hidden;
+        inner.load_offline(&origin);
         let data = &mut inner.offline;
-        data.ensure(&origin);
         data.online = Some(false);
         let open = data.has_data() && !data.auto_opened && !start_hidden;
         if open {
@@ -325,18 +393,28 @@ pub fn on_enter_app(app: &AppHandle) {
     changed(app);
 }
 
-/// Sign out / forget / another account: this server's offline data is deleted.
-pub fn wipe(app: &AppHandle, origin: &ServerOrigin) {
+/// Sign out / forget / another account: this server's offline data is deleted (tried again a
+/// few times). `false`: files are left on disk (the sign-out reports it and retries at start).
+pub fn wipe(app: &AppHandle, origin: &ServerOrigin) -> bool {
     let (dir, generation) = {
         let s = state(app);
         let mut inner = s.lock();
         let dir = inner.offline.clear(origin);
         (dir, inner.offline.generation)
     };
-    if let Err(e) = remove_files(&dir, generation) {
-        log::warn!("could not delete the offline data: {e}");
+    let mut deleted = false;
+    for attempt in 1..=3 {
+        match remove_files(&dir, generation) {
+            Ok(()) => {
+                deleted = true;
+                break;
+            }
+            Err(e) => log::warn!("could not delete the offline data (try {attempt}): {e}"),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
     changed(app);
+    deleted
 }
 
 /// Deletes the folder after any write that is still running; older writes never land later.
@@ -364,11 +442,18 @@ impl From<Stale> for CallError {
     }
 }
 
-/// Runs `f` on the offline data unless a wipe happened since `epoch`.
-fn with_data<T>(app: &AppHandle, epoch: u64, f: impl FnOnce(&mut OfflineData) -> T) -> Result<T, Stale> {
+/// Runs `f` on the offline data unless a wipe or another load happened since `epoch`, and only
+/// while `origin`'s data is the one loaded: a sync never reads or writes another server's outbox
+/// or cache (codex review 1).
+fn with_data<T>(
+    app: &AppHandle,
+    origin: &ServerOrigin,
+    epoch: u64,
+    f: impl FnOnce(&mut OfflineData) -> T,
+) -> Result<T, Stale> {
     let s = state(app);
     let mut inner = s.lock();
-    if inner.offline.epoch != epoch {
+    if !inner.offline.still(origin, epoch) {
         return Err(Stale);
     }
     Ok(f(&mut inner.offline))
@@ -413,7 +498,7 @@ async fn sync_with(app: &AppHandle, origin: &ServerOrigin, pull_changes: bool) -
         if inner.current_origin().as_ref() != Some(origin) || crate::flows::app_too_old(&inner, origin) {
             return Ok(());
         }
-        inner.offline.ensure(origin);
+        inner.load_offline(origin);
         if inner.offline.syncing {
             inner.offline.again = true;
             return Ok(());
@@ -466,9 +551,17 @@ async fn sync_with(app: &AppHandle, origin: &ServerOrigin, pull_changes: bool) -
 }
 
 async fn sync_once(app: &AppHandle, origin: &ServerOrigin, pull_changes: bool) -> Result<(), CallError> {
-    let epoch = state(app).lock().offline.epoch;
+    let (epoch, owner) = {
+        let s = state(app);
+        let inner = s.lock();
+        let owner = AccountTicket::now(&inner).filter(|t| &t.origin == origin);
+        (inner.offline.epoch, owner)
+    };
+    let Some(owner) = owner else {
+        return Err(Stale.into());
+    };
     let epoch = verify_user(app, origin, epoch).await?;
-    let (sent, problems, error) = flush(app, origin, epoch).await;
+    let (sent, problems, error) = flush(app, &owner, epoch).await;
     if sent > 0 {
         let body = if sent == 1 {
             "1 change you made offline is on the server now.".to_string()
@@ -513,7 +606,7 @@ async fn verify_user(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> Resu
         .get("name")
         .and_then(Value::as_str)
         .map(|n| n.chars().take(120).collect::<String>());
-    let other = with_data(app, epoch, |data| data.adopt_user(id, name.clone()))?;
+    let other = with_data(app, origin, epoch, |data| data.adopt_user(id, name.clone()))?;
     if !other {
         return Ok(epoch);
     }
@@ -522,16 +615,17 @@ async fn verify_user(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> Resu
     log::info!("offline data of another account deleted");
     wipe(app, origin);
     let epoch = state(app).lock().offline.epoch;
-    with_data(app, epoch, |data| data.adopt_user(id, name))?;
+    with_data(app, origin, epoch, |data| data.adopt_user(id, name))?;
     Ok(epoch)
 }
 
 /// Sends the outbox in order. Returns (sent, new problems, the error that stopped it).
-async fn flush(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> (usize, usize, Option<CallError>) {
+async fn flush(app: &AppHandle, owner: &AccountTicket, epoch: u64) -> (usize, usize, Option<CallError>) {
+    let origin = &owner.origin;
     let (mut sent, mut problems) = (0, 0);
     let mut size = BATCH;
     loop {
-        let Ok(batch) = with_data(app, epoch, |d| d.outbox.next_batch(size)) else {
+        let Ok(batch) = with_data(app, origin, epoch, |d| d.outbox.next_batch(size)) else {
             return (sent, problems, Some(Stale.into()));
         };
         if batch.is_empty() {
@@ -543,7 +637,7 @@ async fn flush(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> (usize, us
             .session
             .request(origin, &ApiRequest::post("/api/v1/sync", body))
             .await;
-        let applied = with_data(app, epoch, |d| {
+        let applied = with_data(app, origin, epoch, |d| {
             let before = d.outbox.len();
             let step = match &result {
                 Ok(response) => d.outbox.apply_results(&ids, &outbox::parse_results(&response.body)),
@@ -562,7 +656,7 @@ async fn flush(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> (usize, us
             log::info!("offline change dropped, no longer there on the server: {what}");
         }
         // the timer, a notification, the unread count as the server has them now
-        crate::panel::apply_sync_states(app, origin, &step.states);
+        crate::panel::apply_sync_states(app, owner, &step.states);
         if step.needs_activity {
             crate::bridge::show_offline_notification(
                 app,
@@ -593,14 +687,16 @@ async fn flush(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> (usize, us
 
 /// Pulls what changed since the cursor (a full run when there is none).
 async fn pull(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> Result<(), CallError> {
-    let mut run = with_data(app, epoch, |d| d.cache_mut().start_run())?;
+    let mut run = with_data(app, origin, epoch, |d| d.cache_mut().start_run())?;
     loop {
         let mut request = ApiRequest::get("/api/v1/sync/changes");
         request.query = run.query();
         let response = state(app).session.request(origin, &request).await?;
         let page: FeedPage = serde_json::from_value(response.body)
             .map_err(|_| CallError::Failed("unexpected answer to /sync/changes".into()))?;
-        let more = with_data(app, epoch, |d| d.cache_mut().apply_page(&mut run, page, outbox::now()))?;
+        let more = with_data(app, origin, epoch, |d| {
+            d.cache_mut().apply_page(&mut run, page, outbox::now())
+        })?;
         if !more {
             break;
         }
@@ -653,6 +749,9 @@ pub struct WindowView {
     syncing: bool,
     last_error: Option<String>,
     platform: &'static str,
+    /// The offline copy on this computer is of an earlier sign-in: shown once `GET /me`
+    /// confirmed it is this account's (codex review 2).
+    account_check: bool,
     #[serde(flatten)]
     data: Option<offline_cache::View>,
 }
@@ -665,7 +764,7 @@ fn window_view(app: &AppHandle) -> WindowView {
     let offline = is_offline(&inner);
     let data = match (&origin, signed_in) {
         (Some(o), true) => {
-            inner.offline.ensure(o);
+            inner.load_offline(o);
             let d = &inner.offline;
             d.cache.as_ref().map(|c| offline_cache::view(c, &d.outbox))
         }
@@ -678,24 +777,46 @@ fn window_view(app: &AppHandle) -> WindowView {
         syncing: inner.offline.syncing,
         last_error: inner.offline.last_error.clone(),
         platform: crate::api::platform(),
+        account_check: signed_in && inner.offline.awaiting_account(),
         data,
     }
+}
+
+/// The outbox of the sign-in `ticket` was made for (`None`: the current one — a window command
+/// that did not wait for anything). After a sign-out, switch or another sign-in the change is
+/// refused: it is never queued in another server's or account's outbox (codex review 1).
+fn owned_outbox<'a>(inner: &'a mut Inner, ticket: Option<&AccountTicket>) -> Result<&'a mut OfflineData, UiError> {
+    let current = AccountTicket::now(inner)
+        .filter(|_| signed_in(inner.phase))
+        .ok_or_else(|| ui("signed_out", "Sign in to a server first."))?;
+    if ticket.is_some_and(|t| *t != current) {
+        return Err(ui(
+            "stale",
+            "You signed out or switched servers meanwhile. The change was not kept.",
+        ));
+    }
+    inner.load_offline(&current.origin);
+    if inner.offline.awaiting_account() {
+        return Err(ui(
+            "checking",
+            "Brainitive is still checking which account the offline data on this computer belongs to. Try again in a moment.",
+        ));
+    }
+    // a change made now is this sign-in's
+    inner.offline.outbox.sign_in = inner.offline.sign_in.clone();
+    Ok(&mut inner.offline)
 }
 
 /// Adds a change to the outbox (checked against the cache by `make`), then tries to send it.
 fn record(
     app: &AppHandle,
+    ticket: Option<&AccountTicket>,
     make: impl FnOnce(&mut OfflineData) -> Result<Option<Change>, UiError>,
 ) -> Result<WindowView, UiError> {
     {
         let s = state(app);
         let mut inner = s.lock();
-        let origin = inner
-            .current_origin()
-            .filter(|_| signed_in(inner.phase))
-            .ok_or_else(|| ui("signed_out", "Sign in to a server first."))?;
-        let data = &mut inner.offline;
-        data.ensure(&origin);
+        let data = owned_outbox(&mut inner, ticket)?;
         if let Some(change) = make(data)? {
             if data.outbox.user_id.is_none() {
                 data.outbox.user_id = data.cache.as_ref().and_then(|c| c.user_id);
@@ -741,7 +862,7 @@ pub fn offline_view(app: AppHandle, webview: Webview) -> Result<WindowView, Stri
 #[tauri::command]
 pub fn offline_set_done(app: AppHandle, webview: Webview, work_id: String, done: bool) -> Result<WindowView, UiError> {
     popup::ensure_caller(&app, &webview, Popup::Offline).map_err(|m| ui("not_allowed", m))?;
-    record(&app, |data| {
+    record(&app, None, |data| {
         let work = cached_work(data, &work_id)?;
         // the value the server had when the user ticked it: an unsent change is folded in
         let base_done = data.outbox.base_done(&work_id, work.done);
@@ -757,7 +878,7 @@ pub fn offline_set_done(app: AppHandle, webview: Webview, work_id: String, done:
 #[tauri::command]
 pub fn offline_my_day_add(app: AppHandle, webview: Webview, work_id: String) -> Result<WindowView, UiError> {
     popup::ensure_caller(&app, &webview, Popup::Offline).map_err(|m| ui("not_allowed", m))?;
-    record(&app, |data| {
+    record(&app, None, |data| {
         let work = cached_work(data, &work_id)?;
         Ok(Some(Change::MyDayAdd {
             title: work.label(),
@@ -775,7 +896,7 @@ pub fn offline_add_task(
 ) -> Result<WindowView, UiError> {
     popup::ensure_caller(&app, &webview, Popup::Offline).map_err(|m| ui("not_allowed", m))?;
     let title = clean_title(&title)?;
-    record(&app, |data| {
+    record(&app, None, |data| {
         let cache = data.cache.as_ref().filter(|c| c.has_list(task_list_id));
         let Some(cache) = cache else {
             return Err(ui("not_found", "This list is not on this computer."));
@@ -807,7 +928,7 @@ pub fn offline_update_task(
     if title.is_none() && done.is_none() {
         return Ok(window_view(&app));
     }
-    record(&app, |data| {
+    record(&app, None, |data| {
         if let Some(request_id) = task_id.strip_prefix("ref:") {
             data.outbox
                 .edit_pending_create(request_id, title, done)
@@ -841,7 +962,7 @@ pub fn offline_add_capture(
 ) -> Result<WindowView, UiError> {
     popup::ensure_caller(&app, &webview, Popup::Offline).map_err(|m| ui("not_allowed", m))?;
     let input = CaptureInput::new(&text, url.as_deref(), None).map_err(|e| ui("invalid", e.to_string()))?;
-    record(&app, |_| {
+    record(&app, None, |_| {
         Ok(Some(Change::CaptureCreate {
             text: input.text,
             url: input.url,
@@ -890,7 +1011,7 @@ pub fn note_timer_answer(app: &AppHandle, origin: &ServerOrigin, body: &Value) {
         if inner.current_origin().as_ref() != Some(origin) || !signed_in(inner.phase) {
             return;
         }
-        inner.offline.ensure(origin);
+        inner.load_offline(origin);
         let cache = inner.offline.cache_mut();
         let learned = cache.extended_sync != Some(supported);
         cache.extended_sync = Some(supported);
@@ -916,17 +1037,13 @@ pub fn extended_sync(inner: &Inner) -> bool {
 }
 
 /// Queues a change of the panel / New task window (checked by the caller) and sends it as soon
-/// as the server answers. Returns its request id (`None`: it cancelled an earlier one).
-pub fn queue(app: &AppHandle, change: Change) -> Result<Option<String>, UiError> {
+/// as the server answers. `ticket`: the sign-in the change was made in, taken before any network
+/// wait (codex review 1). Returns its request id (`None`: it cancelled an earlier one).
+pub fn queue(app: &AppHandle, ticket: &AccountTicket, change: Change) -> Result<Option<String>, UiError> {
     let id = {
         let s = state(app);
         let mut inner = s.lock();
-        let origin = inner
-            .current_origin()
-            .filter(|_| signed_in(inner.phase))
-            .ok_or_else(|| ui("signed_out", "Sign in to a server first."))?;
-        let data = &mut inner.offline;
-        data.ensure(&origin);
+        let data = owned_outbox(&mut inner, Some(ticket))?;
         if data.outbox.user_id.is_none() {
             data.outbox.user_id = data.cache.as_ref().and_then(|c| c.user_id);
         }
@@ -938,14 +1055,14 @@ pub fn queue(app: &AppHandle, change: Change) -> Result<Option<String>, UiError>
     Ok(id)
 }
 
-/// Runs `f` on the current server's outbox (loaded), then saves it and tells the windows.
-pub fn with_outbox<T>(app: &AppHandle, f: impl FnOnce(&mut Outbox) -> T) -> Option<T> {
+/// Runs `f` on the outbox of `ticket`'s sign-in (loaded), then saves it and tells the windows.
+/// `None` when that sign-in is not the current one any more.
+pub fn with_outbox<T>(app: &AppHandle, ticket: &AccountTicket, f: impl FnOnce(&mut Outbox) -> T) -> Option<T> {
     let out = {
         let s = state(app);
         let mut inner = s.lock();
-        let origin = inner.current_origin().filter(|_| signed_in(inner.phase))?;
-        inner.offline.ensure(&origin);
-        f(&mut inner.offline.outbox)
+        let data = owned_outbox(&mut inner, Some(ticket)).ok()?;
+        f(&mut data.outbox)
     };
     persist(app);
     changed(app);
@@ -957,13 +1074,13 @@ pub fn read_outbox<T>(app: &AppHandle, f: impl FnOnce(&Outbox, Option<&Cache>) -
     let s = state(app);
     let mut inner = s.lock();
     let origin = inner.current_origin().filter(|_| signed_in(inner.phase))?;
-    inner.offline.ensure(&origin);
+    inner.load_offline(&origin);
     Some(f(&inner.offline.outbox, inner.offline.cache.as_ref()))
 }
 
 /// A pick for a stop that waited for an activity: it goes out again with it.
-pub fn resend_stop(app: &AppHandle, activity_id: u64) -> Result<(), UiError> {
-    let result = with_outbox(app, |o| o.resend_stop(activity_id))
+pub fn resend_stop(app: &AppHandle, ticket: &AccountTicket, activity_id: u64) -> Result<(), UiError> {
+    let result = with_outbox(app, ticket, |o| o.resend_stop(activity_id))
         .ok_or_else(|| ui("signed_out", "Sign in to a server first."))?;
     result.map_err(|e| ui("invalid", e.to_string()))?;
     sync_soon(app);
@@ -975,6 +1092,7 @@ pub fn resend_stop(app: &AppHandle, activity_id: u64) -> Result<(), UiError> {
 /// of the same item keeps its base).
 pub fn queue_work_done(
     app: &AppHandle,
+    ticket: &AccountTicket,
     work_id: &str,
     done: bool,
     server_done: bool,
@@ -983,7 +1101,7 @@ pub fn queue_work_done(
     if !crate::tray::is_work_id(work_id) {
         return Err(ui("invalid", "Unknown item."));
     }
-    record(app, |data| {
+    record(app, Some(ticket), |data| {
         let base_done = data.outbox.base_done(work_id, server_done);
         Ok(Some(Change::WorkDone {
             title: title.chars().take(outbox::MAX_TITLE).collect(),
@@ -1153,5 +1271,170 @@ mod tests {
         assert_eq!(clean_title("  Buy\nmilk ").unwrap(), "Buy milk");
         assert!(clean_title("   ").is_err());
         assert!(clean_title(&"a".repeat(501)).is_err());
+    }
+
+    // ── server + account binding of the outbox (codex review, finding 1) ────────
+
+    fn app_state(name: &str) -> (crate::state::AppState, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("brainitive-offline-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let state = crate::state::AppState::new(dir.join("settings.json"), dir.join("queue.json"), dir.join("offline"));
+        (state, dir)
+    }
+
+    fn timer_start(title: &str) -> Change {
+        Change::TimerStart {
+            issue_id: 42,
+            description: Some(format!("{title} description")),
+            started_at: "2026-11-02T10:00:00Z".into(),
+            title: title.into(),
+        }
+    }
+
+    #[test]
+    fn a_change_made_for_server_a_never_lands_in_server_b_s_outbox() {
+        let (app_state, dir) = app_state("bind");
+        let a = ServerOrigin::parse("a.example.com").unwrap();
+        let b = ServerOrigin::parse("b.example.com").unwrap();
+        let mut inner = app_state.lock();
+        inner.settings.remember(&b, "B", None);
+        inner.settings.remember(&a, "A", None);
+        inner.phase = Phase::InApp;
+        // a panel / New task request for A starts (its ticket is taken before the await) …
+        let ticket_a = AccountTicket::now(&inner).unwrap();
+        // … the user switches to B (signed in there, offline sync on) while it runs …
+        crate::flows::drop_account_state(&mut inner);
+        assert!(inner.settings.touch(&b));
+        inner.phase = Phase::InApp;
+        // … and A's request fails with a timeout: its fallback must not queue into B
+        let refused = owned_outbox(&mut inner, Some(&ticket_a)).map(|_| ()).unwrap_err();
+        assert_eq!(refused.kind, "stale");
+        inner.offline.ensure(&b);
+        assert!(inner.offline.outbox.is_empty(), "B's outbox has nothing of A");
+
+        // a change made for B now goes to B
+        let ticket_b = AccountTicket::now(&inner).unwrap();
+        let data = owned_outbox(&mut inner, Some(&ticket_b)).unwrap();
+        assert_eq!(data.origin.as_ref(), Some(&b));
+        data.outbox.push(timer_start("B's issue")).unwrap();
+        let epoch_b = inner.offline.epoch;
+
+        // a sync of B that is still running after a switch back to A reads / writes nothing
+        crate::flows::drop_account_state(&mut inner);
+        assert!(inner.settings.touch(&a));
+        inner.offline.ensure(&a);
+        assert!(!inner.offline.still(&b, epoch_b), "never A's data for B's sync");
+        let epoch_a = inner.offline.epoch;
+        assert!(inner.offline.still(&a, epoch_a));
+        drop(inner);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_change_made_before_another_sign_in_on_the_same_server_is_dropped() {
+        let (app_state, dir) = app_state("bind-account");
+        let a = ServerOrigin::parse("a.example.com").unwrap();
+        let mut inner = app_state.lock();
+        inner.settings.remember(&a, "A", None);
+        inner.phase = Phase::InApp;
+        let ticket = AccountTicket::now(&inner).unwrap();
+        // signed out (or another account signed in) while the request ran
+        inner.account_epoch += 1;
+        assert!(owned_outbox(&mut inner, Some(&ticket)).is_err());
+        // signed out: nothing at all
+        inner.phase = Phase::SignIn;
+        assert_eq!(
+            owned_outbox(&mut inner, None).map(|_| ()).unwrap_err().kind,
+            "signed_out"
+        );
+        drop(inner);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ── whose offline data it is (codex review, finding 2) ──────────────────────
+
+    #[test]
+    fn data_of_an_earlier_sign_in_is_not_shown_or_sent_before_me_confirms_it() {
+        let base = std::env::temp_dir().join(format!("brainitive-offline-owner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let o = origin();
+        // A synced and made a change offline under sign-in "s-a"
+        let mut a = OfflineData::new(base.clone());
+        a.load(&o, Some("s-a"));
+        assert!(!a.adopt_user(1, Some("Alice".into())));
+        a.cache_mut().records.insert(
+            "work:issue:1".into(),
+            crate::offline_cache::Record {
+                kind: "work".into(),
+                id: "issue:1".into(),
+                project_id: None,
+                updated_at: None,
+                data: json!({"title": "Alice's private issue"}),
+            },
+        );
+        a.outbox
+            .push(Change::CaptureCreate {
+                text: "Alice's private note".into(),
+                url: None,
+                intended_type: None,
+            })
+            .unwrap();
+        a.outbox.sign_in = Some("s-a".into());
+        write(a.snapshot().unwrap());
+        let dir = a.dir_for(&o);
+
+        // the same sign-in after a restart, offline: shown (the offline-start policy)
+        let mut same = OfflineData::new(base.clone());
+        same.load(&o, Some("s-a"));
+        assert!(!same.awaiting_account());
+        assert!(same.has_data());
+
+        // a new sign-in on the same server (A's session expired; maybe B): nothing shown or sent
+        let mut b = OfflineData::new(base.clone());
+        b.load(&o, Some("s-b"));
+        assert!(b.awaiting_account());
+        assert!(!b.has_data(), "nothing of A is visible");
+        assert!(b.outbox.is_empty() && b.cache.as_ref().unwrap().user_id.is_none());
+        assert!(b.snapshot().is_none(), "the held files are never written over");
+        assert!(dir.join("outbox.json").exists() && dir.join("cache.json").exists());
+
+        // `GET /me` says B: the data is A's → it must be deleted, never adopted
+        assert!(b.adopt_user(2, Some("Bob".into())));
+        assert!(!b.verified);
+
+        // `GET /me` says A again (the same person signed in again): taken over for this sign-in
+        let mut again = OfflineData::new(base.clone());
+        again.load(&o, Some("s-c"));
+        assert!(again.awaiting_account());
+        assert!(!again.adopt_user(1, Some("Alice".into())));
+        assert!(!again.awaiting_account() && again.verified);
+        assert_eq!(again.outbox.len(), 1);
+        assert_eq!(again.outbox.sign_in.as_deref(), Some("s-c"));
+        assert_eq!(again.cache.as_ref().unwrap().sign_in.as_deref(), Some("s-c"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn an_outbox_nobody_confirmed_is_never_adopted_by_a_new_sign_in() {
+        let base = std::env::temp_dir().join(format!("brainitive-offline-unowned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let o = origin();
+        // a change queued before any `GET /me` answered (no user id)
+        let mut a = OfflineData::new(base.clone());
+        a.load(&o, Some("s-a"));
+        a.outbox
+            .push(Change::CaptureCreate {
+                text: "whose?".into(),
+                url: None,
+                intended_type: None,
+            })
+            .unwrap();
+        a.outbox.sign_in = Some("s-a".into());
+        write(a.snapshot().unwrap());
+        let mut b = OfflineData::new(base.clone());
+        b.load(&o, Some("s-b"));
+        assert!(b.awaiting_account());
+        assert!(b.adopt_user(1, None), "can't tell whose it is: deleted, not sent");
+        let _ = std::fs::remove_dir_all(base);
     }
 }

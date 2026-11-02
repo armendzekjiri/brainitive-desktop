@@ -809,3 +809,48 @@ fn the_page_sends_references_not_urls() {
     );
     assert!(serde_json::from_value::<PanelAction>(json!("quit")).is_err());
 }
+
+// ── answers that arrive after a switch (codex review, finding 9) ───────────────
+
+#[test]
+fn a_done_tick_confirmed_after_a_switch_does_not_touch_the_new_account() {
+    let dir = std::env::temp_dir().join(format!("brainitive-panel-stale-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let app_state = crate::state::AppState::new(dir.join("settings.json"), dir.join("q.json"), dir.join("offline"));
+    let a = ServerOrigin::parse("a.example.com").unwrap();
+    let b = ServerOrigin::parse("b.example.com").unwrap();
+    let mut inner = app_state.lock();
+    inner.settings.remember(&b, "B", None);
+    inner.settings.remember(&a, "A", None);
+    inner.phase = crate::state::Phase::InApp;
+    let item = |done| crate::tray::DayItem {
+        id: "issue:7".into(),
+        key: None,
+        title: "B's own issue 7".into(),
+        done,
+        url: None,
+    };
+    // `panel_set_done` on A is on the wire …
+    let ticket_a = PollTicket::now(&inner).unwrap();
+    // … the user switches to B, whose My Day has an item with the same id
+    crate::flows::drop_account_state(&mut inner);
+    assert!(inner.settings.touch(&b));
+    inner.tray_data.my_day = Some(vec![item(false)]);
+    inner.tray_data.my_day_stale = false;
+    // A's success arrives: B's tray stays as it is
+    assert!(!mark_tray_done(&mut inner, &ticket_a, "issue:7", true));
+    assert_eq!(inner.tray_data.my_day, Some(vec![item(false)]));
+    assert!(!inner.tray_data.my_day_stale);
+    // the same account's answer still updates it
+    let ticket_b = PollTicket::now(&inner).unwrap();
+    assert!(mark_tray_done(&mut inner, &ticket_b, "issue:7", true));
+    assert_eq!(inner.tray_data.my_day, Some(vec![item(true)]));
+    // the same server, another sign-in: stale too
+    inner.account_epoch += 1;
+    assert!(!mark_tray_done(&mut inner, &ticket_b, "issue:7", false));
+    assert_eq!(inner.tray_data.my_day, Some(vec![item(true)]));
+    // a sync's live states belong to the sign-in it ran for (`apply_sync_states`)
+    assert_ne!(ticket_b.account(), PollTicket::now(&inner).unwrap().account());
+    drop(inner);
+    let _ = std::fs::remove_dir_all(dir);
+}

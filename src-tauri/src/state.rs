@@ -113,6 +113,11 @@ pub struct Inner {
     pub rebuilding: bool,
     /// Last page of the server the main frame showed, to return to after a blocked load.
     pub last_good: Option<Url>,
+    /// App window label → the page its main frame committed last (codex review 6: who may
+    /// navigate it to the bundled screens).
+    pub committed: HashMap<String, Url>,
+    /// App window label → when a native transition to a bundled page was announced (one-shot).
+    pub native_navigation: HashMap<String, Instant>,
     /// When the webview last reached the server's `/login` (sign-in loop detection).
     pub reauth_at: Option<Instant>,
     /// Bumped whenever a sign-in begins or ends (completed sign-in, sign-out, forget): work that
@@ -212,6 +217,8 @@ impl AppState {
                 rebuild: None,
                 rebuilding: false,
                 last_good: None,
+                committed: HashMap::new(),
+                native_navigation: HashMap::new(),
                 reauth_at: None,
                 account_epoch: 0,
                 capabilities: HashSet::new(),
@@ -263,6 +270,12 @@ impl Inner {
         self.settings.current.clone()
     }
 
+    /// Loads `origin`'s offline data for the sign-in stored for it (see `OfflineData::load`).
+    pub fn load_offline(&mut self, origin: &ServerOrigin) {
+        let sign_in = self.settings.sign_in_of(origin);
+        self.offline.load(origin, sign_in.as_deref());
+    }
+
     pub fn save_queue(&self) {
         if let Err(e) = self.queue.save(&self.queue_path) {
             log::warn!("could not save the capture queue: {e}");
@@ -273,6 +286,31 @@ impl Inner {
         if let Err(e) = self.settings.save(&self.settings_path) {
             log::warn!("could not save settings: {e}");
         }
+    }
+}
+
+/// Who a piece of work was started for: the server and the sign-in (`Inner::account_epoch`,
+/// bumped by every sign-in, sign-out and switch). Work that awaited the network checks it again
+/// under the state lock before it writes anything (a queued capture, an outbox entry, a panel
+/// answer), so nothing of one sign-in lands in another's data (codex review 1, 5, 9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountTicket {
+    pub origin: ServerOrigin,
+    pub account: u64,
+}
+
+impl AccountTicket {
+    /// The current server and sign-in (`None`: no server chosen).
+    pub fn now(inner: &Inner) -> Option<Self> {
+        Some(Self {
+            origin: inner.current_origin()?,
+            account: inner.account_epoch,
+        })
+    }
+
+    /// Still the same server and the same sign-in.
+    pub fn holds(&self, inner: &Inner) -> bool {
+        inner.current_origin().as_ref() == Some(&self.origin) && inner.account_epoch == self.account
     }
 }
 

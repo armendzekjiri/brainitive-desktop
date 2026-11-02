@@ -214,18 +214,50 @@ pub enum Navigation {
     Block,
 }
 
+/// Who started a navigation of an app window (codex review 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Initiator {
+    /// The app itself: a bundled screen, the window's first load, or a native transition (show a
+    /// screen, revert a foreign page) that granted itself this one navigation.
+    App,
+    /// Server content (or anything else that is not a bundled page) is on screen.
+    Content,
+}
+
+/// `committed`: the page the window shows (its last page load; `None` before the first one).
+/// `granted`: a native transition announced a navigation to a bundled page just now (one-shot).
+pub fn initiator(committed: Option<&Url>, granted: bool, local_origins: &[String]) -> Initiator {
+    match committed {
+        None => Initiator::App,
+        Some(page) if page.as_str() == "about:blank" || is_local(page, local_origins) => Initiator::App,
+        Some(_) if granted => Initiator::App,
+        Some(_) => Initiator::Content,
+    }
+}
+
 /// `local_origins`: where the bundled screens are served (`tauri://localhost`,
-/// `http://tauri.localhost`, the Vite dev server).
-pub fn decide_navigation(url: &Url, instance: Option<&ServerOrigin>, local_origins: &[String]) -> Navigation {
+/// `http://tauri.localhost`, the Vite dev server). Server content can never navigate a window
+/// to the bundled screens (they hold the local commands) nor trigger a `brainitive://` deep link
+/// (codex review 6): only the app does (`Initiator::App`).
+pub fn decide_navigation(
+    url: &Url,
+    instance: Option<&ServerOrigin>,
+    local_origins: &[String],
+    initiator: Initiator,
+) -> Navigation {
     match url.scheme() {
         "about" | "data" | "blob" => return Navigation::Allow,
-        "brainitive" => return Navigation::DeepLink(url.clone()),
+        "brainitive" if initiator == Initiator::App => return Navigation::DeepLink(url.clone()),
+        "brainitive" => return Navigation::Block,
         "mailto" => return Navigation::External(url.clone()),
         "http" | "https" | "tauri" => {}
         _ => return Navigation::Block,
     }
     if is_local(url, local_origins) {
-        return Navigation::Allow;
+        return match initiator {
+            Initiator::App => Navigation::Allow,
+            Initiator::Content => Navigation::Block,
+        };
     }
     if instance.is_some_and(|i| i.contains(url)) {
         let path = url.path().trim_end_matches('/');
@@ -397,7 +429,12 @@ mod tests {
     fn a_file_dropped_on_the_page_never_replaces_it() {
         // dropping a file outside a drop zone makes the webview navigate to file://…
         assert_eq!(
-            decide_navigation(&u("file:///Users/me/report.pdf"), Some(&instance()), &locals()),
+            decide_navigation(
+                &u("file:///Users/me/report.pdf"),
+                Some(&instance()),
+                &locals(),
+                Initiator::App
+            ),
             Navigation::Block
         );
     }
@@ -581,7 +618,7 @@ mod tests {
         assert!(!is_app_page(&u("tauri://localhost/index.html"), None, &win));
         assert!(!is_app_page(&u("https://tauri.localhost/index.html"), None, &win));
         assert_eq!(
-            decide_navigation(&u("tauri://localhost/index.html"), None, &win),
+            decide_navigation(&u("tauri://localhost/index.html"), None, &win, Initiator::App),
             Navigation::Block
         );
     }
@@ -670,7 +707,7 @@ mod tests {
     fn navigation_decisions() {
         let i = instance();
         let l = locals();
-        let d = |s: &str| decide_navigation(&u(s), Some(&i), &l);
+        let d = |s: &str| decide_navigation(&u(s), Some(&i), &l, Initiator::App);
 
         assert_eq!(d("tauri://localhost/index.html"), Navigation::Allow);
         assert_eq!(d("http://tauri.localhost/"), Navigation::Allow);
@@ -704,7 +741,7 @@ mod tests {
     fn without_a_server_only_the_bundled_screens_are_app_pages() {
         let l = locals();
         assert_eq!(
-            decide_navigation(&u("https://brainitive.example.com/"), None, &l),
+            decide_navigation(&u("https://brainitive.example.com/"), None, &l, Initiator::App),
             Navigation::Foreign(u("https://brainitive.example.com/"))
         );
         assert!(is_app_page(&u("tauri://localhost/"), None, &l));
@@ -715,5 +752,44 @@ mod tests {
             &l
         ));
         assert!(!is_app_page(&u("https://evil.com/"), Some(&instance()), &l));
+    }
+
+    #[test]
+    fn server_content_cannot_open_the_bundled_screens_or_deep_links() {
+        let i = instance();
+        let l = locals();
+        let page = u("https://brainitive.example.com/dashboard");
+        // what the window shows decides who navigates
+        assert_eq!(initiator(None, false, &l), Initiator::App, "the first load");
+        assert_eq!(
+            initiator(Some(&u("tauri://localhost/index.html")), false, &l),
+            Initiator::App
+        );
+        assert_eq!(initiator(Some(&page), false, &l), Initiator::Content);
+        assert_eq!(initiator(Some(&page), true, &l), Initiator::App, "a native transition");
+        assert_eq!(initiator(Some(&u("https://evil.com/")), false, &l), Initiator::Content);
+
+        let content = |s: &str| decide_navigation(&u(s), Some(&i), &l, Initiator::Content);
+        // remote → bundled page (both platforms' origins) and remote → deep link: blocked
+        assert_eq!(content("tauri://localhost/index.html"), Navigation::Block);
+        assert_eq!(content("http://tauri.localhost/settings.html"), Navigation::Block);
+        assert_eq!(content("brainitive://open?url=/my-work"), Navigation::Block);
+        assert_eq!(content("brainitive://auth/callback?code=x&state=y"), Navigation::Block);
+        // everything else as before
+        assert_eq!(content("https://brainitive.example.com/my-work"), Navigation::Allow);
+        assert_eq!(content("https://brainitive.example.com/login"), Navigation::Reauth);
+        assert_eq!(content("mailto:a@b.c"), Navigation::External(u("mailto:a@b.c")));
+        assert_eq!(
+            content("https://evil.com/"),
+            Navigation::Foreign(u("https://evil.com/"))
+        );
+        assert_eq!(content("file:///etc/passwd"), Navigation::Block);
+        // the app's own transitions still work
+        let app = |s: &str| decide_navigation(&u(s), Some(&i), &l, Initiator::App);
+        assert_eq!(app("tauri://localhost/index.html"), Navigation::Allow);
+        assert_eq!(
+            app("brainitive://open?url=/x"),
+            Navigation::DeepLink(u("brainitive://open?url=/x"))
+        );
     }
 }

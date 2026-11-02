@@ -61,7 +61,10 @@ store, and close when the server is switched, the user signs out or the server i
 **The bundled screens** (`index.html`, served from `tauri://localhost` on macOS / Linux and
 `http://tauri.localhost` on Windows — only this platform's one origin counts as bundled,
 `links::bundled_origin`, BRAI-377)
-may call the local commands in `capabilities/local.json`. They never render server-provided text
+may call the local commands in `capabilities/local.json`; every one of them also checks that the
+caller is the main window on the bundled origin (`commands::ensure_main_screen`, codex review 8;
+`tests/capabilities.rs` checks that every command of the `build.rs` manifest starts with its
+window's caller check). They never render server-provided text
 as HTML (`textContent` only) and run under a strict CSP:
 `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'`.
 The CSP applies to bundled assets only; the server's pages keep the server's own headers.
@@ -116,9 +119,21 @@ window becomes a way to call the API.
   encryption (FileVault / BitLocker / LUKS) is what protects them on a lost laptop; the app does not
   encrypt them itself (a key would sit in the same keychain session anyway).
 - **Whose data**: kept per server (folder = the server's store id) and per account: `GET /me` is
-  asked once per session before anything is sent or shown as current; another account's cache and
-  outbox are deleted, never sent as the new account. Sign-out (menu, the web app) and Forget delete
-  the folder; a sync still running then writes nothing back.
+  asked once per session before anything is sent; another account's cache and outbox are deleted,
+  never sent as the new account. Every completed sign-in gets a random **sign-in id** per server
+  (`settings.json`, removed on sign-out); the cache, the outbox and queued captures carry the id
+  they were made / confirmed under (codex review 2). Files of another sign-in (an expired session,
+  then a new sign-in on the same server, maybe as someone else) are **held back** — not shown in the
+  offline window or the panel, not sent, not changed or written over — until `GET /me` of the new
+  sign-in confirms the same account (then they are taken over), else they are deleted. Data of the
+  current sign-in is still shown offline after a restart (offline start). Sign-out (menu, the web
+  app) and Forget delete the folder; a sync still running then writes nothing back.
+- **Which server and sign-in a change is for** (codex review 1): a panel / New task change that falls
+  back to the outbox after its request failed is queued only while the server **and** sign-in it was
+  made for (`AccountTicket`, taken before the request) are still current; after a switch, a
+  sign-out or another sign-in it is refused, never re-targeted. A sync reads / writes only the data
+  of the origin and load it started with, and its live states (timer, notifications) go only to that
+  sign-in's tray and panel.
 - Lost access: records of projects that are no longer in `project_ids` are dropped on the next sync,
   deleted things by their tombstones.
 - No outbox entry is retried forever on a 4xx; refused changes stay listed with the user's text until
@@ -325,8 +340,9 @@ doesn't exist (the download then fails verification) — but cannot install anyt
 private key. **A stolen private key plus control of the releases is a full compromise** of every
 installed app: the key is kept offline, only GitHub Actions has a copy, and only the "Updater
 signing" step of a `v*` tag build (or a manual run on the default branch) sees it — after
-`tauri build`, which never gets it; Apple / Azure secrets reach only the `tauri build` step of their
-OS, never `$GITHUB_ENV` (BRAI-377). Rotating it needs one release signed with the old key that carries the
+`tauri build`, which never gets it; Apple / Azure secrets reach only the signing steps that run
+**after** the build on what it produced (`scripts/macos-sign.sh`, the Windows signing steps), never
+`tauri build`, npm or cargo, never `$GITHUB_ENV` (BRAI-377, codex review 11). Rotating it needs one release signed with the old key that carries the
 new public key (docs/RELEASING.md). The repo must publish its releases publicly for updates to work.
 
 ## The Microsoft Store build (BRAI-442)
@@ -382,6 +398,10 @@ The MSIX for the Microsoft Store (`--features msstore`, `tauri.msstore.conf.json
   folder or overwrite a file (`unique_path`). BRAI-377: the name also loses Unicode bidi / format
   characters (no `invoice_\u202Efdp.exe` that reads as `.pdf`), trailing dots and spaces, and never
   is a Windows device name (`CON`, `NUL.txt`, `COM1` → `_CON` …).
+- Every download is tracked until it ends (codex review 10): never evicted (≤ 50 at once, the same
+  URL once at a time — macOS reports no path at the end), refused when the app has no folder of its
+  own for it. `downloads::finish` marks every successful file whose path is known; when the mark
+  can't be written or the path is unknown, the notification says so instead of a plain "saved".
 - Every saved file is marked as downloaded (`downloads::mark_downloaded`): `com.apple.quarantine`
   (`0081;<hex time>;Brainitive;<UUID>`, one WebKit set is kept) on macOS, so Gatekeeper checks an
   app or script opened from it; `Zone.Identifier` (zone 3, Mark of the Web) on Windows.
@@ -404,23 +424,28 @@ The MSIX for the Microsoft Store (`--features msstore`, `tauri.msstore.conf.json
 
 | Main webview goes to | Result |
 |---|---|
-| bundled screens, `about:blank`, `data:`/`blob:` (frames) | allowed |
+| bundled screens | allowed from the bundled screens themselves, a window's first load and the app's own transitions (a one-shot native grant, `shell::grant_local`); **blocked when server content starts it** (codex review 6) |
+| `about:blank`, `data:`/`blob:` (frames) | allowed |
 | current server, any path | allowed — except `/login` → a fresh web session from the stored sign-in (no password form in the webview, no social login inside a webview), and `/` → `/dashboard` |
 | another http(s) site, top level | Windows: cancelled in the navigation handler. macOS / Linux: reverted on page-load **start** (`window.stop()` + navigate back to the last good page, `links::decide_page_load`, BRAI-377); opened in the system browser |
 | another http(s) site in an iframe | allowed, but no IPC (see above) |
 | `target=_blank` / `window.open` | denied; server pages navigate the main window, other http(s)/mailto open outside |
 | `mailto:` | mail client |
-| `brainitive://` | handled as a deep link |
+| `brainitive://` | handled as a deep link when the app starts it; **blocked from server content** (codex review 6) — OS deep links (sign-in callback, `open` links from other apps) are not navigations and work as before |
 | `file:`, `javascript:`, unknown schemes | blocked |
 
 macOS / Linux report iframe navigations to the handler too, hence the page-load step for
 top-level loads; Windows (WebView2) only reports top-level ones and opens them outside directly.
 wry 0.57.1 (tauri 2.12.5) passes the navigation handler the URL only — not
 `WKNavigationAction.targetFrame.isMainFrame` (WebKit) or the frame of the WebKitGTK policy
-decision — so a foreign main-frame load can't be refused up front there. Page-load events are
-main-frame only (`didCommitNavigation` / `load-changed: committed`), so on `Started` the app
-reverts at once instead of waiting for `Finished` (BRAI-377). The foreign page may run for the
-few milliseconds until the navigation back; it never has IPC.
+decision — so a foreign main-frame load can't be refused up front there (re-checked for the codex
+review, finding 7: unchanged in the pinned tauri 2.12.5 / wry 0.57.1; WebKitGTK's decide-policy
+covers sub-frames too). Page-load events are main-frame only (`didCommitNavigation` /
+`load-changed: committed`), so on `Started` the app reverts at once instead of waiting for
+`Finished` (BRAI-377). The foreign page may run for the few milliseconds until the navigation back;
+it never has IPC: the bridge capability is `<origin>/*` and every bridge command checks the caller
+again (`bridge::is_bridge_caller`: an app window on the current origin, tested), and the bundled
+commands are local-only and check their window.
 
 ## Sign-in (OAuth 2.1 code + PKCE, first party)
 
@@ -448,10 +473,20 @@ switcher never open the auth endpoints (`links::resolve_deep_link_target`, BRAI-
 an attacker's code would sign the webview into the attacker's account (login CSRF; the server also
 asks "Continue as …?" when another user is signed in). Only step 6 opens `/app/session/<code>`.
 
-Sign out (menu, or the web app's own "Log out"): `POST /api/v1/auth/logout`, delete the keychain
-entry, clear that server's webview data, and (BRAI-377) cancel a running voice recording, drop a
-transcript waiting for quick capture and destroy the quick-capture, switcher and offline windows (their
-text and last results). "Forget this server": the same, plus its webview data
+Sign out (menu, or the web app's own "Log out"): the account epoch moves on first (a capture, panel
+or New-task call still running writes nothing back, codex review 5); `Session::sign_out` moves the
+**session epoch** of that server on before any network wait — a refresh or code exchange that
+started earlier stores nothing (a late sign-in's new device is revoked with its own token), and no
+token is handed out until the next sign-in (codex review 3); `POST /api/v1/auth/logout`; delete the
+keychain entry (retried); delete the queued captures and the offline files (retried); clear that
+server's webview data; and (BRAI-377) cancel a running voice recording, drop a transcript waiting
+for quick capture and destroy the quick-capture, switcher and offline windows (their text and last
+results). **The result is reported honestly** (codex review 4): "You are signed out." only when all
+of it worked; otherwise the sign-in screen (or, for a server not on screen, a notification) names
+what is left — the device not revoked on the server (remove it in the account's device list), the
+keychain entry, offline data, web data — and how to fix it. The server stays marked in
+`settings.json` (`pending_sign_outs`) until its local data is gone: at the next start it is closed in
+the session before anything is restored from a leftover keychain entry, and the deletion is retried. "Forget this server": the same, plus its webview data
 store is deleted and it leaves the saved list. Settings → Servers → Sign out of a server that is
 not current: its device, keychain entry, queue and offline files, and its store (scheduled); it
 stays in the list.
@@ -552,9 +587,9 @@ poll), or the old server's account stays readable after the switch.
 - **Queued captures are plain text on disk** while offline (`capture-queue.json`), readable by
   other processes of the same OS user — the same exposure as the webview's cache of the server's
   pages. Accepted; deleted on sign-out / forget and as soon as they are sent.
-- A captured text queued under a server is sent to whoever is signed in to that server when the
-  connection is back (sign-out deletes the queue, so this is only the same user after a session
-  expiry).
+- A captured text queued under a server is sent only as the sign-in it was captured in, or as the
+  account `GET /me` confirmed for it (codex review 2); one nobody can attribute (made before any
+  confirmation, then another sign-in) is removed unsent, with a notification.
 - **Voice capture's direct shortcut ⇧⌘V / Ctrl+Shift+V** (BRAI-439) takes the combination from
   other apps ("paste as plain text" in browsers, Slack, VS Code, and **paste in most Linux
   terminals**) only when the user sets it (off by default since BRAI-440: ⌃⌘K, then hold V) and
@@ -589,3 +624,23 @@ Findings of the review and what became of them (details in the sections above; p
 | 10 | Tray poller wrote results after a sign-out / switch | **Resolved**: `tray::PollTicket` (server + account epoch) checked under the lock of each write. |
 | 11 | `brainitive_open_external` had no rate limit | **Resolved**: 10 per minute (`bridge::allow_rate`, shared with notify's 20). |
 | 12 | Sign-out left a voice transcript, the capture text, switcher results and a running recording | **Resolved**: `flows::clear_account_traces`. |
+
+## Codex security review (2026-11-02)
+
+A second, source-only review of the desktop repo. Plan, verification and tests:
+`docs/tasks/codex-security-review.md`.
+
+| # | Finding | State |
+| --- | --- | --- |
+| 1 | Offline fallbacks could queue server A's change into server B's outbox | **Resolved**: `AccountTicket` taken before the request, checked under the lock (`offline::owned_outbox`); the sync checks epoch and origin; never re-targeted. |
+| 2 | Offline data shown before the account was confirmed; queued captures had no owner | **Resolved**: sign-in id per server; files of another sign-in held back until `GET /me`; captures carry sign-in + user and are sent only as their owner. |
+| 3 | Sign-out could race a refresh or a sign-in and restore credentials | **Resolved**: session epoch (generation + closed) in `Session`, one mutex. |
+| 4 | Sign-out reported success when something failed | **Resolved**: `SignOutReport`, retried wipes, honest notice, `pending_sign_outs` closed at start and retried. |
+| 5 | A late capture failure recreated the queue after sign-out | **Resolved**: epoch moves first; `capture::keep_for_retry` checks the ticket. |
+| 6 | Server content could open the bundled screens / trigger deep links | **Resolved**: `links::Initiator` (committed page + one-shot native grant). |
+| 7 | Foreign top-level pages commit on macOS / Linux before the revert | **Accepted** (unchanged in tauri 2.12.5 / wry 0.57.1); no IPC during that window (`bridge::is_bridge_caller`, origin-scoped capability), tested. |
+| 8 | Bundled-main commands without a caller check | **Resolved**: `ensure_main_screen` in every one; manifest-wide test. |
+| 9 | Panel completions changed the current account after a switch | **Resolved**: ticket checks on the tray My Day, outbox and sync states. |
+| 10 | Some finished downloads were not marked | **Resolved**: no eviction, duplicate URLs refused, `downloads::finish`, warning when unmarked. |
+| 11 | Platform signing secrets reached the whole build | **Resolved**: unsigned build, then dedicated signing steps (`scripts/macos-sign.sh`, Windows sign / bundle / sign); `scripts/workflow-secrets.test.mjs`. Residual: the signing steps share the runner with the build (a separate job would isolate them). |
+| 12 | Updater disabled by the placeholder key | **Confirmed**, informational: fail-closed until the owner sets the real key (`docs/RELEASING.md` § 4). |

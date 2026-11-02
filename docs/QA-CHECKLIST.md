@@ -539,6 +539,13 @@ Use a debug build for the devtools steps (19.1 and 19.5). Use a real signed-in s
 | 19.7 Refresh token and access token are not in `settings.json`, the offline files, the capture queue or the logs. | Search the app data folder and logs for `bra_` and `brr_`: none. | [ ] | [ ] | [ ] |
 | 19.8 macOS and Linux: permissions on app data files (`capture-queue.json`, `offline/…`, `voice/…`). | 0600 for files, 0700 for folders. Windows: profile ACL only (not checked here). | [ ] | n/a | [ ] |
 | 19.9 Server redirect from https to http (section 1.9) and deep links to auth paths (section 3). | Refused as listed. Repeated here only as a reminder that these are security rules. | [ ] | [ ] | [ ] |
+| 19.10 Debug build, on a server page in devtools: `location.href = "tauri://localhost/index.html"` (Windows: `http://tauri.localhost/index.html`), then `location.href = "brainitive://open?url=/my-work"`. | Both do nothing (the log says "navigation by server content … blocked"); the server page stays. Sign out / Switch Server still show the app's own screens. | [ ] | [ ] | [ ] |
+| 19.11 Sign out while offline (Wi-Fi off). | The sign-in screen says you are signed out on this computer but the server could not be reached, and how to remove the device in the account settings. Restart: no automatic sign-in. | [ ] | [ ] | [ ] |
+| 19.12 Signed in as A with offline data; on the server, end A's session (web session list); sign in as **B** on the same server (no sign-out in the app). Open the offline window before and after the app is back online. | Before the server confirmed the account: "Checking your account", none of A's items. After: A's copy is gone, B's own data syncs; A's queued captures are not in B's inbox (a notification says they were not sent). | [ ] | [ ] | [ ] |
+| 19.13 Same as 19.12 but sign in as **A** again. | A's offline copy comes back after the check; A's queued captures are sent. | [ ] | [ ] | [ ] |
+| 19.14 Panel: tick a My Day item, then switch servers before the tick finished (slow network: Network Link Conditioner / throttling). | The other server's tray and panel are unchanged. | [ ] | [ ] | [ ] |
+| 19.15 Downloads: download the same attachment twice quickly. | The second one is refused with "This file is being downloaded already."; the first is marked (`xattr -p com.apple.quarantine <file>` / `Get-Content <file> -Stream Zone.Identifier`). | [ ] | [ ] | n/a |
+| 19.16 macOS, signing build (CI or `scripts/macos-sign.sh`): check the downloaded `.dmg` and the app in it. | `spctl -a -vv` says `Notarized Developer ID`; `xcrun stapler validate` works on the `.dmg` and the `.app`; the log of the CI step "tauri build" shows no `APPLE_` variable. | [ ] | n/a | n/a |
 
 ---
 

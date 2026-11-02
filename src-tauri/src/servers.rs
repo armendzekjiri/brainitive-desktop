@@ -188,6 +188,7 @@ mod tests {
                 version: None,
                 last_used: 0,
                 custom_name: None,
+                sign_in: None,
             })
             .collect()
     }

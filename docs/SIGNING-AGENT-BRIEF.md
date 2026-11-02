@@ -50,16 +50,26 @@ for the repo rules.
 4. **Notarization credentials.** Pick one (`APPLE-SIGNING.md` step 3):
    - an App Store Connect **team** API key (Key ID, Issuer ID, `.p8`), the recommended way;
    - or Burim's Apple ID with an app-specific password.
-5. **The signed build:**
+5. **The signed build** — build unsigned, then sign what was built (the build never gets the
+   signing credentials; this is how CI does it too, `RELEASING.md` § 1):
    ```bash
+   # 5a. unsigned build: no APPLE_* variable may be set in this shell
+   unset APPLE_SIGNING_IDENTITY APPLE_CERTIFICATE APPLE_ID APPLE_PASSWORD APPLE_API_KEY APPLE_API_KEY_PATH
+   npx tauri build --target universal-apple-darwin --bundles app,dmg
+   # 5b. sign + notarize + staple
    export APPLE_SIGNING_IDENTITY="Developer ID Application: Burim Bilali (65NCF3DHKS)"
    # option B (API key):
    export APPLE_API_KEY=<Key ID> APPLE_API_ISSUER=<Issuer ID> APPLE_API_KEY_PATH=<path to .p8>
    # or option A (Apple ID):
    # export APPLE_ID=<e-mail> APPLE_PASSWORD=<app-specific password> APPLE_TEAM_ID=65NCF3DHKS
-   npx tauri build --target universal-apple-darwin --bundles app,dmg
+   B=src-tauri/target/universal-apple-darwin/release/bundle
+   scripts/macos-sign.sh "$B/macos/Brainitive.app" "$B"/dmg/Brainitive_*_universal.dmg
    ```
-   Tauri signs with the hardened runtime and the repo's entitlements, notarizes and staples.
+   `scripts/macos-sign.sh` signs the `.app` with the hardened runtime and
+   `src-tauri/entitlements.plist`, replaces the `.dmg` with a signed one made from the signed app,
+   notarizes it (`notarytool --wait`; it stops unless Apple answers `Accepted`) and staples the
+   `.dmg` and the `.app`. Leave `APPLE_CERTIFICATE` unset: the identity comes from Burim's login
+   keychain (allow `codesign` when macOS asks). Don't edit the script; report problems to Armend.
 6. **Verify** with the commands in `APPLE-SIGNING.md` step 6:
    - `codesign --verify --deep --strict`;
    - `codesign -d --entitlements -` (only `audio-input` + `network.client`);

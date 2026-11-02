@@ -60,6 +60,8 @@ interface View {
     syncing: boolean;
     last_error: string | null;
     platform: string;
+    // the copy on this computer is of an earlier sign-in, shown once the account is confirmed
+    account_check: boolean;
     // the data (absent when signed out)
     has_data?: boolean;
     user_name?: string | null;
@@ -320,6 +322,9 @@ function setCount(name: string, text: string): void {
     document.querySelectorAll<HTMLElement>(`[data-count="${name}"]`).forEach((n) => (n.textContent = text));
 }
 
+const EMPTY_TITLE = $('empty-title').textContent ?? '';
+const EMPTY_TEXT = $('empty-text').textContent ?? '';
+
 function render(): void {
     const v = view;
     if (!v) return;
@@ -329,6 +334,13 @@ function render(): void {
     if (!v.signed_in) {
         $('empty-title').textContent = 'Sign in first';
         $('empty-text').textContent = 'Offline mode keeps the data of the account signed in to this app. Sign in from the main window.';
+    } else if (v.account_check) {
+        $('empty-title').textContent = 'Checking your account';
+        $('empty-text').textContent =
+            'The offline copy on this computer is from an earlier sign-in. It is shown once Brainitive has confirmed it belongs to the account signed in now, and deleted if it does not.';
+    } else {
+        $('empty-title').textContent = EMPTY_TITLE;
+        $('empty-text').textContent = EMPTY_TEXT;
     }
     document.querySelector<HTMLElement>('.tabs')!.hidden = !hasData;
     if (hasData) {

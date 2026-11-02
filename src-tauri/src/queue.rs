@@ -91,6 +91,36 @@ pub struct QueuedCapture {
     pub queued_at: u64,
     #[serde(default)]
     pub attempts: u32,
+    /// The sign-in (`RecentServer::sign_in`) it was captured in (codex review 2).
+    #[serde(default)]
+    pub sign_in: Option<String>,
+    /// The account (`GET /me`) known to be signed in then, if any.
+    #[serde(default)]
+    pub user_id: Option<u64>,
+}
+
+/// Whether a queued capture may be sent as the account signed in now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+    /// Captured in this sign-in, or `GET /me` confirmed the same account.
+    Send,
+    /// Of an earlier sign-in whose account is known: wait for `GET /me` of this one.
+    Wait,
+    /// Another account's, or nobody can tell whose: never sent, removed.
+    Drop,
+}
+
+/// `current_sign_in`: the id stored for the server now; `confirmed_user`: the account `GET /me`
+/// confirmed in this sign-in (pure, tested).
+pub fn owner(entry: &QueuedCapture, current_sign_in: Option<&str>, confirmed_user: Option<u64>) -> Owner {
+    if entry.sign_in.as_deref() == current_sign_in {
+        return Owner::Send;
+    }
+    match (entry.user_id, confirmed_user) {
+        (Some(u), Some(me)) if u == me => Owner::Send,
+        (Some(_), Some(_)) | (None, _) => Owner::Drop,
+        (Some(_), None) => Owner::Wait,
+    }
 }
 
 impl QueuedCapture {
@@ -103,7 +133,16 @@ impl QueuedCapture {
             intended_type: input.intended_type,
             queued_at: now(),
             attempts: 0,
+            sign_in: None,
+            user_id: None,
         }
+    }
+
+    /// Tags it with the sign-in (and the account, when known) it was captured in.
+    pub fn owned_by(mut self, sign_in: Option<String>, user_id: Option<u64>) -> Self {
+        self.sign_in = sign_in;
+        self.user_id = user_id;
+        self
     }
 
     /// The `POST /api/v1/captures` body.
@@ -377,5 +416,35 @@ mod tests {
         std::fs::write(&path, b"garbage").unwrap();
         assert_eq!(CaptureQueue::load(&path), CaptureQueue::default());
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_queued_capture_is_sent_only_as_the_account_it_was_made_for() {
+        let o = ServerOrigin::parse("a.example.com").unwrap();
+        let entry = |sign_in: Option<&str>, user: Option<u64>| {
+            QueuedCapture::new(&o, CaptureInput::new("private", None, None).unwrap())
+                .owned_by(sign_in.map(str::to_string), user)
+        };
+        // this sign-in's: sent (also before `GET /me`, e.g. right after a restart)
+        assert_eq!(owner(&entry(Some("s1"), None), Some("s1"), None), Owner::Send);
+        assert_eq!(owner(&entry(Some("s1"), Some(5)), Some("s1"), Some(6)), Owner::Send);
+        // an earlier sign-in of user 5: waits for `GET /me`, then only to 5
+        let old = entry(Some("s0"), Some(5));
+        assert_eq!(owner(&old, Some("s1"), None), Owner::Wait);
+        assert_eq!(owner(&old, Some("s1"), Some(5)), Owner::Send);
+        assert_eq!(
+            owner(&old, Some("s1"), Some(6)),
+            Owner::Drop,
+            "never as another account"
+        );
+        // an earlier sign-in nobody can attribute: never sent
+        assert_eq!(owner(&entry(Some("s0"), None), Some("s1"), Some(5)), Owner::Drop);
+        assert_eq!(owner(&entry(None, None), Some("s1"), None), Owner::Drop);
+        // files from before this change (no ids at all, no sign-in since): as before
+        assert_eq!(owner(&entry(None, None), None, None), Owner::Send);
+        // the tags survive the file
+        let json = serde_json::to_string(&old).unwrap();
+        let back: QueuedCapture = serde_json::from_str(&json).unwrap();
+        assert_eq!((back.sign_in.as_deref(), back.user_id), (Some("s0"), Some(5)));
     }
 }

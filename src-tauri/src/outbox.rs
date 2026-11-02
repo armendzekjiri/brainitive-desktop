@@ -178,6 +178,9 @@ pub struct Outbox {
     /// The account the changes were made as (`GET /me`), when known.
     #[serde(default)]
     pub user_id: Option<u64>,
+    /// The sign-in (`RecentServer::sign_in`) the changes were made under (codex review 2).
+    #[serde(default)]
+    pub sign_in: Option<String>,
     #[serde(default)]
     pub entries: Vec<Entry>,
     #[serde(default)]
@@ -615,6 +618,11 @@ impl Outbox {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Anything of the user's in it: waiting changes, refused ones, a stop waiting for a pick.
+    pub fn has_content(&self) -> bool {
+        !self.entries.is_empty() || !self.problems.is_empty() || self.activity_needed.is_some()
     }
 
     /// Adds a change, folding it into an unsent one for the same thing where possible.

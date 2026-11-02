@@ -56,10 +56,14 @@ desktop/
     │   ├── badge.rs            Windows overlay badge bitmap                                  (pure)
     │   ├── api.rs              reqwest client for /api/v1 (instance, auth, and ApiRequest for any
     │   │                       authenticated call: /api/v1/ paths only, ETag / 304, no redirects)
-    │   ├── secrets.rs          refresh token per origin in the OS keychain (keyring)
+    │   ├── secrets.rs          refresh token per origin in the OS keychain (keyring); an
+    │   │                       in-memory fake in unit tests (secrets::fake)
     │   ├── session.rs          sign-in state, in-memory access tokens, serialized refresh,
-    │   │                       Session::request (refresh + retry on 401) and CallError
-    │   ├── state.rs            AppState managed by Tauri (phase, notice, window store, …)
+    │   │                       the session epoch (per-origin generation + closed), sign-out
+    │   │                       report, Session::request (refresh + retry on 401) and CallError
+    │   ├── state.rs            AppState managed by Tauri (phase, notice, window store, …),
+    │   │                       AccountTicket (server + account epoch of a running request)
+    │   ├── testing.rs          unit tests only: loopback fake App API with request gates
     │   ├── shell.rs            app windows (main + app-<n>): data store, guards, UA, capability, zoom
     │   ├── menu.rs             the app menu and its actions (BRAI-362)
     │   ├── popup.rs            bundled windows: build / show / dismiss, caller check
@@ -206,18 +210,37 @@ window uses them (`settings.pending_wipes`, retried at start-up).
 - **Connect**: `/api/v1/instance` follows ≤ 5 redirects, never https → http (`api::redirect_refusal`);
   when the server answers at another origin than the one entered, the confirm screen says so, and
   `use_server` refuses an origin that changed since it was confirmed (BRAI-377).
-- **Sign out** (Server menu, or the web app's "Sign out" via `brainitive_sign_out`): `POST /auth/logout`, delete the keychain entry, clear this server's
-  webview data; also (`flows::clear_account_traces`, BRAI-377) cancel a voice recording, drop a
-  waiting transcript and destroy the quick-capture / switcher / offline windows. The account epoch
-  (`Inner::account_epoch`) changes, so a tray poll still running writes nothing.
+- **Sign out** (Server menu, or the web app's "Sign out" via `brainitive_sign_out`): the account
+  epoch (`Inner::account_epoch`) changes **first**, so a tray poll, capture, panel or New-task call
+  still running writes nothing; `flows::clear_account_traces` (BRAI-377) cancels a voice recording,
+  drops a waiting transcript and destroys the quick-capture / switcher / offline windows; then
+  `flows::end_sign_in` (shared with Settings → Servers → Sign out and Forget): the server is marked in
+  `settings.pending_sign_outs`, `Session::sign_out` moves the session epoch on (no refresh or sign-in
+  still running can store a token, none is handed out), revokes the device (`POST /auth/logout`,
+  8 s), deletes the keychain entry (3 tries) and reports `SignOutReport`; the queued captures and
+  offline files go (retried); the mark goes only when everything local is gone. The main window's
+  webview data of the server is cleared. `flows::sign_out_notice` builds the screen's text: "You
+  are signed out." only when everything worked, otherwise what is left and how to fix it (a
+  notification for sign-outs of a server not on screen). At start, `close_unfinished_sign_outs`
+  closes marked servers in the session before anything is restored, and `finish_sign_outs` retries
+  their deletion (codex review 3 / 4).
+- **A completed sign-in** drops the previous account's in-memory state (`drop_account_state`) and
+  stores a new random **sign-in id** for the server (`RecentServer::sign_in`, removed on sign-out).
+  The offline cache, the outbox and queued captures carry the id they were made under (codex
+  review 2, see "Offline mode").
 
 ## Remote content and the bridge
 
 See [SECURITY.md](./SECURITY.md). In short: the current origin gets a runtime capability
 (`Manager::add_capability`, `remote.urls = ["<origin>/*"]`) for exactly `brainitive_notify {title, body, url?}`,
 `brainitive_set_badge {count}`, `brainitive_open_external {url}`, `brainitive_sign_out {}` (called by the web app's
-`resources/js/lib/desktop.ts` via `window.__TAURI_INTERNALS__.invoke`). The navigation guard keeps
-the main frame on the bundled screens and the current origin. The user agent ends with
+`resources/js/lib/desktop.ts` via `window.__TAURI_INTERNALS__.invoke`), each checking
+`bridge::is_bridge_caller` (an app window on the current origin). The navigation guard keeps
+the main frame on the bundled screens and the current origin; who starts a navigation decides
+whether a bundled page or a `brainitive://` link may load (`links::Initiator`: the window's
+committed page from `Inner::committed`, or a one-shot native grant `shell::grant_local` for the
+app's own transitions — server content gets neither, codex review 6). Every command of the bundled
+main screens starts with `commands::ensure_main_screen` (codex review 8). The user agent ends with
 ` BrainitiveDesktop/<version>`.
 
 ## Windows
@@ -576,6 +599,16 @@ bundled `offline` window shows it:
   server); the tray shows "Offline — N changes will sync" / "N changes waiting to sync", **Open
   Offline View…** and **Sync Now**; a notification says when queued changes were sent and when some
   could not be applied (click → the offline window).
+- **Whose data** (codex review 1 / 2): the outbox and cache carry the **sign-in id**
+  (`RecentServer::sign_in`) they were made / confirmed under. `OfflineData::load(origin, sign_in)`
+  holds files of another sign-in back (`held`: empty stand-ins, never written over, nothing queued)
+  until `GET /me` (`adopt_user`) says they are this account's — then they are taken over and
+  re-tagged — or deletes them. Panel / New-task changes reach the outbox only through
+  `offline::queue` / `with_outbox` with the `AccountTicket` taken before their request
+  (`owned_outbox` refuses another server or sign-in); a sync's `with_data` checks epoch **and**
+  origin, and its live states (`panel::apply_sync_states`) go to the sign-in it ran for. Queued
+  quick captures carry the sign-in id and, when confirmed, the user id (`queue::owner`: send / wait
+  for `/me` / remove unsent).
 - **Deleted** on sign-out, forget, and when another account signs in on the same server. Switching
   servers keeps each server's files; the old server's data is unloaded (`OfflineData::unload`) and
   loading another server (`ensure`) bumps `epoch` and `load`, so a sync of the old server that is
@@ -588,7 +621,10 @@ bundled `offline` window shows it:
 `<app cache>/downloads/<uuid>/<name>`; when complete a Save As dialog (`tauri-plugin-dialog`) moves
 it, cancel deletes it; the staging folder is cleared at start. Off: Downloads folder, unique name.
 Every saved file gets `com.apple.quarantine` (macOS, `0081;<hex time>;Brainitive;<UUID>`) /
-`Zone.Identifier` (Windows) (`mark_downloaded`, BRAI-377); `clean_name` drops bidi / format
+`Zone.Identifier` (Windows) (`mark_downloaded`, BRAI-377). Running downloads are never evicted
+(≤ 50, the same URL once at a time: `downloads::admit`); `downloads::finish` marks every successful
+file whose path is known (tracked, or reported by the webview) and the notification warns when it
+could not be marked (codex review 10); `clean_name` drops bidi / format
 characters, trailing dots and spaces, and Windows device names.
 A notification click reveals the file. Tauri's drag & drop handler is disabled on every window, so
 OS file drops reach the page; `file:` navigations stay blocked.
@@ -614,11 +650,14 @@ Windows 2022 (NSIS), Ubuntu 22.04 (deb + AppImage); each job runs `npm run build
 `cargo clippy -D warnings`, then `tauri build` (not on pull requests). Tags `v*` add a draft GitHub
 release with `SHA256SUMS`. Signing is conditional: only for a `v*` tag push or a manual run on the
 default branch (`SIGNING_ALLOWED`), and a detect step checks for the secrets (booleans only).
-Secrets go through step `env:` only, never `$GITHUB_ENV` (BRAI-377): `tauri build` gets `APPLE_*`
-on macOS (Tauri signs + notarizes; `signingIdentity` is null in the config; an API-key `.p8` is a
-temp file deleted after the build) or `AZURE_*` on Windows, where a step writes the `signCommand`
-overlay for Azure Trusted Signing (`trusted-signing-cli` 0.11.0, pinned) passed with `--config`.
-Actions use exact tags marked `# TODO pin SHA` until pinned (release blocker, `docs/RELEASING.md`).
+Secrets go through step `env:` only, never `$GITHUB_ENV` (BRAI-377), and **never to a build step**
+(codex review 11): `tauri build` makes unsigned bundles (Windows: `--no-bundle`); then "macOS
+signing + notarization" runs `scripts/macos-sign.sh` (throwaway keychain, `codesign` with hardened
+runtime + entitlements, a new signed `.dmg`, `notarytool --wait`, staple), and on Windows
+"Windows signing (app)" signs `brainitive-desktop.exe`, `tauri bundle --bundles nsis` packs it and
+"Windows signing (installer)" signs the `-setup.exe` (`trusted-signing-cli` 0.11.0, pinned,
+installed without secrets into `$RUNNER_TEMP`). `scripts/workflow-secrets.test.mjs` guards this.
+Actions are pinned to commit SHAs.
 `bundle` config: `entitlements.plist` (audio-input, network client; no JIT), min macOS 14, NSIS
 `currentUser` + WebView2 download bootstrapper, `.deb` depends `libasound2`. The `brainitive://`
 scheme is registered by the installers / `.desktop` file from `plugins.deep-link`, and by
@@ -715,7 +754,12 @@ download names / moves, the overlay badge, menu ids / accelerators, updater chan
 redirects / key guard / schedule / labels, and the updater plugin with a throwaway minisign key:
 bad signature, foreign key, signed-version mismatch, equal / older versions, a loopback-served
 manifest + download) and `tests/capabilities.rs`
-(capability scoping). `cargo test --test live_network -- --ignored`
+(capability scoping, and that every command of the `build.rs` manifest starts with a caller
+check). The codex review's tests use `testing::FakeServer` (a loopback App API whose requests can be
+held) and `secrets::fake` (an in-memory keychain with injectable failures): sign-out racing a
+refresh / an exchange / requests, keychain refusals; plus the outbox / capture / panel tickets,
+held offline data of another sign-in, navigation initiators and download tracking.
+`cargo test --test live_network -- --ignored`
 checks discovery against real hosts (badssl.com certificate errors, Cloud 404 detection).
 `BRAINITIVE_VOICE_MODEL_DIR=<dir> cargo test --lib real_transcription -- --ignored --nocapture`
 downloads the real model once into `<dir>` and transcribes clips spoken by macOS `say` (Metal and

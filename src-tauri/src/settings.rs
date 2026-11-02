@@ -24,6 +24,12 @@ pub struct RecentServer {
     /// The name the user gave it in Settings → Servers (`None`: [`crate::servers::default_name`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_name: Option<String>,
+    /// A random id of the sign-in that is stored for this server, new on every completed sign-in
+    /// and gone on sign-out (codex review 2). The offline copy, the outbox and queued captures
+    /// carry the id they were made under; data of another sign-in is not shown or sent before
+    /// `GET /me` confirmed it is the same account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<String>,
 }
 
 impl RecentServer {
@@ -47,6 +53,11 @@ pub struct Settings {
     /// Hex ids of webview data stores of forgotten servers, deleted once nothing uses them.
     #[serde(default)]
     pub pending_wipes: Vec<String>,
+    /// Servers whose sign-out could not delete everything on this computer (keychain entry,
+    /// offline files, queued captures; codex review 4): retried at every start, and nothing is
+    /// restored from them meanwhile.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_sign_outs: Vec<ServerOrigin>,
     /// Desktop preferences (Settings window). Launch at login is not stored here: the OS
     /// (LaunchAgent / registry / autostart file) is the truth for it.
     #[serde(default)]
@@ -280,6 +291,7 @@ impl Settings {
                 version,
                 last_used: now(),
                 custom_name: None,
+                sign_in: None,
             });
         } else {
             log::warn!("server list full: {origin} not saved");
@@ -343,6 +355,30 @@ impl Settings {
             self.current = None;
         }
         self.schedule_wipe(origin);
+    }
+
+    /// The id of the sign-in stored for `origin` (see [`RecentServer::sign_in`]).
+    pub fn sign_in_of(&self, origin: &ServerOrigin) -> Option<String> {
+        self.recent.iter().find(|r| &r.origin == origin)?.sign_in.clone()
+    }
+
+    pub fn set_sign_in(&mut self, origin: &ServerOrigin, id: Option<String>) {
+        if let Some(r) = self.recent.iter_mut().find(|r| &r.origin == origin) {
+            r.sign_in = id;
+        }
+    }
+
+    /// A sign-out of `origin` begins: marked until its local cleanup is done
+    /// ([`Self::sign_out_done`]), so a crash or a refused deletion is retried at the next start.
+    pub fn sign_out_started(&mut self, origin: &ServerOrigin) {
+        if !self.pending_sign_outs.contains(origin) {
+            self.pending_sign_outs.push(origin.clone());
+        }
+    }
+
+    /// Everything of that sign-out is gone from this computer (or a new sign-in owns it now).
+    pub fn sign_out_done(&mut self, origin: &ServerOrigin) {
+        self.pending_sign_outs.retain(|o| o != origin);
     }
 
     /// The server's webview data store is deleted once no window uses it (Forget, and a

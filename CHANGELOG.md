@@ -210,8 +210,33 @@ The first stable release of Brainitive Desktop for macOS, Windows and Linux.
 - Pages may open at most 10 links per minute in the browser; quick captures waiting to be sent, the
   offline copy and the downloaded update are created readable by your user only (folders included).
 - **CI**: the update signing key no longer reaches the build (a separate step signs the update
-  bundles), Apple / Azure secrets go only to the step that uses them, signing runs only for release
-  tags (or a manual run on the default branch), and the Windows signing tool is pinned.
+  bundles), signing runs only for release tags (or a manual run on the default branch), and the
+  Windows signing tool is pinned.
+
+Second review (Codex, 2026-11-02):
+
+- **Signing out can't be undone by a request still running**: a token refresh or a sign-in that
+  finishes after you signed out no longer stores new credentials (a sign-in that completes late is
+  revoked on the server), and nothing gets a token while the sign-out runs.
+- **Honest sign-out**: "You are signed out." only when it is true. If the server couldn't be reached
+  to end this computer's session, or the keychain entry, offline data or web data couldn't be
+  deleted, the sign-in screen (or a notification) says what is left and how to fix it; leftovers are
+  never used again and are deleted at the next start.
+- **Offline data belongs to one account**: the offline copy, waiting offline changes and queued
+  quick captures are tied to the server **and** the sign-in they were made in. After a new sign-in
+  on the same server, the old copy is shown or sent only once the server confirmed it is the same
+  account, and deleted otherwise; a capture or change from a request that was still running during
+  a sign-out or switch is dropped, never queued for the other server or account.
+- **Late answers stay with their account**: the menu-bar panel's done ticks, timer and notification
+  updates that arrive after a switch no longer change the new account's tray or panel.
+- **Server pages can't open the app's own screens or `brainitive://` links** inside the app window;
+  every command of the app's own screens checks which window and page calls it.
+- **Every finished download is marked** as downloaded from the internet, or you are told it could
+  not be; more than 50 downloads at once, or the same file twice at once, is refused instead of
+  losing track of one.
+- **CI**: Apple and Azure signing secrets no longer reach the build at all: the app is built
+  unsigned, then signed, notarized and stapled in separate steps (`scripts/macos-sign.sh`, the
+  Windows signing steps); a test checks the workflow keeps it that way.
 
 ### Reliability & diagnostics
 
