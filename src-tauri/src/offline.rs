@@ -476,8 +476,9 @@ async fn flush(app: &AppHandle, origin: &ServerOrigin, epoch: u64) -> (usize, us
                 Ok(response) => d.outbox.apply_results(&ids, &outbox::parse_results(&response.body)),
                 Err(e) => d.outbox.apply_batch_error(&ids, e),
             };
-            for (entry, _) in &step.done {
-                d.cache_mut().note_applied(&entry.change);
+            for (entry, result) in &step.done {
+                d.cache_mut()
+                    .apply_result(&entry.change, result.record_type.as_deref(), result.entity.as_ref());
             }
             (step, before - d.outbox.len())
         });
@@ -680,8 +681,12 @@ pub fn offline_add_task(app: AppHandle, webview: Webview, task_list_id: u64, tit
     popup::ensure_caller(&app, &webview, Popup::Offline).map_err(|m| ui("not_allowed", m))?;
     let title = clean_title(&title)?;
     record(&app, |data| {
-        if !data.cache.as_ref().is_some_and(|c| c.has_list(task_list_id)) {
+        let cache = data.cache.as_ref().filter(|c| c.has_list(task_list_id));
+        let Some(cache) = cache else {
             return Err(ui("not_found", "This list is not on this computer."));
+        };
+        if !cache.can_manage_items(task_list_id) {
+            return Err(ui("forbidden", "You can't add tasks to this list."));
         }
         Ok(Some(Change::TaskCreate {
             task_list_id,

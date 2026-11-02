@@ -31,6 +31,7 @@ interface List {
     id: number;
     name: string;
     project: string | null;
+    can_manage_items?: boolean;
     tasks: Task[];
 }
 
@@ -244,7 +245,7 @@ function renderLists(v: View): void {
     const tasks = $('task-list');
     tasks.replaceChildren();
     if (current) for (const t of current.tasks) tasks.append(taskRow(current.id, t));
-    $('add-task').hidden = !current;
+    $('add-task').hidden = !current || current.can_manage_items === false;
     select.hidden = lists.length === 0;
     $('lists-empty').hidden = lists.length > 0;
 }

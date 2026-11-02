@@ -146,6 +146,10 @@ pub struct SyncResult {
     pub conflicts: Option<Value>,
     #[serde(default)]
     pub errors: Option<Value>,
+    /// What kind of feed record `entity` is (`work`, `task`, `task_list`, `capture`, `my_day`,
+    /// `comment`; v2).
+    #[serde(default)]
+    pub record_type: Option<String>,
     #[serde(default)]
     pub entity: Option<Value>,
 }
@@ -1050,11 +1054,13 @@ mod tests {
     #[test]
     fn parses_the_batch_answer() {
         let body = json!({"data": [{"request_id": "a", "type": "work.done", "status": "applied", "http_status": 200,
-            "replayed": false, "entity_type": "issue", "entity": {"id": 1}, "conflicts": null, "applied": null,
+            "replayed": false, "entity_type": "issue", "record_type": "work", "entity": {"id": "issue:1"}, "conflicts": null, "applied": null,
             "message": null, "errors": null}]});
         let r = parse_results(&body);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].status, "applied");
+        assert_eq!(r[0].record_type.as_deref(), Some("work"));
+        assert_eq!(r[0].entity, Some(json!({"id": "issue:1"})));
         assert_eq!(parse_results(&body["data"]).len(), 1);
         assert!(parse_results(&json!({"message": "x"})).is_empty());
     }

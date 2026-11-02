@@ -293,13 +293,15 @@ without network and the tray. Rust keeps a copy of the user's own data per serve
 bundled `offline` window shows it:
 
 - **Cache** (`offline_cache.rs`, `<app local data>/offline/<store id>/cache.json`): records `work`,
-  `task_list`, `task`, `capture`, `my_day` from `GET /api/v1/sync/changes`. No cursor → a full run
-  (`scopes=work,task_lists,my_day,captures`, `task_lists=` the lists of the user's open list tasks +
-  the lists already kept, ≤ 50, `limit=100`): pages while `has_more`, then everything the run didn't
-  send goes and the last `next_cursor` is kept. Later: delta runs (upserts by `updated_at`, the
-  overlap of 10 s is harmless; `op: delete` tombstones drop). After every page, records of projects not
-  in `project_ids` drop (lost access). Only the newest My Day is kept. A list that is wanted but not in
-  the cursor's `task_lists` starts a full run; lists that went away don't (no churn). ≤ 200 pages per sync.
+  `task_list`, `task`, `capture`, `my_day` from `GET /api/v1/sync/changes` (sync v2). No cursor → a
+  full run (`scopes=work,task_lists,my_day,captures`, `task_lists=mine` — the server resolves the
+  lists the user works in and answers which it keeps (`task_lists`) —, `captures=inbox`,
+  `limit=100`; the same filters go with a cursor, so an old v1 cursor moves over): pages while
+  `has_more`, then everything the run didn't send goes and the last `next_cursor` is kept. Later:
+  delta runs (upserts by `updated_at`, the overlap of 10 s is harmless; `op: delete` tombstones
+  drop; a `task_list` delete drops its tasks; new lists come in full with `reset: false`). After
+  every page, records of projects not in `project_ids` drop (lost access). Only the newest My Day is
+  kept. `task_list` records carry `can.manage_items`: false hides "Add task". ≤ 200 pages per sync.
 - **Outbox** (`outbox.rs`, `outbox.json` next to it, ≤ 1000): `work.done` (with `base.fields.done`),
   `my_day.add`, `list_task.create`, `list_task.update` (`base.fields` title / status),
   `capture.create`, each with its own `request_id`. Unsent changes fold together (tick + untick =
@@ -309,6 +311,8 @@ bundled `offline` window shows it:
   stayed), deleted / forbidden / invalid → dropped and listed **with the user's text**, waiting →
   kept (dropped after 5 tries), rate_limited / error → kept, stop. A batch refused with a 4xx is
   sent one by one; a single change refused is dropped and listed. Nothing 4xx is retried forever.
+  An applied / conflict result carries `entity` + `record_type` (the feed's record): it replaces the
+  cached one (`entity: null` keeps the local patch until the next pull).
 - **Sync** (`offline.rs`): `GET /me` once per session — another account's cache / outbox are deleted
   first — then the outbox, then the feed. Runs after every tray poll while in the app, on **Sync now**
   (tray, window; when the server answers while the unreachable screen is up, the app reconnects too)

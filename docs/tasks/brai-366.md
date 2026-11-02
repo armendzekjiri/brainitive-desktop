@@ -106,3 +106,17 @@ write order; clearing on sign-out and account switch; tray offline entries) + 4 
    the app patches its My Day copy locally.
 6. `captures` sends every state; the offline view only needs the inbox — a state filter would keep
    the cache small.
+
+## Result: sync v2 (BRAI-441, app commit 4a11d787)
+
+All six gaps above are closed on the server and adopted here:
+1. `task_lists=mine` replaces the guessed ids (`wanted_lists` removed); the answer's `task_lists` is
+   stored.
+2. Changing the lists is additive (`reset: false`); `start_run` no longer restarts anything.
+3. Results carry `entity` + `record_type`: the cached record is replaced (`Cache::apply_result`);
+   `entity: null` keeps the local patch. The task-title / done patch is only the fallback now.
+4. `can.manage_items` on `task_list` records: "Add task" is hidden (and `offline_add_task` refuses).
+5. My Day is re-sent after done changes; the local patch stays as the optimistic update.
+6. `captures=inbox`; capture deletes drop captures that left the inbox (the view's state filter is
+   gone). A `task_list` delete drops the list and its tasks.
+Old stored cursors keep working (the filters are sent with the cursor), no client migration.

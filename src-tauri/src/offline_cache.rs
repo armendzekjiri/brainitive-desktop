@@ -6,8 +6,10 @@
 //! Runs (API.md → Sync): without a cursor a **full run** (`reset: true`): page while `has_more`,
 //! then drop every record the run did not send, and keep the last `next_cursor`. With it a
 //! **delta run**: upserts (applied by `updated_at`) and tombstones (`op: delete`). After every
-//! page, records of projects not in `project_ids` are dropped (lost access). Wanting more task
-//! lists than the cursor knows starts a full run again.
+//! page, records of projects not in `project_ids` are dropped (lost access). Sync v2 (BRAI-441):
+//! the kept task lists are `task_lists=mine` (the answer's `task_lists` says which), the inbox is
+//! `captures=inbox`, and a result of the outbox brings the server's own record (`entity` +
+//! `record_type`) that replaces the cached one.
 //!
 //! Also the window's view model: the cache with the waiting changes (`outbox.rs`) laid over it.
 //! Pure logic; the calls are in `offline.rs`.
@@ -22,7 +24,10 @@ use crate::outbox::{self, Change, Outbox};
 use crate::server::ServerOrigin;
 
 pub const SCOPES: &str = "work,task_lists,my_day,captures";
-pub const MAX_KEPT_LISTS: usize = 50;
+/// The lists the user works in, resolved by the server (no guessing of ids here).
+pub const TASK_LISTS: &str = "mine";
+/// Only captures still in the inbox (the ones that leave it come as deletes).
+pub const CAPTURES: &str = "inbox";
 pub const PAGE_LIMIT: u32 = 100;
 /// At most this many pages per sync (100 records each); a longer run goes on next time.
 pub const MAX_PAGES: u32 = 200;
@@ -52,7 +57,7 @@ pub struct Cache {
     /// The cursor of the last finished run (`None`: the next run is a full one).
     #[serde(default)]
     pub cursor: Option<String>,
-    /// The `task_lists` the cursor was started with.
+    /// The lists the last run kept (the answer's `task_lists`).
     #[serde(default)]
     pub task_lists: Vec<u64>,
     #[serde(default)]
@@ -94,6 +99,9 @@ pub struct FeedPage {
     pub reset: bool,
     #[serde(default)]
     pub project_ids: Vec<u64>,
+    /// The task lists the run keeps (v2); `None` for a v1 answer.
+    #[serde(default)]
+    pub task_lists: Option<Vec<u64>>,
 }
 
 fn text_id<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
@@ -107,31 +115,32 @@ fn text_id<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
 /// A run in progress (memory only: an interrupted full run simply starts again).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Run {
-    /// The cursor for the next request (`None`: start a full run with `task_lists`).
+    /// The cursor for the next request (`None`: start a full run).
     pub cursor: Option<String>,
-    pub task_lists: Vec<u64>,
     pub full: bool,
     pub pages: u32,
     seen: HashSet<String>,
 }
 
 impl Run {
-    /// The query of the next request.
+    /// The query of the next request. The same filters go with a cursor too: a v1 cursor moves to
+    /// them (additive lists, one full run for the inbox filter), a v2 one is unchanged by them.
     pub fn query(&self) -> Vec<(String, String)> {
         let mut q = Vec::new();
-        match &self.cursor {
-            Some(c) => q.push(("cursor".to_string(), c.clone())),
-            None => {
-                q.push(("scopes".to_string(), SCOPES.to_string()));
-                q.push((
-                    "task_lists".to_string(),
-                    self.task_lists.iter().map(u64::to_string).collect::<Vec<_>>().join(","),
-                ));
-            }
+        if let Some(c) = &self.cursor {
+            q.push(("cursor".to_string(), c.clone()));
         }
+        q.push(("scopes".to_string(), SCOPES.to_string()));
+        q.push(("task_lists".to_string(), TASK_LISTS.to_string()));
+        q.push(("captures".to_string(), CAPTURES.to_string()));
         q.push(("limit".to_string(), PAGE_LIMIT.to_string()));
         q
     }
+}
+
+/// The list a `task` record belongs to.
+fn task_list_of(data: &Value) -> Option<u64> {
+    data["list_id"].as_u64().or_else(|| data["task_list_id"].as_u64())
 }
 
 pub fn key(kind: &str, id: &str) -> String {
@@ -178,48 +187,11 @@ impl Cache {
         self.records.values().filter(move |r| r.kind == kind)
     }
 
-    /// The task lists to keep offline: those of the user's open list tasks first, then the ones
-    /// already kept; at most 50, sorted (the API's `task_lists`).
-    pub fn wanted_lists(&self) -> Vec<u64> {
-        let mut out: Vec<u64> = Vec::new();
-        for r in self.of_kind("work") {
-            let source = &r.data["source"];
-            if source["type"] == "list" && r.data["done"] != true {
-                if let Some(id) = source["id"].as_u64() {
-                    if !out.contains(&id) {
-                        out.push(id);
-                    }
-                }
-            }
-        }
-        for r in self.of_kind("task_list") {
-            if let Ok(id) = r.id.parse::<u64>() {
-                if !out.contains(&id) {
-                    out.push(id);
-                }
-            }
-        }
-        out.truncate(MAX_KEPT_LISTS);
-        out.sort_unstable();
-        out
-    }
-
-    /// The next run: a delta with the kept cursor, or a full run when there is none or more
-    /// lists are wanted than the cursor knows (lists that went away don't restart anything).
+    /// The next run: a delta with the kept cursor, or a full run when there is none.
     pub fn start_run(&self) -> Run {
-        let wanted = self.wanted_lists();
-        let more = wanted.iter().any(|id| !self.task_lists.contains(id));
-        match (&self.cursor, more) {
-            (Some(c), false) => Run {
-                cursor: Some(c.clone()),
-                task_lists: self.task_lists.clone(),
-                ..Run::default()
-            },
-            _ => Run {
-                cursor: None,
-                task_lists: wanted,
-                ..Run::default()
-            },
+        Run {
+            cursor: self.cursor.clone(),
+            ..Run::default()
         }
     }
 
@@ -234,36 +206,22 @@ impl Cache {
             }
             let k = key(&change.kind, &change.id);
             if change.op == "delete" {
-                self.records.remove(&k);
+                self.remove(&change.kind, &change.id);
                 run.seen.remove(&k);
                 continue;
             }
             run.seen.insert(k.clone());
-            let existing = self.records.get(&k).and_then(|r| r.updated_at.as_deref());
-            if newer(existing, change.updated_at.as_deref()) {
-                continue; // the runs overlap: an older copy of the same record
-            }
-            if change.kind == "my_day" {
-                // one plan: today's (a new local day replaces yesterday's)
-                let newest = self.of_kind("my_day").map(|r| r.id.clone()).max();
-                if newest.as_deref().is_some_and(|n| n > change.id.as_str()) {
-                    continue;
-                }
-                self.records.retain(|_, r| r.kind != "my_day");
-            }
-            self.records.insert(
-                k,
-                Record {
-                    kind: change.kind,
-                    id: change.id,
-                    project_id: change.project_id.filter(|p| *p > 0),
-                    updated_at: change.updated_at,
-                    data: change.data,
-                },
+            self.upsert(
+                &change.kind,
+                change.id,
+                change.project_id,
+                change.updated_at,
+                change.data,
             );
         }
         // lost access is not a delete: drop what belongs to a project the user can't open now
         self.project_ids = page.project_ids;
+        let kept_lists = page.task_lists;
         let projects: HashSet<u64> = self.project_ids.iter().copied().collect();
         self.records
             .retain(|_, r| r.project_id.is_none_or(|p| projects.contains(&p)));
@@ -280,33 +238,100 @@ impl Cache {
             self.records.retain(|k, _| seen.contains(k));
         }
         self.cursor = Some(page.next_cursor);
-        self.task_lists = std::mem::take(&mut run.task_lists);
+        if let Some(lists) = kept_lists {
+            self.task_lists = lists;
+        }
         self.synced_at = Some(now);
         false
     }
 
-    /// After a change was applied: the cache shows it until the next pull brings the record.
-    pub fn note_applied(&mut self, change: &Change) {
+    /// Inserts or replaces one record (an older copy of the same record is ignored: the runs
+    /// overlap).
+    fn upsert(&mut self, kind: &str, id: String, project_id: Option<u64>, updated_at: Option<String>, data: Value) {
+        let k = key(kind, &id);
+        let existing = self.records.get(&k).and_then(|r| r.updated_at.as_deref());
+        if newer(existing, updated_at.as_deref()) {
+            return;
+        }
+        if kind == "my_day" {
+            // one plan: today's (a new local day replaces yesterday's)
+            let newest = self.of_kind("my_day").map(|r| r.id.clone()).max();
+            if newest.as_deref().is_some_and(|n| n > id.as_str()) {
+                return;
+            }
+            self.records.retain(|_, r| r.kind != "my_day");
+        }
+        self.records.insert(
+            k,
+            Record {
+                kind: kind.to_string(),
+                id,
+                project_id: project_id.filter(|p| *p > 0),
+                updated_at,
+                data,
+            },
+        );
+    }
+
+    /// Drops a record; a `task_list` takes its tasks with it.
+    fn remove(&mut self, kind: &str, id: &str) {
+        self.records.remove(&key(kind, id));
+        if kind == "task_list" {
+            self.records.retain(|_, r| !(r.kind == "task" && task_list_of(&r.data).is_some_and(|l| l.to_string() == id)));
+        }
+    }
+
+    /// After a change was applied: the server's record (`entity`, of `record_type`) replaces the
+    /// cached one. Without one (`entity: null`: gone or not visible) the optimistic local patch
+    /// stays until the next pull.
+    pub fn apply_result(&mut self, change: &Change, record_type: Option<&str>, entity: Option<&Value>) {
+        // optimistic first: the feed re-sends My Day after done changes
         match change {
             Change::WorkDone { work_id, done, .. } => self.set_work_done(work_id, *done),
-            Change::TaskUpdate {
-                task_id, title, done, ..
-            } => {
-                if let Some(r) = self.records.get_mut(&key("task", &task_id.to_string())) {
-                    if let Some(t) = title {
-                        r.data["title"] = Value::from(t.as_str());
-                    }
-                    if let Some(d) = done {
-                        r.data["done"] = Value::from(*d);
-                        r.data["status"] = Value::from(if *d { "done" } else { "todo" });
-                    }
-                }
-                if let Some(d) = done {
-                    self.set_work_done(&format!("task:{task_id}"), *d);
-                }
-            }
+            Change::TaskUpdate { task_id, done: Some(d), .. } => self.set_work_done(&format!("task:{task_id}"), *d),
             _ => {}
         }
+        let stored = match (record_type, entity) {
+            (Some(kind), Some(data)) if data.is_object() => self.store_entity(kind, data),
+            _ => false,
+        };
+        if stored {
+            return;
+        }
+        if let Change::TaskUpdate { task_id, title, done, .. } = change {
+            if let Some(r) = self.records.get_mut(&key("task", &task_id.to_string())) {
+                if let Some(t) = title {
+                    r.data["title"] = Value::from(t.as_str());
+                }
+                if let Some(d) = done {
+                    r.data["done"] = Value::from(*d);
+                    r.data["status"] = Value::from(if *d { "done" } else { "todo" });
+                }
+            }
+        }
+    }
+
+    /// Stores a result's record under the feed's kind; `comment` and unknown types aren't cached.
+    fn store_entity(&mut self, kind: &str, data: &Value) -> bool {
+        if !KINDS.contains(&kind) {
+            return false;
+        }
+        let id = match (kind, &data["id"], &data["date"]) {
+            ("my_day", _, Value::String(date)) => date.clone(),
+            (_, Value::String(s), _) => s.clone(),
+            (_, Value::Number(n), _) => n.to_string(),
+            _ => return false,
+        };
+        let k = key(kind, &id);
+        let project_id = data["project"]["id"]
+            .as_u64()
+            .or_else(|| data["project_id"].as_u64())
+            .or_else(|| self.records.get(&k).and_then(|r| r.project_id));
+        let updated_at = data["updated_at"].as_str().map(str::to_string);
+        // the server's answer is the newest state: it replaces whatever is cached
+        self.records.remove(&k);
+        self.upsert(kind, id, project_id, updated_at, data.clone());
+        self.records.contains_key(&k)
     }
 
     fn set_work_done(&mut self, work_id: &str, done: bool) {
@@ -340,6 +365,13 @@ impl Cache {
 
     pub fn has_list(&self, list_id: u64) -> bool {
         self.records.contains_key(&key("task_list", &list_id.to_string()))
+    }
+
+    /// `can.manage_items` of a list (a record without `can` is treated as allowed).
+    pub fn can_manage_items(&self, list_id: u64) -> bool {
+        self.records
+            .get(&key("task_list", &list_id.to_string()))
+            .is_none_or(|r| r.data["can"]["manage_items"] != false)
     }
 
     fn my_day(&self) -> Option<&Record> {
@@ -427,6 +459,8 @@ pub struct ViewList {
     pub id: u64,
     pub name: String,
     pub project: Option<String>,
+    /// `can.manage_items`: false hides "Add task" (a viewer).
+    pub can_manage_items: bool,
     pub tasks: Vec<ViewTask>,
 }
 
@@ -475,12 +509,13 @@ pub fn view(cache: &Cache, out: &Outbox) -> View {
                 id: r.id.parse().ok()?,
                 name: text(&r.data["name"]),
                 project: opt_text(&r.data["project"]["name"]),
+                can_manage_items: r.data["can"]["manage_items"] != false,
                 tasks: Vec::new(),
             })
         })
         .collect();
     for r in cache.of_kind("task") {
-        let list = r.data["list_id"].as_u64().or_else(|| r.data["task_list_id"].as_u64());
+        let list = task_list_of(&r.data);
         if let Some(l) = lists.iter_mut().find(|l| Some(l.id) == list) {
             l.tasks.push(ViewTask::from_json(&r.data));
         }
@@ -488,7 +523,6 @@ pub fn view(cache: &Cache, out: &Outbox) -> View {
 
     let mut captures: Vec<ViewCapture> = cache
         .of_kind("capture")
-        .filter(|r| r.data["state"] == "inbox" || r.data["state"].is_null())
         .map(|r| ViewCapture {
             id: r.id.clone(),
             text: text(&r.data["text"]),
@@ -659,7 +693,8 @@ mod tests {
         assert_eq!(run.cursor, None);
         let q = run.query();
         assert!(q.contains(&("scopes".into(), SCOPES.into())));
-        assert!(q.contains(&("task_lists".into(), String::new())));
+        assert!(q.contains(&("task_lists".into(), "mine".into())), "the server resolves the lists");
+        assert!(q.contains(&("captures".into(), "inbox".into())));
         assert!(q.contains(&("limit".into(), "100".into())));
 
         let more = c.apply_page(
@@ -703,7 +738,9 @@ mod tests {
         let mut run = c.start_run();
         assert_eq!(run.cursor.as_deref(), Some("c1"), "a delta run");
         assert_eq!(run.query()[0], ("cursor".into(), "c1".into()));
-        assert!(!run.query().iter().any(|(k, _)| k == "scopes"), "the cursor remembers the scopes");
+        // the filters go with the cursor too: an old (v1) cursor moves to them
+        assert!(run.query().contains(&("captures".into(), "inbox".into())));
+        assert!(run.query().contains(&("task_lists".into(), "mine".into())));
         c.apply_page(
             &mut run,
             page(
@@ -775,62 +812,104 @@ mod tests {
         assert_eq!(c.project_ids, [1]);
     }
 
+    fn v2_page(changes: Vec<Value>, cursor: &str, reset: bool, lists: &[u64]) -> FeedPage {
+        serde_json::from_value(json!({"data": changes, "next_cursor": cursor, "has_more": false,
+            "reset": reset, "project_ids": [1], "task_lists": lists}))
+        .unwrap()
+    }
+
+    fn list(id: u64, manage: bool) -> Value {
+        json!({"type": "task_list", "id": id.to_string(), "op": "upsert", "project_id": 1, "updated_at": "2026-11-01T09:00:00Z",
+            "data": {"id": id, "name": "Groceries", "project": {"id": 1, "name": "Home"},
+                "can": {"update": manage, "delete": false, "manage_items": manage}}})
+    }
+
+    fn task(id: u64, list: u64, title: &str, done: bool, position: u64) -> Value {
+        json!({"type": "task", "id": id.to_string(), "op": "upsert", "project_id": 1, "updated_at": "2026-11-01T09:00:00Z",
+            "data": {"id": id, "list_id": list, "title": title, "status": if done {"done"} else {"todo"}, "done": done, "position": position}})
+    }
+
     #[test]
-    fn task_lists_of_the_users_tasks_are_kept_and_new_ones_restart_the_run() {
+    fn the_kept_lists_come_from_the_answer_and_new_ones_are_additive() {
         let mut c = Cache::new(&origin());
         let mut run = c.start_run();
         c.apply_page(
             &mut run,
-            page(
+            v2_page(
                 vec![
                     work("task:5", "Milk", 1, Some(3), "2026-11-01T09:00:00Z"),
-                    work("task:6", "Bread", 1, Some(3), "2026-11-01T09:00:00Z"),
-                    work("issue:1", "Fix", 1, None, "2026-11-01T09:00:00Z"),
+                    list(3, true),
+                    task(5, 3, "Milk", false, 2),
+                    task(7, 3, "Eggs", true, 1),
                 ],
                 "c1",
-                false,
                 true,
-                &[1],
+                &[3],
             ),
             1,
         );
-        assert_eq!(c.wanted_lists(), [3]);
-        // list 3 is new for the cursor: a full run with it
-        let run = c.start_run();
-        assert_eq!(run.cursor, None);
-        assert!(run.query().contains(&("task_lists".into(), "3".into())));
-        let mut run = run;
-        c.apply_page(
-            &mut run,
-            page(
-                vec![
-                    work("task:5", "Milk", 1, Some(3), "2026-11-01T09:00:00Z"),
-                    json!({"type": "task_list", "id": "3", "op": "upsert", "project_id": 1, "updated_at": "2026-11-01T09:00:00Z",
-                        "data": {"id": 3, "name": "Groceries", "project": {"id": 1, "name": "Home"}}}),
-                    json!({"type": "task", "id": 5, "op": "upsert", "project_id": 1, "updated_at": "2026-11-01T09:00:00Z",
-                        "data": {"id": 5, "list_id": 3, "title": "Milk", "status": "todo", "done": false, "position": 2}}),
-                    json!({"type": "task", "id": "7", "op": "upsert", "project_id": 1, "updated_at": "2026-11-01T09:00:00Z",
-                        "data": {"id": 7, "list_id": 3, "title": "Eggs", "status": "done", "done": true, "position": 1}}),
-                ],
-                "c2",
-                false,
-                true,
-                &[1],
-            ),
-            2,
-        );
-        assert_eq!(c.task_lists, [3]);
+        assert_eq!(c.task_lists, [3], "what the server says it keeps");
         assert!(c.has_list(3));
-        assert_eq!(c.start_run().cursor.as_deref(), Some("c2"), "stable now");
-        // the user's task in list 3 was finished: the kept list stays, no new run
+        // the user's task in list 3 was finished: nothing to guess, the next run is a delta
         c.records.remove("work:task:5");
-        assert_eq!(c.start_run().cursor.as_deref(), Some("c2"));
+        assert_eq!(c.start_run().cursor.as_deref(), Some("c1"));
+
+        // a second list (e.g. pinned): a delta run, reset false, only the new list in full
+        let mut run = c.start_run();
+        c.apply_page(&mut run, v2_page(vec![list(4, true), task(9, 4, "Soap", false, 1)], "c2", false, &[3, 4]), 2);
+        assert!(!run.full);
+        assert_eq!(c.task_lists, [3, 4]);
+        assert!(c.has_list(3) && c.has_list(4), "a delta run keeps what it did not send");
+        assert!(c.task(5).is_some());
 
         let v = view(&c, &Outbox::default());
-        assert_eq!(v.lists.len(), 1);
+        assert_eq!(v.lists.len(), 2);
         let titles: Vec<_> = v.lists[0].tasks.iter().map(|t| t.title.as_str()).collect();
         assert_eq!(titles, ["Eggs", "Milk"], "in the list's order");
         assert!(c.task(7).unwrap().done);
+    }
+
+    #[test]
+    fn a_task_list_delete_drops_the_list_and_its_tasks() {
+        let mut c = Cache::new(&origin());
+        let mut run = c.start_run();
+        c.apply_page(
+            &mut run,
+            v2_page(vec![list(3, true), task(5, 3, "Milk", false, 1), list(4, true), task(9, 4, "Soap", false, 1)], "c1", true, &[3, 4]),
+            1,
+        );
+        let mut run = c.start_run();
+        c.apply_page(&mut run, v2_page(vec![delete("task_list", "3")], "c2", false, &[4]), 2);
+        assert!(!c.has_list(3));
+        assert!(c.task(5).is_none(), "its tasks went with it");
+        assert!(c.has_list(4) && c.task(9).is_some());
+        assert_eq!(c.task_lists, [4]);
+    }
+
+    #[test]
+    fn viewers_cannot_add_tasks() {
+        let mut c = Cache::new(&origin());
+        let mut run = c.start_run();
+        c.apply_page(&mut run, v2_page(vec![list(3, false), list(4, true)], "c1", true, &[3, 4]), 1);
+        assert!(!c.can_manage_items(3));
+        assert!(c.can_manage_items(4));
+        let v = view(&c, &Outbox::default());
+        assert_eq!(v.lists.iter().map(|l| l.can_manage_items).collect::<Vec<_>>(), [false, true]);
+    }
+
+    #[test]
+    fn captures_leaving_the_inbox_come_as_deletes() {
+        let mut c = Cache::new(&origin());
+        let cap = |id: &str, text: &str| {
+            json!({"type": "capture", "id": id, "op": "upsert", "project_id": null, "updated_at": "2026-11-01T09:00:00Z",
+                "data": {"id": id, "text": text, "state": "inbox", "captured_at": "2026-11-01T09:00:00Z"}})
+        };
+        let mut run = c.start_run();
+        c.apply_page(&mut run, v2_page(vec![cap("u-1", "One"), cap("u-2", "Two")], "c1", true, &[]), 1);
+        let mut run = c.start_run();
+        c.apply_page(&mut run, v2_page(vec![delete("capture", "u-1")], "c2", false, &[]), 2);
+        let caps: Vec<_> = view(&c, &Outbox::default()).captures.iter().map(|c| c.text.clone()).collect();
+        assert_eq!(caps, ["Two"]);
     }
 
     #[test]
@@ -869,7 +948,6 @@ mod tests {
                     json!({"type": "task", "id": "5", "op": "upsert", "project_id": 1, "data": {"id": 5, "list_id": 3, "title": "Milk", "done": false}}),
                     json!({"type": "my_day", "id": "2026-11-02", "op": "upsert", "data": {"date": "2026-11-02", "items": []}}),
                     json!({"type": "capture", "id": "u-1", "op": "upsert", "data": {"id": "u-1", "text": "Old idea", "state": "inbox", "captured_at": "2026-11-01T09:00:00Z"}}),
-                    json!({"type": "capture", "id": "u-2", "op": "upsert", "data": {"id": "u-2", "text": "Archived", "state": "archived"}}),
                 ],
                 "c1",
                 false,
@@ -935,11 +1013,10 @@ mod tests {
             ]
         );
         let caps: Vec<_> = v.captures.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(caps, ["New idea", "Old idea"], "new first, archived ones not in the inbox");
+        assert_eq!(caps, ["New idea", "Old idea"], "new first");
     }
 
-    #[test]
-    fn applied_changes_show_until_the_next_pull() {
+    fn applied_cache() -> Cache {
         let mut c = Cache::new(&origin());
         let mut run = c.start_run();
         c.apply_page(
@@ -957,16 +1034,65 @@ mod tests {
             ),
             1,
         );
-        c.note_applied(&Change::WorkDone {
+        c
+    }
+
+    fn tick() -> Change {
+        Change::WorkDone {
             work_id: "issue:1".into(),
             done: true,
             base_done: false,
             title: String::new(),
-        });
+        }
+    }
+
+    #[test]
+    fn without_an_entity_the_local_patch_shows_until_the_next_pull() {
+        let mut c = applied_cache();
+        c.apply_result(&tick(), None, None);
         assert!(c.work("issue:1").unwrap().done);
         let v = view(&c, &Outbox::default());
         assert!(v.work.is_empty(), "done work leaves My Work");
         assert!(v.my_day.unwrap().items[0].done);
+    }
+
+    #[test]
+    fn an_entity_replaces_the_cached_record() {
+        let mut c = applied_cache();
+        let entity = json!({"id": "issue:1", "type": "issue", "key": "BRAI-1", "title": "Fix (server)", "done": true,
+            "project": {"id": 1, "name": "Brainitive"}, "updated_at": "2026-11-02T08:00:00Z"});
+        c.apply_result(&tick(), Some("work"), Some(&entity));
+        assert_eq!(c.records["work:issue:1"].data["title"], "Fix (server)");
+        assert_eq!(c.records["work:issue:1"].updated_at.as_deref(), Some("2026-11-02T08:00:00Z"));
+        assert_eq!(c.records["work:issue:1"].project_id, Some(1));
+
+        // a new task: the server's record (with its id) is in its list at once
+        let created = json!({"id": 11, "list_id": 3, "title": "Bread", "status": "todo", "done": false, "position": 3});
+        let add = Change::TaskCreate { task_list_id: 3, title: "Bread".into(), done: false };
+        c.apply_result(&add, Some("task"), Some(&created));
+        assert_eq!(c.task(11).unwrap().title, "Bread");
+
+        // a task update: "theirs" replaces the cached copy, not a patch of mine
+        let theirs = json!({"id": 11, "list_id": 3, "title": "Rye bread", "status": "todo", "done": false, "position": 3});
+        let upd = Change::TaskUpdate {
+            task_list_id: 3,
+            task_id: 11,
+            title: Some("Sourdough".into()),
+            done: None,
+            base_title: "Bread".into(),
+            base_done: false,
+        };
+        c.apply_result(&upd, Some("task"), Some(&theirs));
+        assert_eq!(c.task(11).unwrap().title, "Rye bread");
+
+        // My Day: the whole plan; comments and unknown types are not cached
+        let day = json!({"date": "2026-11-02", "items": [{"id": "issue:1", "title": "Fix", "done": true}]});
+        c.apply_result(&tick(), Some("my_day"), Some(&day));
+        assert!(c.records["my_day:2026-11-02"].data["items"][0]["done"] == true);
+        let before = c.records.len();
+        c.apply_result(&tick(), Some("comment"), Some(&json!({"id": 1, "body": "x"})));
+        c.apply_result(&tick(), Some("work"), Some(&Value::Null));
+        assert_eq!(c.records.len(), before);
     }
 
     #[test]

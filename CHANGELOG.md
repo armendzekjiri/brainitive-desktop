@@ -5,6 +5,13 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Sync v2 (BRAI-441):
+
+- **Offline copy follows the server's v2 feed**: the lists you work in come from the server
+  (`task_lists=mine`), only your inbox is kept (`captures=inbox`), and a deleted list takes its
+  tasks with it. What the server answers to a change you made offline replaces the stored copy at
+  once. Viewers no longer see "Add task" offline.
+
 Voice capture (BRAI-439):
 
 - **Speak instead of typing**: hold ⇧⌘V (macOS) / Ctrl+Shift+V (Windows, Linux), talk, let go — the
