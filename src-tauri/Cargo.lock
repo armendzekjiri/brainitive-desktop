@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "brainitive-desktop"
-version = "0.1.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "base64 0.23.1",
  "block2",
