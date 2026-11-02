@@ -18,6 +18,7 @@ desktop/
 │   ├── settings.ts             Settings (settings.html, window "settings")
 │   ├── offline.ts, offline.css the offline view (offline.html, window "offline", BRAI-366)
 │   ├── voice.ts                the voice-capture indicator (voice.html, window "voice", BRAI-439)
+│   ├── panel.ts, panel.css     the menu-bar panel (panel.html, window "panel")
 │   └── native.ts/.css, popup.css   shared by the native windows
 ├── public/logo.png
 └── src-tauri/
@@ -27,7 +28,7 @@ desktop/
     ├── build.rs                app ACL manifest (every command needs a permission)
     ├── capabilities/           one file per bundled window, local origin + its own window only:
     │                           local.json (main), settings.json, capture.json, switcher.json,
-    │                           offline.json, voice.json, leader.json
+    │                           offline.json, voice.json, leader.json, panel.json
     ├── src/
     │   ├── lib.rs              plugins, commands, menu, deep-link + notification wiring, run loop
     │   ├── server.rs           ServerOrigin: typed address → origin, TLS rule, store ids   (pure)
@@ -68,6 +69,9 @@ desktop/
     │   │                       remove), audio.rs (cpal microphone, resampling), whisper.rs
     │   │                       (whisper-rs), permission.rs (macOS AVCaptureDevice)
     │   ├── tray.rs             tray menu model + icon, the poller, My Day / timer actions
+    │   ├── panel/              the menu-bar panel: mod.rs (state, commands, tray clicks, window),
+    │   │                       geometry.rs (where it opens, pure), view.rs (tabs' mapping, ids,
+    │   │                       offline decisions, pure), tests.rs
     │   ├── updater.rs          auto-updates (BRAI-373): channels, manifest URLs, GitHub-only
     │   │                       client, key guard, schedule, labels (pure) + check / download /
     │   │                       Restart to Update with tauri-plugin-updater
@@ -178,6 +182,7 @@ the main frame on the bundled screens and the current origin. The user agent end
 | `offline` | `offline.html` (BRAI-366) | default | `capabilities/offline.json` |
 | `voice` | `voice.html` (BRAI-439) | default | `capabilities/voice.json` |
 | `leader` | `leader.html` (BRAI-440, the Brainitive key overlay) | default | `capabilities/leader.json` |
+| `panel` | `panel.html` (the menu-bar panel) | default | `capabilities/panel.json` |
 
 App windows share one navigation / page-load guard, downloads handler, user agent and zoom level;
 switching server, signing out or forgetting closes the `app-<n>` windows. The bundled windows are
@@ -320,9 +325,62 @@ Done / the shortcut again).
   fallback); `GGML_NATIVE=OFF` (`src-tauri/.cargo/config.toml`) keeps release builds portable
   (Apple Silicon baseline M1; x86-64 AVX2 + FMA + F16C).
 
+## Title bars (macOS 26)
+
+Tauri's default macOS title-bar style (`Visible`) adds `NSWindowStyleMask::FullSizeContentView`, so
+the webview spans the title bar; macOS 26 (Tahoe) draws that title bar see-through, and scrolled
+content showed behind the window title. Every decorated window (`shell::build_app_window`,
+`popup::build` for Settings / Offline) uses `shell::TITLE_BAR` = `TitleBarStyle::Transparent`: no
+full-size content view, the webview starts below the title bar (checked with an AppKit probe on
+macOS 26.2: webview 640 pt in a 672 pt window, no overlap). The title bar shows the window's
+background colour: the system's for app windows (nothing is injected into the web app), the top
+colour of the page for Settings (`--bg`) and the offline view (`--panel`), light / dark
+(`popup::title_bar_color`, again on `WindowEvent::ThemeChanged`). Floating windows are borderless.
+Windows / Linux: unchanged (macOS-only API).
+
+## Menu-bar panel
+
+Left click on the tray icon toggles the **panel** (`panel/`, window `panel`, `panel.html`); right
+click (macOS also ⌃-click, `NSEvent.modifierFlags`, then `TrayIcon::show_menu` from a blocking task)
+opens the native menu below. macOS reacts on mouse-down like the system's extras, Windows on
+mouse-up; a click within 0.4 s after the panel hid on blur is the click that blurred it
+(`panel::toggle_decision`). Linux (AppIndicator: no click events): **Open Panel…** in the menu.
+
+- **Window**: `Popup::Panel` (floating, hides on blur, holds account data → destroyed on sign-out).
+  macOS: transparent window + `Effect::Popover` (`EffectState::Active`, radius 12: the system's
+  NSVisualEffectView, follows light / dark), the page has no background. Tauri 2.12.5 always
+  enables the transparent-window private API (`macos-private-api` is a no-op since 2.12.1), so no
+  `macOSPrivateApi` flag. Windows / Linux: solid page with a border + shadow.
+- **Placement** (`panel::geometry`, pure): the screen under the icon (else the nearest), its work
+  area; the bar's edge from where the icon lies outside the work area (top / bottom / left /
+  right; inside it, e.g. an auto-hidden bar: the nearest edge); under / above / beside the icon,
+  centred on it, clamped with 6 pt to the bar and 8 pt to the other edges. macOS in points (each
+  monitor's physical rect / its scale), Windows / Linux in physical pixels. No icon rect → the
+  bar's corner (top-right macOS / Linux, bottom-right Windows). Width 360, height from the page
+  (`panel_resize`, 220…560), re-placed so the bar side stays put.
+- **Tabs** (`panel::view`, pure mapping): **Today** `GET /me/today` (ETag via the poller's ETag
+  cache: events not over yet, all-day first, ≤ 8; open work due today / overdue, ≤ 30), **My Day**
+  `GET /me/my-day` (ETag, also updates the tray), **Assigned** `GET /me/work?status=open&limit=100`
+  grouped by project, **Inbox** `GET /notifications?limit=25` worded like the web bell
+  (`NotificationMessage.tsx`) + `unread-count`, **Timer** `GET /me/timer` (ETag; elapsed from
+  `started_at`), `GET /work-logs?from=D&to=D` (D = the user's date of `/me/today`), start
+  candidates = open issues of My Day + Assigned. Last tab: `Preferences.panel_tab`.
+- **Data**: `PanelState.kept` holds the last answers for one server + sign-in (`account_epoch`;
+  another one drops them, a write after a switch is dropped by `PollTicket`). Opening shows the
+  kept data at once, then refreshes (answers < 15 s old are kept). Changes: `PATCH /me/work/{id}`,
+  `POST /notifications/{id}/read` (on open), `/notifications/read-all`, `/me/timer/start|stop|discard`;
+  they update the tray data / badge, and the page reloads on `panel://changed` (sent by
+  `tray::refresh`). Stop: activity = picked one (of the timer's `activities`), else the default,
+  else the page shows the choice; a 422 shows it too (timer keeps running).
+- **Offline** (server unreachable / not in the app): the kept data, else the offline copy (My Day,
+  assigned work, Today = due work without events). Done ticks → the outbox (`work.done`,
+  `offline::queue_work_done`); a tick whose request finds no server goes there too. Timer and
+  mark-read have no sync type: disabled with a hint. Header dot: `view::sync_status`.
+- **Signed out / no server**: "Sign in to Brainitive" / "Connect to Brainitive" + Open Brainitive.
+
 ## Tray / menu bar (BRAI-360) and badge (BRAI-361)
 
-A native menu (`tray.rs`, no webview): server line, Brainitive Key… (while the key is on), Quick
+A native menu (right click on the icon; left click opens the menu-bar panel above; `tray.rs`, no webview): server line, Brainitive Key… (while the key is on), Quick
 Capture, Quick Switcher, Voice Capture, My Day (check
 items → `PATCH /me/my-day/items/{id}`), the running timer (Stop and Log Time → `POST /me/timer/stop`
 with the default activity when one is required; Discard), unread notifications (→ `/notifications`),
@@ -461,7 +519,8 @@ navigation decisions incl. the bundled windows', versions, settings / preference
 error parsing, API request paths, call-error classification, shortcut rules and labels, the
 Brainitive key (letters, conflicts, migration of old defaults, labels per OS), the capture
 queue, the voice recorder state machine, model download verification / removal, resampling and the
-meter, transcript clean-up, polling backoff / wake / plan, tray menu model and API parsing, switcher result parsing,
+meter, transcript clean-up, polling backoff / wake / plan, tray menu model and API parsing, the menu-bar panel (placement per bar edge / monitor / clamping,
+tray clicks, each tab's mapping, ids it may act on, offline decisions), switcher result parsing,
 download names / moves, the overlay badge, menu ids / accelerators, updater channels / URLs /
 redirects / key guard / schedule / labels, and the updater plugin with a throwaway minisign key:
 bad signature, foreign key, signed-version mismatch, equal / older versions, a loopback-served

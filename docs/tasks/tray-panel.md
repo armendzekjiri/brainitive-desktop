@@ -106,3 +106,53 @@ coordinates, clamping at screen edges, no icon rect, resize keeps the anchor); t
 per OS (left / right / ⌃-click, blur guard); each tab's mapping (today events / due work, my day,
 assigned grouping, notifications wording + safe urls, timer + entries + total, start candidates);
 id checks; offline decisions (API / outbox / disabled) and sync status; capability rules.
+
+## Result
+
+**Built**
+
+- **Title bars (macOS 26)**: decorated windows use `TitleBarStyle::Transparent` (`shell::TITLE_BAR`),
+  so the webview starts below the title bar instead of under it. Settings / Offline paint the strip
+  with the top colour of their page (light / dark, follows `ThemeChanged`). The main window and
+  `app-<n>` windows get the same style; nothing is injected into the web app. Floating windows were
+  already borderless. Windows / Linux unchanged.
+- **Menu-bar panel** (`src-tauri/src/panel/`, `panel.html`, `src/panel.ts`, `src/panel.css`,
+  `capabilities/panel.json`, 12 commands): left click toggles, right click / ⌃-click opens the
+  native menu, Linux uses "Open Panel…" in the menu. macOS gets glass (`Effect::Popover`, radius
+  12, transparent page); Windows / Linux get a solid panel. Placement is pure and tested.
+  Tabs: Today, My Day, Assigned, Inbox (badge), Timer (live, Stop with an inline activity choice,
+  two-click Discard, search-to-start, today's entries + total). ETags go through the poller's
+  cache; the last tab is in `Preferences.panel_tab`. When offline the panel shows the kept data or
+  the offline copy, ticks go to the outbox, and timer / mark-read are disabled. Signed-out and
+  no-server states are handled.
+- The tray timer (and the panel's) now counts from `started_at`: after a 304 the cached
+  `elapsed_seconds` was stale (BRAI-440 note in API.md).
+
+**Tests**: `cargo test`: 269 unit tests (39 new or changed in panel / popup / tray), plus 10
+capability tests (2 new: panel commands only in `panel.json`, every panel command starts with the
+caller check). `cargo clippy --all-targets -D warnings`, `cargo fmt --check`, `npm run build` and
+`npx tauri build --debug --bundles app` all pass.
+
+**Verified visually**: static preview of the built `panel.html` with mocked commands and a simulated
+glass backdrop (Chrome, light and dark): Today, My Day, Timer with the activity picker, offline
+Inbox. Not verified: the real NSVisualEffectView, placement under the real icon and tray clicks.
+The running app was not restarted (as asked), and `screencapture` is refused in this session
+("could not create image"). The title-bar fix was checked with an AppKit probe of the same window
+setup (`contentLayoutRect` vs the webview frame), not with a screenshot.
+
+**Untested on Windows / Linux**: placement above / beside the taskbar (pure tests only), the
+mouse-up toggle on Windows, the solid panel style, "Open Panel…" on Linux, and the WebView2 /
+WebKitGTK rendering of the page.
+
+**Open questions (API)**
+
+1. `/me/work` has no ETag; the Assigned tab refetches (≤ 100 rows) at most every 15 s while open.
+2. `/notifications` has no ETag; there is also no per-item URL field, so the panel derives the link
+   from the payload like the web bell (`item_url`, `context_url`, …). A server-built
+   `{text, url}` per notification would keep the apps in sync with the web wording.
+3. `/me/today` has `date` but `/work-logs` needs the date sent by the client; a `today` total on
+   `/me/timer` (minutes logged today) would save a call.
+4. Timer start / stop / discard and "mark read" have no `POST /api/v1/sync` type, so they are
+   disabled offline.
+5. "Bring over" (`POST /me/my-day/carry-over`) exists, but the panel only links to My Work for it.
+   Say if it should be a button.

@@ -37,7 +37,9 @@ app. The window title shows where you are: "Brainitive — Cloud", "Brainitive �
   Pick the language (or auto-detect) and remove the model in Settings → Voice capture.
 - **Quick switcher** — ⌃⌘K K (or a direct shortcut you set): search everything, ↩ opens, ⌘C copies a snippet, ⌘T starts
   the timer on an issue.
-- **Menu bar / tray** — My Day (tick work done), the running timer, unread notifications.
+- **Menu bar / tray** — click the icon for a glass panel with Today (next events, work due), My Day and
+  your assigned work (tick done, works offline), notifications (open, mark read) and the timer (live,
+  stop with an activity, start from your issues); right-click for the menu.
 - **Menus** — ⌘N new issue, ⌥⌘N new doc, ⇧⌘N new window, ⌘K search, ⌘[ / ⌘] back / forward,
   ⌘= / ⌘- / ⌘0 zoom, ⌘, settings (Ctrl on Windows / Linux).
 - **Settings** (⌘,) — Shortcuts: the Brainitive key and its letters, and optional direct shortcuts

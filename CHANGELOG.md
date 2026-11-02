@@ -5,6 +5,24 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## Unreleased
 
+Menu-bar panel:
+
+- **Click the menu-bar / tray icon** for a panel like the macOS Weather extra: frosted glass right
+  under the icon (Windows: above the tray; Linux: tray menu → Open Panel…). **Today** (next events,
+  work due or overdue), **My Day** and **Assigned** (grouped by project; tick to finish),
+  **Inbox** (latest notifications, unread badge, open + mark read, Mark all read) and **Timer**
+  (live clock, Stop & log with an inline activity choice, Discard, start a timer on one of your
+  issues, today's entries and total). ⌘1–5, arrow keys, Esc; it remembers the last tab.
+- **Right-click** (or ⌃-click) the icon for the menu with Quit, Settings and the rest.
+- **Offline** the panel shows what was loaded last (or the offline copy); ticks wait in the offline
+  outbox and sync later; timer and mark-read wait for the connection.
+- The tray's timer now counts from when it really started.
+
+Title bars (macOS 26):
+
+- Settings, the offline view and the app windows no longer show scrolled content behind the
+  see-through title bar of macOS 26 (Tahoe); the title bar matches the page in light and dark.
+
 Brainitive key (BRAI-440):
 
 - **One key, then a letter**: press **⌃⌘K** (macOS) / **Ctrl+Alt+K** (Windows, Linux) in any app and

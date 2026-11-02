@@ -4,7 +4,7 @@ Brainitive Desktop shows a **remote** web app (the user's Brainitive server) ins
 shell that can touch the OS. The main risk is remote content getting native powers it should
 not have. Cards: BRAI-351 (remote IPC, CSP, navigation guard), BRAI-428 (app API security),
 phase 05: BRAI-359 / 360 / 361 / 362 / 363 / 364 / 401 (native windows, global shortcuts, tray,
-downloads, autostart), BRAI-366 (offline copy and outbox), BRAI-439 (voice capture: microphone,
+downloads, autostart), the menu-bar panel, BRAI-366 (offline copy and outbox), BRAI-439 (voice capture: microphone,
 model download, no audio retention), BRAI-373 (auto-updates: signed bundles, channels).
 
 ## Assets
@@ -123,6 +123,37 @@ window becomes a way to call the API.
   deleted things by their tombstones.
 - No outbox entry is retried forever on a 4xx; refused changes stay listed with the user's text until
   dismissed (so nothing typed offline is silently lost).
+
+## The menu-bar panel
+
+Threat: a window with the account's work and notifications and commands that change them (tick
+done, mark read, start / stop / discard the timer) reachable from the wrong content, handed ids or
+URLs it should not act on, or showing another account's data.
+
+- **Window**: `panel.html`, label `panel`, its own `capabilities/panel.json` (`local: true`, no
+  `remote`, `windows: ["panel"]`, only `allow-panel-*` + listening to `panel://changed`, which is
+  sent to that window only). Every command starts with `popup::ensure_caller(Panel)`
+  (`tests/capabilities.rs` checks both). Same CSP and navigation guard as the other bundled
+  windows; server text via `textContent` only; colours only as `#rgb` / `#rrggbb`.
+- **No token, no URL in the page**: every call is a Rust command with `Session::request`
+  (`/api/v1/…` paths only, no redirects). The page gets `has_link` flags; a click sends a reference
+  (`{kind: work|event|notification, id}` or a fixed page), Rust takes the URL from **its own copy**
+  of the server's answer and opens it with `links::resolve_deep_link_target` (this server, never an
+  auth page); anything else just focuses the app.
+- **Ids**: commands act only on ids in the panel's kept answers of the current server + sign-in
+  (work `issue:<n>` / `task:<n>`, notification uuids — hex and dashes —, the timer's own activity
+  ids; the timer id is never taken from the page; start candidates = open issues the server listed
+  in My Day / assigned work). Offline ticks are checked against the offline copy as in the
+  offline window. The server enforces its own policies anyway; nothing new is trusted.
+- **Whose data**: the kept answers belong to one origin + `account_epoch`; another server, a
+  sign-out or another sign-in drops them, answers that arrive after a switch are dropped
+  (`PollTicket`), and the window is destroyed on sign-out (`Popup::holds_account_data`).
+- **Glass**: the window is transparent (macOS `NSVisualEffectView` popover material). Tauri 2.12.5
+  enables the private transparent-window API in every build (`macos-private-api` is a no-op since
+  2.12.1; nothing extra set in `tauri.conf.json`). Fine for direct distribution (Developer ID); an
+  App Store build would need a review of private API use.
+- The native tray menu stays on right click (and ⌃-click); ⌃ is read from `NSEvent.modifierFlags`
+  at click time only.
 
 ## Global shortcuts
 

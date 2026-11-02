@@ -160,6 +160,16 @@ Settings → Shortcuts holds the key, the letters and the optional direct shortc
 | 4A.22 German / Swiss / French / Polish layout: type `@`, `€`, `{`, `[` and `µ` with AltGr in another app while Brainitive runs. | All characters type normally. Czech / Slovak / Hungarian layouts: AltGr+K types `ł` there, so Ctrl+Alt+K is taken; record it and change the key in Settings. | n/a | [ ] | [ ] |
 | 4A.23 Wayland session: press the Brainitive key. | No global shortcut (known gap, like 4.16). File → **Brainitive Key…** and the tray still open the panel. | n/a | n/a | [ ] |
 
+## 4B. Title bars (macOS 26)
+
+| Step | Expected | macOS | Windows | Linux |
+|---|---|---|---|---|
+| 4B.1 Settings: scroll down. | "GENERAL" and everything else stays below the title bar; the title bar is the page's colour (white / dark), no text behind "Settings". | [ ] | n/a | n/a |
+| 4B.2 Offline view: scroll the lists. | Nothing scrolls under the title bar; the strip matches the status bar (light and dark). | [ ] | n/a | n/a |
+| 4B.3 Switch light ↔ dark with Settings / Offline open. | The title bar strip follows the page. | [ ] | n/a | n/a |
+| 4B.4 Main window and New Window: scroll a long web page. | The page starts below the title bar; nothing shows behind the window title. Fullscreen still works. | [ ] | n/a | n/a |
+| 4B.5 Settings / Offline / main window on Windows and Linux. | Normal system title bars, unchanged. | n/a | [ ] | [ ] |
+
 ## 5. Extra windows
 
 | Step | Expected | macOS | Windows | Linux |
@@ -212,8 +222,8 @@ Settings → Shortcuts holds the key, the letters and the optional direct shortc
 | Step | Expected | macOS | Windows | Linux |
 |---|---|---|---|---|
 | 8.1 Look for the icon after start. | macOS: menu bar; Windows: notification area (may sit under the ^ overflow, pin it); Linux: system tray (needs libayatana-appindicator). | [ ] | [ ] | [ ] |
-| 8.2 Open the tray menu. | Server and account line; Brainitive Key… (with the key); Quick Capture; Quick Switcher; My Day; running timer entry; unread notifications; Open Brainitive; Settings; Check for Updates (greyed); Quit. | [ ] | [ ] | [ ] |
-| 8.3 Linux: left-click the icon. | Shows the menu (left click shows the menu on this desktop). | n/a | n/a | [ ] |
+| 8.2 Right-click the icon (macOS also ⌃-click). | Server and account line; Brainitive Key… (with the key); Quick Capture; Quick Switcher; My Day; running timer entry; unread notifications; Open Brainitive; Settings; Check for Updates (greyed); Quit. | [ ] | [ ] | [ ] |
+| 8.3 Linux: click the icon. | Shows the menu (AppIndicator has no click events); its first entry under the server line is **Open Panel…** (section 8A). | n/a | n/a | [ ] |
 | 8.4 My Day: tick an item in the tray menu. | The item is done in the web My Day within a minute. The tray entry shows the change. | [ ] | [ ] | [ ] |
 | 8.5 Start a timer in the web on an issue. | Tray shows the running timer with its time, updating. | [ ] | [ ] | [ ] |
 | 8.6 Timer in tray: choose **Stop and log**. | Timer stops; the web shows the logged time. | [ ] | [ ] | [ ] |
@@ -228,6 +238,31 @@ Settings → Shortcuts holds the key, the letters and the optional direct shortc
 | 8.15 Tray → **Quit**. | App exits; the tray or menu-bar icon disappears. | [ ] | [ ] | [ ] |
 | 8.16 Linux without libayatana-appindicator installed. | App still starts and the main window works; no tray icon (known gap). Record the log line. | n/a | n/a | [ ] |
 | 8.17 Change the system theme (macOS light and dark menu bar). | The menu-bar icon stays readable. | [ ] | n/a | n/a |
+
+## 8A. Menu-bar panel
+
+| Step | Expected | macOS | Windows | Linux |
+|---|---|---|---|---|
+| 8A.1 Left-click the tray / menu-bar icon. | A panel (about 360 pt wide) opens right under the icon (macOS, frosted glass, rounded corners) / just above or beside the tray icon (Windows), fully on screen; height fits the content, long lists scroll. | [ ] | [ ] | n/a |
+| 8A.2 Linux: tray menu → **Open Panel…**. | The panel opens in the top-right corner (solid background). | n/a | n/a | [ ] |
+| 8A.3 Click the icon again; open it and press Esc; open it and click another app. | Each closes the panel; clicking the icon while it is open closes it (no flicker back open). | [ ] | [ ] | [ ] |
+| 8A.4 Right-click the icon (macOS: also ⌃-click) while the panel is open. | The panel closes; the native menu opens (Quit, Settings, … as in 8.2). | [ ] | [ ] | n/a |
+| 8A.5 Second monitor / Dock or taskbar on the left or right / icon at the far right of the menu bar. | The panel opens on the icon's screen, next to the bar, never cut off. | [ ] | [ ] | [ ] |
+| 8A.6 Header. | The server's host and a dot: green up to date, blue pulsing syncing, amber changes waiting, red offline. | [ ] | [ ] | [ ] |
+| 8A.7 **Today** tab. | Next events (all-day first, "Now" on the running one, ended ones gone, "in 42 min") and the work due today / overdue (red "Overdue"). Click an event or item → it opens in the main window, the panel closes. | [ ] | [ ] | [ ] |
+| 8A.8 **My Day** tab: tick an item, untick it. | The circle fills, the web's My Day shows it within a minute; the progress bar and "2 of 5" follow; the tray's My Day too. | [ ] | [ ] | [ ] |
+| 8A.9 **Assigned** tab. | Open work assigned to you, grouped by project with its colour; tick = done (it stays struck through until the next refresh); click opens it; "Show all in My Work" when there are more than 100. | [ ] | [ ] | [ ] |
+| 8A.10 **Inbox** tab. | Latest 25 notifications worded like the web bell, unread in bold with a blue dot; the tab shows the unread badge. Click → opens the page and marks it read (badge and Dock count drop). **Mark all read** → badge gone. | [ ] | [ ] | [ ] |
+| 8A.11 **Timer** tab with a timer running. | The clock ticks every second from the real start time; **Stop & log** logs it ("Time logged."), or, where the workspace needs an activity and has no default, shows the activities inline; picking one logs it. **Discard** asks for a second click. | [ ] | [ ] | [ ] |
+| 8A.12 **Timer** tab without a timer. | "Start a timer" with a search over your My Day and assigned issues; Enter / click starts it; today's entries and the total below. | [ ] | [ ] | [ ] |
+| 8A.13 Keyboard. | ⌘1–⌘5 (Ctrl+1–5) switch tabs; ←/→ on the tab bar; ↓/↑ move through rows; Enter opens; Tab reaches the circles, Space ticks. | [ ] | [ ] | [ ] |
+| 8A.14 Footer. | **Quick Capture** opens quick capture, **Open Brainitive** the main window, **Settings** the Settings window; the panel closes. | [ ] | [ ] | [ ] |
+| 8A.15 Close and reopen. | The last tab is open again (also after a restart). | [ ] | [ ] | [ ] |
+| 8A.16 Network off, open the panel. | Red dot, "Offline — showing what was loaded …"; ticks still work and show "Waiting to sync" (sent when back, see 12); Stop / Start / Discard / Mark all read are greyed with the offline hint. Today without events says they show when back online. | [ ] | [ ] | [ ] |
+| 8A.17 Network off right after a cold start (no answer yet). | My Day, Assigned and Today come from the offline copy. | [ ] | [ ] | [ ] |
+| 8A.18 Sign out, then click the icon. | "Sign in to Brainitive" with **Open Brainitive**; nothing of the previous account. No server chosen: "Connect to Brainitive". | [ ] | [ ] | [ ] |
+| 8A.19 Light and dark mode (switch while the panel is open). | Text, separators and the glass follow; macOS looks like a system menu-bar extra; Windows / Linux solid panel with a border. | [ ] | [ ] | [ ] |
+| 8A.20 First open with slow network. | A skeleton shows, then the data; a failed refresh shows a red line with **Try again** above the last data. | [ ] | [ ] | [ ] |
 
 ## 9. Notifications and badge
 

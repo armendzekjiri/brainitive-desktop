@@ -26,7 +26,7 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
   `shell::BRIDGE_PERMISSIONS`, SECURITY.md, and the web side in the app repo.
 - New local commands: `build.rs` manifest + the capability file of **the one bundled window** that
   uses it (`capabilities/local.json` = main window screens, `settings.json`, `capture.json`,
-  `switcher.json`, `offline.json`, `voice.json`), a `popup::ensure_caller` check in the command,
+  `switcher.json`, `offline.json`, `voice.json`, `leader.json`, `panel.json`), a `popup::ensure_caller` check in the command,
   and SECURITY.md.
   `tests/capabilities.rs` fails when a file grants a remote origin, another window, a plugin or a
   bridge permission, or a command missing from `build.rs`.
