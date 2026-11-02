@@ -76,7 +76,7 @@ jobs:
               src-tauri/target/release/bundle/appimage/*.AppImage.sig
             updater-glob: src-tauri/target/release/bundle/appimage/*.AppImage
     steps:
-      - uses: actions/checkout@v4.2.2 # TODO pin SHA (docs/RELEASING.md)
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # webkit2gtk-4.1 + ayatana appindicator (tray), librsvg, patchelf (AppImage), libasound2-dev
       # (cpal / ALSA, voice capture), libdbus-1-dev (keyring). cmake and a C++ compiler are on all runners.
@@ -87,17 +87,17 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libdbus-1-dev pkg-config libasound2-dev libssl-dev xdg-utils
 
-      - uses: actions/setup-node@v4.4.0 # TODO pin SHA (docs/RELEASING.md)
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 20
           cache: npm
 
-      - uses: dtolnay/rust-toolchain@1.90.0 # TODO pin SHA (docs/RELEASING.md)
+      - uses: dtolnay/rust-toolchain@7dcc700092a1a8b9c17ba0e140b4e34e93000946 # 1.90.0
         with:
           components: clippy
           targets: ${{ matrix.rust-targets }}
 
-      - uses: Swatinem/rust-cache@v2.8.0 # TODO pin SHA (docs/RELEASING.md)
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
           workspaces: src-tauri
 
@@ -261,7 +261,7 @@ jobs:
 
       - name: Upload installers
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4.6.2 # TODO pin SHA (docs/RELEASING.md)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: installers-${{ matrix.artifact }}
           path: ${{ matrix.bundle-glob }}
@@ -276,9 +276,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4.2.2 # TODO pin SHA (docs/RELEASING.md)
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - uses: actions/download-artifact@v4.3.0 # TODO pin SHA (docs/RELEASING.md)
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: installers
           pattern: installers-*

@@ -16,7 +16,8 @@ and the auto-updater (BRAI-373) stays **off** in every build until its key exist
 | Download buttons on the website | **waits for the first published release** (3 env values) |
 | Auto-updater: plugin, stable / beta channels, signed updater bundles, `latest.json`, beta manifest | code + CI ready; **waits for the update key pair** (public key in `tauri.conf.json`, 2 secrets) and **public release assets** |
 
-The local token needs the `workflow` scope to push workflow files: `gh auth refresh -s workflow`.
+The repo owner's `gh` token needs the `workflow` scope to push workflow files (`gh auth refresh -s workflow`).
+The step-by-step list for the person with the Apple Developer account is [`APPLE-SIGNING.md`](APPLE-SIGNING.md).
 
 ## 1. macOS: Apple Developer ID + notarization
 
@@ -178,29 +179,18 @@ ready — restart to install" and installs only when the user clicks **Restart t
   included). `tauri build` gets the Apple / Azure credentials of its own OS only; the updater key
   never reaches `tauri build` at all.
 
-### Release blocker: pin the actions to commit SHAs
+### Actions are pinned to commit SHAs
 
-`build.yml` and `ci.yml` should reference every action by a full commit SHA
+`build.yml` and `ci.yml` reference every action by a full commit SHA
 (`uses: owner/action@<40 hex> # vX.Y.Z`), so a moved tag can't change what runs next to the
-signing secrets. The SHAs could not be verified offline when BRAI-377 was fixed (no GitHub calls
-from that session), so the actions use exact tags marked `# TODO pin SHA`. **Before the first
-signed release**, for each one:
+signing secrets (done 2026-11-02, resolved with `git ls-remote`). To update one:
 
 ```bash
 git ls-remote https://github.com/<owner>/<action> "refs/tags/<tag>*"   # annotated: use the ^{} line
 ```
 
-replace `@<tag> # TODO pin SHA …` with `@<commit sha> # <tag>`, and push to a branch to see CI run.
-
-- [ ] `actions/checkout@v4.2.2` (build.yml twice, ci.yml)
-- [ ] `actions/setup-node@v4.4.0` (build.yml, ci.yml)
-- [ ] `dtolnay/rust-toolchain@1.90.0` (build.yml, ci.yml; a branch in that repo: pin the commit it
-      points to now)
-- [ ] `Swatinem/rust-cache@v2.8.0` (build.yml, ci.yml)
-- [ ] `actions/upload-artifact@v4.6.2` (build.yml)
-- [ ] `actions/download-artifact@v4.3.0` (build.yml)
-
-Dependabot (`package-ecosystem: github-actions`) can keep SHA pins and their comments current.
+`dtolnay/rust-toolchain` is pinned to the commit its `1.90.0` branch pointed to. Dependabot
+(`package-ecosystem: github-actions`) can keep SHA pins and their comments current.
 
 ## 5. Cut a release
 
