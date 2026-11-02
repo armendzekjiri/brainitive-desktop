@@ -83,6 +83,11 @@ pub struct Preferences {
     pub update_channel: crate::updater::Channel,
     /// The menu-bar panel's last tab (`panel::view::Tab`; anything unknown opens Today).
     pub panel_tab: String,
+    /// The New task window's global shortcut; `None` = off (⌃⌘T / Ctrl+Alt+T, off on Linux).
+    pub task_shortcut: Option<String>,
+    /// The New task window's last project / board / type per server (origin → ids).
+    #[serde(deserialize_with = "crate::new_task::model::lenient_memory")]
+    pub new_task: crate::new_task::model::MemoryMap,
 }
 
 impl Default for Preferences {
@@ -103,12 +108,14 @@ impl Default for Preferences {
             auto_update_check: true,
             update_channel: crate::updater::Channel::Stable,
             panel_tab: "today".to_string(),
+            task_shortcut: crate::shortcuts::DEFAULT_TASK.map(str::to_string),
+            new_task: Default::default(),
         }
     }
 }
 
-/// The shortcut defaults of this version: 1 = the Brainitive key (BRAI-440).
-pub const SHORTCUT_SCHEME: u32 = 1;
+/// The shortcut defaults of this version: 1 = the Brainitive key (BRAI-440), 2 = New task.
+pub const SHORTCUT_SCHEME: u32 = 2;
 /// The quick switcher's default as files before BRAI-440 stored it (untouched, or "Default").
 const OLD_DEFAULT_SWITCHER: &str = "CommandOrControl+Alt+K";
 /// Voice capture's default as files before BRAI-440 stored it.
@@ -123,10 +130,37 @@ impl Preferences {
     /// So only the old defaults of the quick switcher and voice capture become Off (the
     /// Brainitive key does that now); recorded keys and an explicit Off stay. The Brainitive key
     /// starts on, unless a kept direct shortcut already uses its keys.
+    ///
+    /// Scheme 2 (New task): a file without `task_shortcut` got the default when it was read; it
+    /// starts Off instead when one of the other shortcuts already uses those keys.
     pub fn migrate(&mut self) -> bool {
         if self.shortcut_scheme >= SHORTCUT_SCHEME {
             return false;
         }
+        if self.shortcut_scheme < 1 {
+            self.migrate_to_leader();
+        }
+        let parse = |s: &Option<String>| s.as_deref().and_then(|a| crate::shortcuts::parse(a).ok());
+        if let Some(task) = parse(&self.task_shortcut) {
+            let taken = [
+                &self.leader_shortcut,
+                &self.capture_shortcut,
+                &self.switcher_shortcut,
+                &self.voice_shortcut,
+            ]
+            .into_iter()
+            .filter_map(parse)
+            .any(|s| s.id() == task.id());
+            if taken {
+                self.task_shortcut = None;
+            }
+        }
+        self.shortcut_scheme = SHORTCUT_SCHEME;
+        true
+    }
+
+    /// Scheme 0 → 1 (BRAI-440), see [`Preferences::migrate`].
+    fn migrate_to_leader(&mut self) {
         if self.switcher_shortcut.as_deref() == Some(OLD_DEFAULT_SWITCHER) {
             self.switcher_shortcut = None;
         }
@@ -143,8 +177,6 @@ impl Preferences {
                 self.leader_shortcut = None;
             }
         }
-        self.shortcut_scheme = SHORTCUT_SCHEME;
-        true
     }
 
     /// The voice shortcut that is **registered**: only while voice capture is on. Off, the keys
@@ -193,7 +225,7 @@ impl Settings {
             .and_then(|bytes| serde_json::from_slice::<Settings>(&bytes).ok())
             .map(|mut s| {
                 if s.preferences.migrate() {
-                    log::info!("settings: shortcuts moved to the Brainitive key (BRAI-440)");
+                    log::info!("settings: shortcut defaults updated (scheme {SHORTCUT_SCHEME})");
                     if let Err(e) = s.save(path) {
                         log::warn!("could not save the migrated settings: {e}");
                     }
@@ -239,6 +271,7 @@ impl Settings {
     /// Removes the server from the list (and from `current`) and schedules its webview data.
     pub fn forget(&mut self, origin: &ServerOrigin) {
         self.recent.retain(|r| &r.origin != origin);
+        self.preferences.new_task.remove(origin.as_str());
         if self.current.as_ref() == Some(origin) {
             self.current = None;
         }
@@ -423,6 +456,99 @@ mod tests {
         assert_eq!(on_disk["preferences"]["shortcut_scheme"], SHORTCUT_SCHEME);
         assert_eq!(on_disk["preferences"]["leader_letters"]["voice"], "V");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A whole `preferences` object as version 1 (BRAI-440) wrote it: no `task_shortcut`.
+    fn scheme_1_file(leader: &str, capture: &str) -> Preferences {
+        let json = format!(
+            r#"{{"leader_shortcut":{leader},"leader_letters":{{"capture":"C","switcher":"K","voice":"V","main":"O"}},"shortcut_scheme":1,"capture_shortcut":{capture},"switcher_shortcut":null,"start_hidden":true,"keep_in_tray":true,"ask_where_to_save":true,"zoom":1.0,"voice_enabled":false,"voice_shortcut":null,"voice_language":"auto","auto_update_check":true,"update_channel":"stable","panel_tab":"today"}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn new_task_gets_its_default_unless_another_shortcut_uses_those_keys() {
+        let leader = format!("\"{}\"", crate::shortcuts::DEFAULT_LEADER);
+        // untouched file: New task gets this OS's default (off on Linux), T as its letter
+        let mut p = scheme_1_file(&leader, r#""CommandOrControl+Shift+Space""#);
+        assert_eq!(p.shortcut_scheme, 1);
+        assert!(p.migrate());
+        assert_eq!(p.task_shortcut.as_deref(), crate::shortcuts::DEFAULT_TASK);
+        assert_eq!(p.leader_letters.task, 'T');
+        assert_eq!(p.shortcut_scheme, SHORTCUT_SCHEME);
+        assert!(!p.migrate(), "once only");
+        assert!(p.new_task.is_empty());
+
+        // a shortcut the user recorded on those keys keeps them; New task starts off
+        if let Some(task) = crate::shortcuts::DEFAULT_TASK {
+            let recorded = format!(
+                "\"{}\"",
+                crate::shortcuts::canonical(&crate::shortcuts::parse(task).unwrap())
+            );
+            let mut p = scheme_1_file(&leader, &recorded);
+            assert!(p.migrate());
+            assert_eq!(p.task_shortcut, None);
+            assert_eq!(p.capture_shortcut.as_deref(), Some(&recorded[1..recorded.len() - 1]));
+            // also when it is the Brainitive key
+            let mut p = scheme_1_file(&recorded, "null");
+            assert!(p.migrate());
+            assert_eq!(p.task_shortcut, None);
+            assert!(p.leader_shortcut.is_some());
+        }
+
+        // a file from before the Brainitive key goes through both steps
+        let mut p = old_file(
+            r#""CommandOrControl+Alt+K""#,
+            "null",
+            r#""CommandOrControl+Shift+Space""#,
+        );
+        assert!(p.migrate());
+        assert_eq!(p.switcher_shortcut, None);
+        assert_eq!(p.task_shortcut.as_deref(), crate::shortcuts::DEFAULT_TASK);
+
+        // after the migration an explicit Off stays off
+        let mut p = Preferences {
+            task_shortcut: None,
+            ..Preferences::default()
+        };
+        assert!(!p.migrate());
+        assert_eq!(p.task_shortcut, None);
+        let s: Settings =
+            serde_json::from_str(r#"{"preferences":{"shortcut_scheme":2,"task_shortcut":null}}"#).unwrap();
+        assert_eq!(s.preferences.task_shortcut, None);
+    }
+
+    #[test]
+    fn the_last_new_task_choice_is_kept_per_server_and_goes_with_forget() {
+        use crate::new_task::model::{remember, Memory};
+        let mut s = Settings::default();
+        let a = o("a.example.com");
+        let b = o("b.example.com");
+        s.remember(&a, "A", None);
+        s.remember(&b, "B", None);
+        let m = |p| Memory {
+            project_id: Some(p),
+            board_id: Some(p * 10),
+            type_id: None,
+            at: p,
+        };
+        remember(&mut s.preferences.new_task, a.as_str(), m(1));
+        remember(&mut s.preferences.new_task, b.as_str(), m(2));
+        // written and read back
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.preferences.new_task[a.as_str()], m(1));
+        assert_eq!(back.preferences.new_task[b.as_str()], m(2));
+        // forgetting a server forgets its choice, the other server's stays
+        s.forget(&a);
+        assert!(!s.preferences.new_task.contains_key(a.as_str()));
+        assert_eq!(s.preferences.new_task[b.as_str()], m(2));
+        // a broken entry doesn't lose the file
+        let s: Settings = serde_json::from_str(
+            r#"{"current":"brain.example.com","preferences":{"new_task":{"https://brain.example.com":{"project_id":-1}}}}"#,
+        )
+        .unwrap();
+        assert!(s.current.is_some());
+        assert!(s.preferences.new_task.is_empty());
     }
 
     #[test]

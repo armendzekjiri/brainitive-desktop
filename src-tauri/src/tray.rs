@@ -95,6 +95,8 @@ pub enum TrayAction {
     RestartToUpdate,
     /// The menu-bar panel, from the menu (Linux: AppIndicator reports no clicks on the icon).
     Panel,
+    /// The New task window.
+    Task,
 }
 
 impl TrayAction {
@@ -118,6 +120,7 @@ impl TrayAction {
             Self::CheckForUpdates => "tray-check-updates".into(),
             Self::RestartToUpdate => "tray-restart-update".into(),
             Self::Panel => "tray-panel".into(),
+            Self::Task => "tray-task".into(),
         }
     }
 
@@ -143,6 +146,7 @@ impl TrayAction {
             "tray-check-updates" => Self::CheckForUpdates,
             "tray-restart-update" => Self::RestartToUpdate,
             "tray-panel" => Self::Panel,
+            "tray-task" => Self::Task,
             _ => return None,
         })
     }
@@ -356,6 +360,31 @@ pub fn add_leader_entry(entries: &mut Vec<Entry>, leader: Option<String>) {
     );
 }
 
+/// Adds "New Task…" right under Quick Capture, its global shortcut (if any) as the accelerator.
+pub fn add_task_entry(entries: &mut Vec<Entry>, shortcut: Option<String>) {
+    let at = entries
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                Entry::Item {
+                    action: Some(TrayAction::Capture),
+                    ..
+                }
+            )
+        })
+        .map(|i| i + 1)
+        .unwrap_or(entries.len());
+    entries.insert(
+        at,
+        Entry::Item {
+            action: Some(TrayAction::Task),
+            text: "New Task…".into(),
+            accelerator: shortcut,
+        },
+    );
+}
+
 /// Adds "Open Panel…" at the top (under the server line) where the icon itself can't open it
 /// (Linux: AppIndicator sends no click events).
 pub fn add_panel_entry(entries: &mut Vec<Entry>, needed: bool) {
@@ -474,7 +503,7 @@ fn tray(app: &AppHandle) -> Option<TrayIcon<Wry>> {
 /// Rebuilds the menu, tooltip and (macOS) the count next to the icon from the current data.
 pub fn refresh(app: &AppHandle) {
     let Some(tray) = tray(app) else { return };
-    let (server, signed_in, data, leader, capture, switcher, voice, offline, update_availability, update_status) = {
+    let (server, signed_in, data, leader, capture, switcher, voice, task, offline, update_availability, update_status) = {
         let s = state(app);
         let inner = s.lock();
         let accel = |a: Option<&str>| {
@@ -489,6 +518,7 @@ pub fn refresh(app: &AppHandle) {
             accel(inner.settings.preferences.capture_shortcut.as_deref()),
             accel(inner.settings.preferences.switcher_shortcut.as_deref()),
             accel(inner.settings.preferences.active_voice_shortcut().as_deref()),
+            accel(inner.settings.preferences.task_shortcut.as_deref()),
             crate::offline::tray_status(&inner),
             inner.updater.availability,
             inner.updater.status.clone(),
@@ -496,6 +526,7 @@ pub fn refresh(app: &AppHandle) {
     };
     let mut entries = model(server.as_deref(), signed_in, &data, capture, switcher, voice, &offline);
     add_leader_entry(&mut entries, leader);
+    add_task_entry(&mut entries, task);
     add_update_entry(&mut entries, update_availability, &update_status);
     add_panel_entry(&mut entries, cfg!(target_os = "linux"));
     // the panel reads its data, the unread count and the sync status again
@@ -560,6 +591,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
         TrayAction::Quit => app.exit(0),
         TrayAction::Offline => popup::show(app, Popup::Offline),
         TrayAction::Panel => crate::panel::toggle(app, None),
+        TrayAction::Task => crate::new_task::show(app),
         TrayAction::CheckForUpdates | TrayAction::RestartToUpdate => crate::updater::on_menu_click(app),
         TrayAction::SyncNow => {
             let h = app.clone();
@@ -933,6 +965,7 @@ mod tests {
             TrayAction::SyncNow,
             TrayAction::CheckForUpdates,
             TrayAction::RestartToUpdate,
+            TrayAction::Task,
         ] {
             assert_eq!(TrayAction::from_id(&a.id()), Some(a));
         }
@@ -987,6 +1020,54 @@ mod tests {
             60
         );
         assert_eq!(elapsed_seconds(&t, started - 10), 60);
+    }
+
+    #[test]
+    fn new_task_sits_right_under_quick_capture_with_its_shortcut() {
+        let base = model(
+            Some("Cloud"),
+            true,
+            &TrayData::default(),
+            None,
+            None,
+            None,
+            &Default::default(),
+        );
+        let capture = base
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    Entry::Item {
+                        action: Some(TrayAction::Capture),
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        let mut with = base.clone();
+        add_task_entry(&mut with, Some("ctrl+super+KeyT".into()));
+        assert_eq!(with.len(), base.len() + 1);
+        assert_eq!(
+            with[capture + 1],
+            Entry::Item {
+                action: Some(TrayAction::Task),
+                text: "New Task…".into(),
+                accelerator: Some("ctrl+super+KeyT".into()),
+            }
+        );
+        // off: still offered, without a key
+        let mut off = base.clone();
+        add_task_entry(&mut off, None);
+        assert!(matches!(
+            &off[capture + 1],
+            Entry::Item {
+                action: Some(TrayAction::Task),
+                accelerator: None,
+                ..
+            }
+        ));
+        assert_eq!(TrayAction::from_id("tray-task"), Some(TrayAction::Task));
     }
 
     #[test]

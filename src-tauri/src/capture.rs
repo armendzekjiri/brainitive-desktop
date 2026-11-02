@@ -96,6 +96,13 @@ pub async fn capture_submit(
     popup::ensure_caller(&app, &webview, Popup::Capture).map_err(|m| ui("not_allowed", m))?;
     let input =
         CaptureInput::new(&text, url.as_deref(), intended_type.as_deref()).map_err(|e| ui("invalid", e.to_string()))?;
+    save(&app, input).await
+}
+
+/// Sends a capture to the private inbox, or keeps it in the queue when the server can't be
+/// reached (quick capture, and New task's "Save to Inbox instead").
+pub async fn save(app: &AppHandle, input: CaptureInput) -> Result<CaptureResult, UiError> {
+    let app = app.clone();
     let origin = state(&app)
         .lock()
         .current_origin()

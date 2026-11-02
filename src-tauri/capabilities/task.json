@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "task",
+  "description": "The bundled New task window only (task.html). It lists the projects / boards the user may write to and creates an issue through Rust (GET /api/v1/capture-destinations, GET /api/v1/projects/{id}/config, POST /api/v1/boards/{id}/items with the stored app token); the page never sees a token or a URL, and commands take only ids of the server's last answers. No events.",
+  "local": true,
+  "windows": ["task"],
+  "permissions": [
+    "allow-task-view",
+    "allow-task-load",
+    "allow-task-config",
+    "allow-task-create",
+    "allow-task-open",
+    "allow-task-save-to-inbox",
+    "allow-task-open-app",
+    "allow-task-resize",
+    "allow-task-close"
+  ]
+}

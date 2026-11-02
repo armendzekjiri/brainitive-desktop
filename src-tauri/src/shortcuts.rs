@@ -29,6 +29,27 @@ pub const DEFAULT_SWITCHER: &str = if cfg!(target_os = "macos") {
 /// Voice capture's direct shortcut when the user turns it on (off by default since BRAI-440):
 /// ⇧⌘V on macOS, Ctrl+Shift+V on Windows / Linux (held to talk).
 pub const DEFAULT_VOICE: &str = "CommandOrControl+Shift+KeyV";
+/// The New task window: ⌃⌘T on macOS, Ctrl+Alt+T on Windows, **off** on Linux (Ctrl+Alt+T opens
+/// the terminal on Ubuntu / GNOME).
+pub const DEFAULT_TASK: Option<&str> = default_task_for(PLATFORM);
+
+/// `macos` | `windows` | `linux`, as `api::platform()`.
+const PLATFORM: &str = if cfg!(target_os = "macos") {
+    "macos"
+} else if cfg!(target_os = "windows") {
+    "windows"
+} else {
+    "linux"
+};
+
+/// [`DEFAULT_TASK`] of a platform (tested for all three on any machine).
+pub const fn default_task_for(platform: &str) -> Option<&'static str> {
+    match platform.as_bytes() {
+        b"macos" => Some("Control+Super+KeyT"),
+        b"windows" => Some("Control+Alt+KeyT"),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ShortcutError {
@@ -46,6 +67,11 @@ const PRIMARY: Modifiers = Modifiers::CONTROL.union(Modifiers::ALT).union(Modifi
 
 /// Parses and checks a shortcut typed in Settings (or read from settings.json).
 pub fn parse(accelerator: &str) -> Result<Shortcut, ShortcutError> {
+    parse_on(accelerator, PLATFORM == "linux")
+}
+
+/// [`parse`] with the rules of Linux (`linux`) or of the other systems.
+pub fn parse_on(accelerator: &str, linux: bool) -> Result<Shortcut, ShortcutError> {
     let accelerator = accelerator.trim();
     if accelerator.is_empty() || accelerator.len() > 64 {
         return Err(ShortcutError::Invalid);
@@ -61,7 +87,7 @@ pub fn parse(accelerator: &str) -> Result<Shortcut, ShortcutError> {
     if mods.bits().count_ones() < 2 && !is_function_key(shortcut.key) {
         return Err(ShortcutError::TooSimple);
     }
-    if is_reserved(mods, shortcut.key) {
+    if is_reserved(mods, shortcut.key) || (linux && is_reserved_on_linux(mods, shortcut.key)) {
         return Err(ShortcutError::Reserved);
     }
     Ok(shortcut)
@@ -206,7 +232,6 @@ fn is_reserved(mods: Modifiers, key: Code) -> bool {
         // Windows / Linux
         (CTRL.union(ALT), Code::Delete),
         (CTRL.union(SHIFT), Code::Escape),  // task manager
-        (CTRL.union(ALT), Code::KeyT),      // terminal (GNOME, Ubuntu)
         (CTRL.union(ALT), Code::KeyL),      // lock (some desktops)
         (CTRL.union(ALT), Code::ArrowLeft), // workspaces
         (CTRL.union(ALT), Code::ArrowRight),
@@ -218,6 +243,12 @@ fn is_reserved(mods: Modifiers, key: Code) -> bool {
         (CMD, Code::Tab),
     ];
     reserved.iter().any(|(m, k)| *m == mods && *k == key)
+}
+
+/// Linux only: Ctrl+Alt+T opens the terminal (GNOME, Ubuntu, most desktops). On Windows it is
+/// free and New task's default there.
+fn is_reserved_on_linux(mods: Modifiers, key: Code) -> bool {
+    mods == Modifiers::CONTROL.union(Modifiers::ALT) && key == Code::KeyT
 }
 
 #[cfg(test)]
@@ -325,6 +356,42 @@ mod tests {
         assert_eq!(label(&other, true), "⌃⌥K");
         // the suggested direct switcher keys never equal the Brainitive key
         assert_ne!(parse(DEFAULT_SWITCHER).unwrap().id(), leader.id());
+    }
+
+    #[test]
+    fn new_task_defaults_per_platform() {
+        // macOS ⌃⌘T, Windows Ctrl+Alt+T, Linux off (the terminal's keys on Ubuntu / GNOME)
+        let mac = parse_on(default_task_for("macos").unwrap(), false).unwrap();
+        assert_eq!(label(&mac, true), "⌃⌘T");
+        let win = parse_on(default_task_for("windows").unwrap(), false).unwrap();
+        assert_eq!(label(&win, false), "Ctrl+Alt+T");
+        assert_eq!(default_task_for("linux"), None);
+        assert_eq!(default_task_for("freebsd"), None);
+        let here = if cfg!(target_os = "macos") {
+            "macos"
+        } else if cfg!(target_os = "windows") {
+            "windows"
+        } else {
+            "linux"
+        };
+        assert_eq!(DEFAULT_TASK, default_task_for(here));
+        // Ctrl+Alt+T is refused on Linux only
+        assert_eq!(parse_on("Control+Alt+KeyT", true), Err(ShortcutError::Reserved));
+        assert!(parse_on("Control+Alt+KeyT", false).is_ok());
+        assert!(parse_on("Control+Super+KeyT", true).is_ok());
+        // the other system keys stay refused everywhere
+        assert_eq!(parse_on("Control+Alt+Delete", false), Err(ShortcutError::Reserved));
+        // never equal to the other defaults
+        if let Some(task) = DEFAULT_TASK {
+            let all = parse_all(&[
+                ("leader", Some(DEFAULT_LEADER)),
+                ("capture", Some(DEFAULT_CAPTURE)),
+                ("switcher", Some(DEFAULT_SWITCHER)),
+                ("voice", Some(DEFAULT_VOICE)),
+                ("task", Some(task)),
+            ]);
+            assert_eq!(all.unwrap().len(), 5);
+        }
     }
 
     #[test]

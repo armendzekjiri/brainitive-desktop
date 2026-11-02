@@ -587,6 +587,7 @@ pub async fn sign_out(app: &AppHandle) {
 fn clear_account_traces(app: &AppHandle) {
     crate::voice::cancel_for_sign_out(app);
     state(app).lock().capture_prefill = None;
+    crate::new_task::clear(app);
     crate::popup::close_account_windows(app);
 }
 

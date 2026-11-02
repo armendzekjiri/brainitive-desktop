@@ -376,6 +376,14 @@ impl ApiClient {
         if status.is_redirection() {
             return Err(ApiError::BadRedirect(status.to_string()));
         }
+        if keeps_error_body(request, status.as_u16()) {
+            let body: Value = response.json().await.unwrap_or(Value::Null);
+            return Ok(ApiResponse {
+                status: status.as_u16(),
+                etag: None,
+                body,
+            });
+        }
         if !status.is_success() {
             return Err(read_error(response).await);
         }
@@ -396,6 +404,9 @@ pub struct ApiRequest {
     pub query: Vec<(String, String)>,
     pub body: Option<Value>,
     pub etag: Option<String>,
+    /// A 4xx answer other than 401 comes back as `Ok` with its body (field errors, a limit), see
+    /// [`ApiRequest::error_body`].
+    pub error_body: bool,
 }
 
 impl ApiRequest {
@@ -406,6 +417,7 @@ impl ApiRequest {
             query: Vec::new(),
             body: None,
             etag: None,
+            error_body: false,
         }
     }
     pub fn get(path: impl Into<String>) -> Self {
@@ -427,6 +439,12 @@ impl ApiRequest {
     }
     pub fn etag(mut self, etag: Option<String>) -> Self {
         self.etag = etag;
+        self
+    }
+    /// Keep the body of a 4xx answer (not 401, which still refreshes / signs out): the caller
+    /// gets `Ok(ApiResponse)` with that status and reads `errors` / `limit` itself.
+    pub fn error_body(mut self) -> Self {
+        self.error_body = true;
         self
     }
 
@@ -504,6 +522,12 @@ async fn read_error(response: reqwest::Response) -> ApiError {
     let status = response.status();
     let body: Value = response.json().await.unwrap_or(Value::Null);
     error_from_body(status.as_u16(), &body)
+}
+
+/// A 4xx answer the request wants back as a response ([`ApiRequest::error_body`]); never a 401
+/// (that one refreshes the token or signs out).
+pub(crate) fn keeps_error_body(request: &ApiRequest, status: u16) -> bool {
+    request.error_body && (400..500).contains(&status) && status != 401
 }
 
 pub(crate) fn error_from_body(status: u16, body: &Value) -> ApiError {
@@ -701,6 +725,19 @@ mod tests {
         assert!(matches!(e, ApiError::Api { status: 422, ref code, .. } if code == "validation_failed"));
         let e = error_from_body(500, &Value::Null);
         assert!(matches!(e, ApiError::Api { status: 500, .. }));
+    }
+
+    #[test]
+    fn only_requests_that_ask_get_a_4xx_body_and_never_a_401() {
+        let plain = ApiRequest::post("/api/v1/boards/1/items", json!({}));
+        let keeps = plain.clone().error_body();
+        for status in [400, 402, 403, 404, 409, 422, 429] {
+            assert!(keeps_error_body(&keeps, status), "{status}");
+            assert!(!keeps_error_body(&plain, status), "{status}");
+        }
+        for status in [200, 201, 304, 401, 500, 503] {
+            assert!(!keeps_error_body(&keeps, status), "{status}");
+        }
     }
 
     #[test]

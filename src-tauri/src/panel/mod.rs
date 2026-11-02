@@ -961,6 +961,8 @@ pub async fn panel_timer_discard(app: AppHandle, webview: Webview) -> Result<(),
 #[serde(rename_all = "snake_case")]
 pub enum PanelAction {
     Capture,
+    /// The New task window.
+    Task,
     Open,
     Settings,
     SignIn,
@@ -972,6 +974,7 @@ pub fn panel_run(app: AppHandle, webview: Webview, action: PanelAction) -> Resul
     popup::hide(&app, Popup::Panel);
     match action {
         PanelAction::Capture => popup::show(&app, Popup::Capture),
+        PanelAction::Task => crate::new_task::show(&app),
         PanelAction::Settings => popup::show(&app, Popup::Settings),
         PanelAction::Open | PanelAction::SignIn => crate::shell::focus_main(&app),
     }

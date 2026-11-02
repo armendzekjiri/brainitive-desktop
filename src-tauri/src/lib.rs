@@ -14,6 +14,7 @@ pub mod leader;
 pub mod links;
 pub mod logging;
 pub mod menu;
+pub mod new_task;
 pub mod offline;
 pub mod offline_cache;
 pub mod outbox;
@@ -157,6 +158,15 @@ pub fn run() {
             panel::panel_run,
             panel::panel_resize,
             panel::panel_close,
+            new_task::task_view,
+            new_task::task_load,
+            new_task::task_config,
+            new_task::task_create,
+            new_task::task_open,
+            new_task::task_save_to_inbox,
+            new_task::task_open_app,
+            new_task::task_resize,
+            new_task::task_close,
         ])
         .setup(|app| {
             // first: everything after this is logged, and a panic leaves a trace

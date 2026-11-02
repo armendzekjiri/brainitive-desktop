@@ -34,7 +34,8 @@
         "offline",
         "voice",
         "leader",
-        "panel"
+        "panel",
+        "task"
       ]
     }
   },

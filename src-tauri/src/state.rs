@@ -167,6 +167,8 @@ pub struct Inner {
     pub updater: crate::updater::UpdaterState,
     /// The menu-bar panel: its last answers, where it opened.
     pub panel: crate::panel::PanelState,
+    /// The New task window: its last answers, a create waiting for a retry, the created issue.
+    pub task: crate::new_task::TaskState,
 }
 
 /// What a click on one of our notifications opens.
@@ -237,6 +239,7 @@ impl AppState {
                 offline: crate::offline::OfflineData::new(offline_dir),
                 updater: Default::default(),
                 panel: Default::default(),
+                task: Default::default(),
             }),
             session: Session::default(),
             poll_now: tokio::sync::Notify::new(),

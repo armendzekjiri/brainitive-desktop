@@ -23,10 +23,12 @@ pub enum LeaderAction {
     Voice,
     /// Show the main Brainitive window.
     Main,
+    /// The New task window.
+    Task,
 }
 
 impl LeaderAction {
-    pub const ALL: [LeaderAction; 4] = [Self::Capture, Self::Switcher, Self::Voice, Self::Main];
+    pub const ALL: [LeaderAction; 5] = [Self::Capture, Self::Task, Self::Switcher, Self::Voice, Self::Main];
 
     pub fn id(self) -> &'static str {
         match self {
@@ -34,6 +36,7 @@ impl LeaderAction {
             Self::Switcher => "switcher",
             Self::Voice => "voice",
             Self::Main => "main",
+            Self::Task => "task",
         }
     }
 
@@ -47,12 +50,14 @@ impl LeaderAction {
             Self::Switcher => "Quick switcher",
             Self::Voice => "Voice capture",
             Self::Main => "Open Brainitive",
+            Self::Task => "New task",
         }
     }
 
-    /// C capture, K switcher (⌃⌘K K), V voice, O open.
+    /// C capture, K switcher (⌃⌘K K), V voice, O open, T new task.
     pub fn default_letter(self) -> char {
         match self {
+            Self::Task => 'T',
             Self::Capture => 'C',
             Self::Switcher => 'K',
             Self::Voice => 'V',
@@ -85,6 +90,7 @@ pub struct LeaderLetters {
     pub switcher: char,
     pub voice: char,
     pub main: char,
+    pub task: char,
 }
 
 impl Default for LeaderLetters {
@@ -94,6 +100,7 @@ impl Default for LeaderLetters {
             switcher: LeaderAction::Switcher.default_letter(),
             voice: LeaderAction::Voice.default_letter(),
             main: LeaderAction::Main.default_letter(),
+            task: LeaderAction::Task.default_letter(),
         }
     }
 }
@@ -105,6 +112,7 @@ impl LeaderLetters {
             LeaderAction::Switcher => self.switcher,
             LeaderAction::Voice => self.voice,
             LeaderAction::Main => self.main,
+            LeaderAction::Task => self.task,
         }
     }
 
@@ -114,6 +122,7 @@ impl LeaderLetters {
             LeaderAction::Switcher => &mut self.switcher,
             LeaderAction::Voice => &mut self.voice,
             LeaderAction::Main => &mut self.main,
+            LeaderAction::Task => &mut self.task,
         }
     }
 
@@ -145,9 +154,9 @@ impl LeaderLetters {
     }
 }
 
-/// `settings.json` → letters. A missing letter gets its default; a file someone edited into
-/// something invalid (not A–Z, twice the same) falls back to all defaults instead of losing the
-/// rest of the settings.
+/// `settings.json` → letters. A missing letter gets its default — New task's, when the user already
+/// gave T to another action (a file from before New task), N, else the first free letter; a file someone edited into something invalid (not A–Z, twice the same) falls back to
+/// all defaults instead of losing the rest of the settings.
 pub fn lenient_letters<'de, D: Deserializer<'de>>(d: D) -> Result<LeaderLetters, D::Error> {
     let raw = serde_json::Value::deserialize(d)?;
     Ok(letters_from_value(&raw))
@@ -159,11 +168,25 @@ fn letters_from_value(raw: &serde_json::Value) -> LeaderLetters {
         return defaults;
     };
     let mut out = defaults;
+    let mut missing = Vec::new();
     for action in LeaderAction::ALL {
-        if let Some(value) = map.get(action.id()) {
-            match value.as_str().map(parse_letter) {
+        match map.get(action.id()) {
+            Some(value) => match value.as_str().map(parse_letter) {
                 Some(Ok(letter)) => *out.slot(action) = letter,
                 _ => return defaults,
+            },
+            None => missing.push(action),
+        }
+    }
+    // only New task can be missing from a file the app wrote (every letter is written; New task
+    // came later): it moves aside instead of resetting the user's letters
+    for action in missing.into_iter().filter(|a| *a == LeaderAction::Task) {
+        let used = |c: char| LeaderAction::ALL.iter().any(|a| *a != action && out.get(*a) == c);
+        if used(out.get(action)) {
+            let free = std::iter::once('N').chain('A'..='Z').find(|c| !used(*c));
+            match free {
+                Some(c) => *out.slot(action) = c,
+                None => return defaults,
             }
         }
     }
@@ -298,6 +321,7 @@ fn run(app: &AppHandle, action: LeaderAction, hold: Option<char>) -> Result<(), 
         LeaderAction::Capture => crate::capture::open_quick_capture(app, None),
         LeaderAction::Switcher => popup::show(app, Popup::Switcher),
         LeaderAction::Main => crate::shell::focus_main(app),
+        LeaderAction::Task => crate::new_task::show(app),
         LeaderAction::Voice => {
             if !state(app).lock().settings.preferences.voice_enabled {
                 return Err("Voice capture is off. Turn it on in Settings → Voice capture.".into());
@@ -365,9 +389,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_letters_c_k_v_o() {
+    fn default_letters_c_k_v_o_t() {
         let l = LeaderLetters::default();
         assert_eq!((l.capture, l.switcher, l.voice, l.main), ('C', 'K', 'V', 'O'));
+        assert_eq!(l.task, 'T');
+        assert_eq!(l.action_for('t'), Some(LeaderAction::Task));
+        assert_eq!(LeaderAction::Task.name(), "New task");
         assert!(l.is_valid());
         assert_eq!(l.action_for('c'), Some(LeaderAction::Capture));
         assert_eq!(l.action_for('K'), Some(LeaderAction::Switcher));
@@ -429,6 +456,23 @@ mod tests {
         assert_eq!(letters_from_value(&json!({"capture": "1"})), LeaderLetters::default());
         assert_eq!(letters_from_value(&json!({"capture": 3})), LeaderLetters::default());
         assert_eq!(letters_from_value(&json!({"capture": "v"})), LeaderLetters::default());
+        // a file from before New task: its letters stay, task gets T
+        let old = letters_from_value(&json!({"capture": "N", "switcher": "K", "voice": "V", "main": "O"}));
+        assert_eq!((old.capture, old.task), ('N', 'T'));
+        // T already given to another action: that one keeps it, task gets N …
+        let old = letters_from_value(&json!({"capture": "T", "switcher": "K", "voice": "V", "main": "O"}));
+        assert_eq!((old.capture, old.task), ('T', 'N'));
+        assert!(old.is_valid());
+        // … or, N taken too, the first free letter
+        let old = letters_from_value(&json!({"capture": "T", "switcher": "N", "voice": "A", "main": "O"}));
+        assert_eq!((old.capture, old.switcher, old.voice, old.task), ('T', 'N', 'A', 'B'));
+        // customizable like the others
+        let l = LeaderLetters::default().with(LeaderAction::Task, "n").unwrap();
+        assert_eq!(l.task, 'N');
+        assert_eq!(
+            l.with(LeaderAction::Task, "c").unwrap_err().to_string(),
+            "C is already used for Quick capture."
+        );
         // serialized as one-letter strings and read back
         let l = LeaderLetters::default().with(LeaderAction::Main, "b").unwrap();
         let json = serde_json::to_value(l).unwrap();

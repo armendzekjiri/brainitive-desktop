@@ -25,6 +25,8 @@ pub enum HotkeyAction {
     Switcher,
     /// Hold to talk (BRAI-439): press starts recording, release stops it.
     Voice,
+    /// The New task window (pressed again while it is open: focuses it, the text stays).
+    Task,
 }
 
 impl HotkeyAction {
@@ -34,6 +36,7 @@ impl HotkeyAction {
             Self::Capture => "Quick capture",
             Self::Switcher => "Quick switcher",
             Self::Voice => "Voice capture",
+            Self::Task => "New task",
         }
     }
 
@@ -48,6 +51,7 @@ impl HotkeyAction {
             Self::Capture => popup::toggle(app, Popup::Capture),
             Self::Switcher => popup::toggle(app, Popup::Switcher),
             Self::Voice => crate::voice::on_hotkey(app, pressed),
+            Self::Task => crate::new_task::show(app),
         }
     }
 }
@@ -61,6 +65,7 @@ pub fn wanted(prefs: &Preferences) -> Vec<(HotkeyAction, Option<String>)> {
         // only while voice capture is on: off, its keys (paste as plain text) are not taken from
         // other apps; the intro is reached from the menu, the tray and quick capture's mic button
         (HotkeyAction::Voice, prefs.active_voice_shortcut()),
+        (HotkeyAction::Task, prefs.task_shortcut.clone()),
     ]
 }
 
@@ -184,19 +189,22 @@ mod tests {
                 HotkeyAction::Leader,
                 HotkeyAction::Capture,
                 HotkeyAction::Switcher,
-                HotkeyAction::Voice
+                HotkeyAction::Voice,
+                HotkeyAction::Task
             ]
         );
         assert_eq!(list[3], (HotkeyAction::Voice, None));
-        // by default (BRAI-440): the Brainitive key and quick capture only
-        assert_eq!(shortcuts::parse_all(&refs(&list)).unwrap().len(), 2);
+        // by default (BRAI-440): the Brainitive key and quick capture, plus New task where it has
+        // a default (macOS, Windows)
+        let task = usize::from(shortcuts::DEFAULT_TASK.is_some());
+        assert_eq!(shortcuts::parse_all(&refs(&list)).unwrap().len(), 2 + task);
 
         // on, with its direct shortcut: its own keys, valid and different from the others
         prefs.voice_enabled = true;
         prefs.voice_shortcut = Some(shortcuts::DEFAULT_VOICE.into());
         let list = wanted(&prefs);
         assert_eq!(list[3].1.as_deref(), Some(shortcuts::DEFAULT_VOICE));
-        assert_eq!(shortcuts::parse_all(&refs(&list)).unwrap().len(), 3);
+        assert_eq!(shortcuts::parse_all(&refs(&list)).unwrap().len(), 3 + task);
 
         // turned off again: unregistered
         prefs.voice_enabled = false;
@@ -225,6 +233,32 @@ mod tests {
         assert!(shortcuts::parse_all(&refs(&wanted(&p))).is_ok());
         assert!(validate(&p).unwrap_err().starts_with("Voice capture"));
         p.voice_shortcut = Some("Control+Alt+KeyV".into());
+        assert!(validate(&p).is_ok());
+    }
+
+    #[test]
+    fn new_task_is_a_shortcut_like_the_others() {
+        let mut p = Preferences::default();
+        assert_eq!(p.task_shortcut.as_deref(), shortcuts::DEFAULT_TASK);
+        assert!(!HotkeyAction::Task.wants_release());
+        assert_eq!(HotkeyAction::Task.name(), "New task");
+        // recorded on quick capture's keys: refused, naming quick capture; and the other way round
+        let capture = shortcuts::parse(shortcuts::DEFAULT_CAPTURE).unwrap();
+        p.task_shortcut = Some(shortcuts::canonical(&capture));
+        assert_eq!(conflict(&p, HotkeyAction::Task), Some(HotkeyAction::Capture));
+        assert!(validate(&p).unwrap_err().starts_with("New task"));
+        let p = Preferences {
+            leader_shortcut: Some("Control+Alt+Shift+KeyT".into()),
+            task_shortcut: Some("ctrl+alt+shift+KeyT".into()),
+            ..Preferences::default()
+        };
+        assert_eq!(conflict(&p, HotkeyAction::Leader), Some(HotkeyAction::Task));
+        // off = registered nowhere
+        let p = Preferences {
+            task_shortcut: None,
+            ..Preferences::default()
+        };
+        assert_eq!(wanted(&p)[4], (HotkeyAction::Task, None));
         assert!(validate(&p).is_ok());
     }
 

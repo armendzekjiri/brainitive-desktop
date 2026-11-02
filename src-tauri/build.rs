@@ -89,6 +89,16 @@ fn main() {
             "panel_run",
             "panel_resize",
             "panel_close",
+            // the New task window (capabilities/task.json)
+            "task_view",
+            "task_load",
+            "task_config",
+            "task_create",
+            "task_open",
+            "task_save_to_inbox",
+            "task_open_app",
+            "task_resize",
+            "task_close",
         ])),
     )
     .expect("failed to run tauri-build");

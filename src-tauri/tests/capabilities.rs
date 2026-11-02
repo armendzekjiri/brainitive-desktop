@@ -18,8 +18,8 @@ fn permissions(cap: &Value) -> Vec<String> {
 }
 
 /// Every capability file (= every bundled window + the main window's screens).
-const ALL: [&str; 8] = [
-    "local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel",
+const ALL: [&str; 9] = [
+    "local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel", "task",
 ];
 
 fn config() -> Value {
@@ -37,7 +37,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         .collect();
     assert_eq!(
         enabled,
-        ["local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel"]
+        ["local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel", "task"]
     );
 
     for (name, window, prefix) in [
@@ -48,6 +48,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         ("voice", "voice", "allow-voice-"),
         ("leader", "leader", "allow-leader-"),
         ("panel", "panel", "allow-panel-"),
+        ("task", "task", "allow-task-"),
     ] {
         let cap = capability(name);
         assert_eq!(cap["identifier"], name);
@@ -247,4 +248,55 @@ fn every_panel_command_checks_its_caller() {
         "one permission per command"
     );
     assert!(src.contains("popup::ensure_caller(app, webview, Popup::Panel)"));
+}
+
+#[test]
+fn only_the_new_task_window_gets_its_commands_and_nothing_else() {
+    // creating issues (API calls with the app token, opening the created issue) belongs to the
+    // New task window; it gets no events, no other window's commands
+    let task = permissions(&capability("task"));
+    assert_eq!(
+        task,
+        [
+            "allow-task-view",
+            "allow-task-load",
+            "allow-task-config",
+            "allow-task-create",
+            "allow-task-open",
+            "allow-task-save-to-inbox",
+            "allow-task-open-app",
+            "allow-task-resize",
+            "allow-task-close"
+        ]
+    );
+    for name in ALL.into_iter().filter(|n| *n != "task") {
+        for p in permissions(&capability(name)) {
+            assert!(!p.starts_with("allow-task-"), "{name} grants {p}");
+        }
+    }
+    // the inbox fallback goes through its own command, not quick capture's
+    assert!(!task.iter().any(|p| p.starts_with("allow-capture-")));
+}
+
+#[test]
+fn every_new_task_command_checks_its_caller() {
+    let src = std::fs::read_to_string(format!("{}/src/new_task/mod.rs", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let mut commands = 0;
+    for part in src.split("#[tauri::command]").skip(1) {
+        commands += 1;
+        let body = part.split_once('{').map(|(_, b)| b).unwrap_or("");
+        let first = body.trim_start().lines().next().unwrap_or("");
+        assert_eq!(
+            first.trim(),
+            "caller(&app, &webview)?;",
+            "{}",
+            part.lines().nth(1).unwrap_or("")
+        );
+    }
+    assert_eq!(
+        commands,
+        permissions(&capability("task")).len(),
+        "one permission per command"
+    );
+    assert!(src.contains("popup::ensure_caller(app, webview, Popup::Task)"));
 }

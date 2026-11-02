@@ -34,6 +34,10 @@ pub struct PrefsView {
     switcher_shortcut: String,
     /// Voice capture (BRAI-439).
     voice_shortcut: String,
+    /// The New task window; empty = off.
+    task_shortcut: String,
+    /// What "Default" gives New task here ("" on Linux: off).
+    task_default: String,
     voice_enabled: bool,
     voice_language: String,
     voice_languages: Vec<Language>,
@@ -88,6 +92,8 @@ pub fn view(app: &AppHandle) -> PrefsView {
         capture_shortcut: crate::shortcuts::label_of(prefs.capture_shortcut.as_deref()),
         switcher_shortcut: crate::shortcuts::label_of(prefs.switcher_shortcut.as_deref()),
         voice_shortcut: crate::shortcuts::label_of(prefs.voice_shortcut.as_deref()),
+        task_shortcut: crate::shortcuts::label_of(prefs.task_shortcut.as_deref()),
+        task_default: crate::shortcuts::label_of(crate::shortcuts::DEFAULT_TASK),
         voice_enabled: prefs.voice_enabled,
         voice_language: prefs.voice_language.clone(),
         voice_languages: crate::voice::LANGUAGES
@@ -143,7 +149,7 @@ pub enum ShortcutChoice {
     Keys(String),
 }
 
-/// Changes a global shortcut (`which`: `leader`, `capture`, `switcher`, `voice`). It is
+/// Changes a global shortcut (`which`: `leader`, `capture`, `switcher`, `voice`, `task`). It is
 /// registered right away; when the OS refuses it (another app has it) the previous shortcuts stay
 /// and the error says why.
 #[tauri::command]
@@ -160,19 +166,20 @@ pub fn settings_set_shortcut(
         "capture" => HotkeyAction::Capture,
         "switcher" => HotkeyAction::Switcher,
         "voice" => HotkeyAction::Voice,
+        "task" => HotkeyAction::Task,
         _ => return Err("unknown shortcut".into()),
     };
     let value = match choice {
         ShortcutChoice::Off => None,
-        ShortcutChoice::Default => Some(
-            match action {
-                HotkeyAction::Leader => crate::shortcuts::DEFAULT_LEADER,
-                HotkeyAction::Capture => crate::shortcuts::DEFAULT_CAPTURE,
-                HotkeyAction::Switcher => crate::shortcuts::DEFAULT_SWITCHER,
-                HotkeyAction::Voice => crate::shortcuts::DEFAULT_VOICE,
-            }
-            .to_string(),
-        ),
+        // New task has no default on Linux (the terminal's keys): Default = Off there
+        ShortcutChoice::Default => match action {
+            HotkeyAction::Leader => Some(crate::shortcuts::DEFAULT_LEADER),
+            HotkeyAction::Capture => Some(crate::shortcuts::DEFAULT_CAPTURE),
+            HotkeyAction::Switcher => Some(crate::shortcuts::DEFAULT_SWITCHER),
+            HotkeyAction::Voice => Some(crate::shortcuts::DEFAULT_VOICE),
+            HotkeyAction::Task => crate::shortcuts::DEFAULT_TASK,
+        }
+        .map(str::to_string),
         ShortcutChoice::Keys(keys) => Some(
             crate::shortcuts::parse(&keys)
                 .map(|s| crate::shortcuts::canonical(&s))
@@ -187,6 +194,7 @@ pub fn settings_set_shortcut(
         HotkeyAction::Capture => next.capture_shortcut = value,
         HotkeyAction::Switcher => next.switcher_shortcut = value,
         HotkeyAction::Voice => next.voice_shortcut = value,
+        HotkeyAction::Task => next.task_shortcut = value,
     }
     if let Some(other) = crate::hotkeys::conflict(&next, action) {
         return Err(format!("{} already uses {label}.", other.name()));

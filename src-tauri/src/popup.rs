@@ -29,10 +29,12 @@ pub enum Popup {
     /// The menu-bar panel (left click on the tray icon): Today, My Day, assigned work,
     /// notifications, the timer.
     Panel,
+    /// The New task window: a new issue on a board, from any app.
+    Task,
 }
 
 impl Popup {
-    pub const ALL: [Popup; 7] = [
+    pub const ALL: [Popup; 8] = [
         Popup::Capture,
         Popup::Switcher,
         Popup::Settings,
@@ -40,6 +42,7 @@ impl Popup {
         Popup::Voice,
         Popup::Leader,
         Popup::Panel,
+        Popup::Task,
     ];
 
     pub fn label(self) -> &'static str {
@@ -51,6 +54,7 @@ impl Popup {
             Self::Voice => "voice",
             Self::Leader => "leader",
             Self::Panel => "panel",
+            Self::Task => "task",
         }
     }
 
@@ -67,6 +71,7 @@ impl Popup {
             Self::Voice => "voice.html",
             Self::Leader => "leader.html",
             Self::Panel => "panel.html",
+            Self::Task => "task.html",
         }
     }
 
@@ -79,6 +84,7 @@ impl Popup {
             Self::Voice => "Voice Capture",
             Self::Leader => "Brainitive Key",
             Self::Panel => "Brainitive",
+            Self::Task => "New Task",
         }
     }
 
@@ -89,8 +95,10 @@ impl Popup {
             Self::Settings => (560.0, 640.0),
             Self::Offline => (920.0, 680.0),
             Self::Voice => (420.0, 200.0),
-            Self::Leader => (340.0, 252.0),
+            Self::Leader => (340.0, 286.0),
             Self::Panel => (crate::panel::geometry::WIDTH, 440.0),
+            // the height follows the page (`task_resize`)
+            Self::Task => (crate::new_task::model::WIDTH, 330.0),
         }
     }
 
@@ -98,22 +106,28 @@ impl Popup {
     pub fn floating(self) -> bool {
         matches!(
             self,
-            Self::Capture | Self::Switcher | Self::Voice | Self::Leader | Self::Panel
+            Self::Capture | Self::Switcher | Self::Voice | Self::Leader | Self::Panel | Self::Task
         )
     }
 
     /// Windows that hold the signed-in account's content (typed or transcribed capture text,
     /// search results, the offline copy): destroyed on sign-out, rebuilt empty on next use
     /// (BRAI-377). Settings and the voice indicator hold no account data. The panel shows
-    /// the account's work and notifications.
+    /// the account's work and notifications; New task its projects and the typed text.
     pub fn holds_account_data(self) -> bool {
-        matches!(self, Self::Capture | Self::Switcher | Self::Offline | Self::Panel)
+        matches!(
+            self,
+            Self::Capture | Self::Switcher | Self::Offline | Self::Panel | Self::Task
+        )
     }
 
     /// Gone when it loses focus. Not the voice indicator: a recording goes on while the user
     /// clicks elsewhere (its own Stop / Cancel and the shortcut end it).
     pub fn hides_on_blur(self) -> bool {
-        matches!(self, Self::Capture | Self::Switcher | Self::Leader | Self::Panel)
+        matches!(
+            self,
+            Self::Capture | Self::Switcher | Self::Leader | Self::Panel | Self::Task
+        )
     }
 }
 
@@ -347,7 +361,13 @@ mod tests {
         let closed: Vec<_> = Popup::ALL.into_iter().filter(|p| p.holds_account_data()).collect();
         assert_eq!(
             closed,
-            vec![Popup::Capture, Popup::Switcher, Popup::Offline, Popup::Panel]
+            vec![
+                Popup::Capture,
+                Popup::Switcher,
+                Popup::Offline,
+                Popup::Panel,
+                Popup::Task
+            ]
         );
     }
 
@@ -393,5 +413,8 @@ mod tests {
         // the menu-bar panel: floats, goes on blur, holds the account's work and notifications
         assert!(Popup::Panel.floating() && Popup::Panel.hides_on_blur() && Popup::Panel.holds_account_data());
         assert_eq!(Popup::from_label("panel"), Some(Popup::Panel));
+        // New task: floats, goes on blur (the text stays), holds projects and the typed text
+        assert!(Popup::Task.floating() && Popup::Task.hides_on_blur() && Popup::Task.holds_account_data());
+        assert_eq!(Popup::from_label("task"), Some(Popup::Task));
     }
 }
