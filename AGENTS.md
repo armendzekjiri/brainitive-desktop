@@ -30,8 +30,16 @@ commit app files here.** Releases and versions are this repo's own (0.x → Desk
   `shell::BRIDGE_PERMISSIONS`, SECURITY.md, and the web side in the app repo.
 - New local commands: `build.rs` manifest + the capability file of **the one bundled window** that
   uses it (`capabilities/local.json` = main window screens, `settings.json`, `capture.json`,
-  `switcher.json`, `offline.json`, `voice.json`, `leader.json`, `panel.json`), a `popup::ensure_caller` check in the command,
-  and SECURITY.md.
+  `switcher.json`, `offline.json`, `voice.json`, `leader.json`, `panel.json`), a caller check as the
+  command's **first line** (`popup::ensure_caller`, or `ensure_main_screen` for the main window's
+  screens; `tests/capabilities.rs` checks every command of the manifest), and SECURITY.md.
+- Work that awaits the network and then writes account data (outbox, capture queue, panel / tray
+  answers) carries the `state::AccountTicket` / `tray::PollTicket` taken before the request and
+  checks it under the state lock before writing (codex review 1 / 5 / 9). Tokens are stored only
+  through `Session` (its epoch refuses a refresh / exchange that started before a sign-out).
+- CI signing: no secret ever reaches a build step (`tauri build`, npm, cargo); platform signing runs
+  after the build (`scripts/macos-sign.sh`, the Windows signing steps). `node --test scripts/`
+  checks the workflow.
   `tests/capabilities.rs` fails when a file grants a remote origin, another window, a plugin or a
   bridge permission, or a command missing from `build.rs`.
 - Native windows (`popup.rs`) are bundled pages: they reach the server only through Rust commands
