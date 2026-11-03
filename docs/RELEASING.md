@@ -1,8 +1,8 @@
 # Releasing Brainitive Desktop (phase 10)
 
-Everything in the repo is ready; what is missing are **accounts and secrets**. Until they exist the
-CI (`.github/workflows/build.yml`) builds **unsigned** installers (Gatekeeper / SmartScreen warn),
-and the auto-updater (BRAI-373) stays **off** in every build until its key exists (section 4).
+Release builds run from protected `main` through the reviewer-protected GitHub `release`
+environment. macOS signing and notarization are required; a build fails if the necessary Apple
+secrets are absent. The auto-updater remains off until its own signing key exists (section 4).
 
 ## What is ready vs. what waits for you
 
@@ -35,7 +35,7 @@ The step-by-step list for the person with the Apple Developer account is [`APPLE
      Integrations → Team keys → create a key (role Developer); note the Key ID and Issuer ID,
      download the `.p8` once.
 
-GitHub secrets (Settings → Secrets and variables → Actions):
+GitHub environment secrets (Settings → Environments → release → Environment secrets):
 
 | Secret | Value |
 | --- | --- |
@@ -61,8 +61,9 @@ which uses Apple's tools only:
    written to a 0600 temp file), fails unless the status is `Accepted`, then
    `xcrun stapler staple` on the `.dmg` **and** the `.app`, `stapler validate`, `spctl --assess`.
 
-The keychain and the `.p8` are deleted when the script exits. Without notarization secrets the app is
-signed but not notarized (a warning in the log). Hardened runtime is on; the only entitlements are `audio-input` (voice capture, without it
+The keychain and the `.p8` are deleted when the script exits. The release workflow rejects missing
+Apple signing or notarization credentials before building. The script also supports local signing
+without notarization credentials, which produces a signed but unnotarized app. Hardened runtime is on; the only entitlements are `audio-input` (voice capture, without it
 a signed build never gets the microphone) and `network.client`. No JIT entitlement: WKWebView runs
 JavaScript in WebKit's own processes. If a signed build ever crashes on launch with a code-signing
 or JIT error, add the entitlement named in the crash log, not before.
@@ -74,13 +75,13 @@ split into two matrix entries (`--target aarch64-apple-darwin` / `x86_64-apple-d
 ## 2. Windows: signing
 
 **The signed path is the Microsoft Store (BRAI-442).** The `msstore` job of `build.yml` builds an
-unsigned `Brainitive_<X.Y.Z>_x64.msix` on every `v*` tag (not on pre-release tags) and manual run,
-and the draft release attaches it. You upload it in Partner Center → Brainitive → Packages; the
+unsigned `Brainitive_<X.Y.Z>_x64.msix` for stable versions during release builds and manual runs,
+and uploads it as a workflow artifact. You upload it in Partner Center → Brainitive → Packages; the
 Store signs it with Microsoft's certificate for our reserved identity, so Store installs show no
 SmartScreen warning and update through the Store. No certificate, no Azure account, no secret.
 Building, sideload testing, WACK and the submission steps: [`MICROSOFT-STORE.md`](MICROSOFT-STORE.md).
 Each submission needs a **higher** version than the last one (the MSIX version is
-`tauri.conf.json`'s `X.Y.Z` + `.0`), so bump as usual before tagging.
+`tauri.conf.json`'s `X.Y.Z` + `.0`), so bump it before the release build.
 
 **The NSIS installer on GitHub stays unsigned** (SmartScreen warns on first run) until someone pays
 for code signing; it keeps its own auto-updater (section 4). Optional, for that installer only:
@@ -160,7 +161,7 @@ npx tauri signer generate -w ~/.tauri/brainitive-desktop-updater.key
 1. Public key → `src-tauri/tauri.conf.json`, `plugins.updater.pubkey`: replace the whole
    `PLACEHOLDER-…` string with the **content** of `….key.pub` (one base64 line, as printed). Commit
    it — it is public. `cargo test` checks it is a real minisign key (or still the placeholder).
-2. GitHub secrets (Settings → Secrets and variables → Actions):
+2. GitHub environment secrets (Settings → Environments → release → Environment secrets):
 
    | Secret | Value |
    | --- | --- |
@@ -207,9 +208,10 @@ ready — restart to install" and installs only when the user clicks **Restart t
 
 ### Who gets the secrets (BRAI-377)
 
-- **Signing only runs for a `v*` tag push, or a manual run (Actions → Build → Run workflow) on the
-  default branch** (`SIGNING_ALLOWED` in `build.yml`). Pull requests, other branches and
-  `release` events never reach a signing step.
+- **Signing runs only from the default branch**, for a `build:` commit or a manual run (Actions →
+  Build → Run workflow). The `release` environment restricts deployments to `main`, requires an
+  Armend or Burim approval, and holds the signing secrets. Pull requests and other refs cannot
+  reach that environment; the separate CI workflow checks pull requests without release secrets.
 - Every secret is passed through `env:` of the one step that uses it; nothing is written to
   `$GITHUB_ENV` (which would hand it to every later step, `npm`, `cargo` and their build scripts
   included).
@@ -244,56 +246,22 @@ v6+ keeps credentials in a separate file (we never push from CI), v7 refuses for
 
 ## 5. Cut a release
 
-### Release day checklist (v1.0.0)
+1. Bump the Desktop version with `node scripts/bump-version.mjs X.Y.Z`, update the changelog,
+   run the repository gate, and open a reviewed pull request to `main`. Use a merge commit or
+   squash title beginning with `build:` (or `build(scope):`) to start a release build.
+2. Approve the protected `release` environment when GitHub requests it. The workflow builds
+   from that exact `main` commit, signs and notarizes macOS, and creates a **draft** GitHub
+   release for the version in `src-tauri/tauri.conf.json`. It refuses an existing tag or draft.
+3. Check `SHA256SUMS`, the macOS notarization and each installer on a clean machine. Publish the
+   draft only after review. The release tag targets the build commit.
+   Do not push a release tag directly: tag pushes do not invoke the signing workflow.
+4. A manual **Build → Run workflow** on `main` uses the same protected environment but only
+   uploads workflow artifacts; it does not create or publish a release.
 
-Nothing is bumped until the day. Then, in order:
-
-1. `node scripts/bump-version.mjs 1.0.0` (add `--dry-run` first to see the changes). It sets
-   `version` in `package.json`, `package-lock.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`
-   and `src-tauri/tauri.conf.json`; `node scripts/bump-version.mjs 1.0.0 --check` verifies them.
-   Then `cd src-tauri && cargo check --locked` (the lock file must not change).
-2. In `CHANGELOG.md` turn `## [1.0.0] - unreleased` into `## [1.0.0] - YYYY-MM-DD` (keep an empty
-   `## [Unreleased]` above it) and check the README says 1.0.0 is released (status line, screenshots).
-3. Run the gate (`npm run build`, `cargo test`, `cargo clippy --all-targets -- -D warnings`,
-   `cargo fmt --check`), commit "chore(release): v1.0.0", `git tag v1.0.0`, push the commit and the tag.
-4. Wait for the **Build** workflow; check the draft release (three installers, `SHA256SUMS`,
-   `latest.json`), try each installer on a clean machine (`docs/QA-CHECKLIST.md`), then **publish the draft**.
-5. In the Brainitive app's `.env` on the server set `DESKTOP_DOWNLOAD_MACOS_URL`,
-   `DESKTOP_DOWNLOAD_WINDOWS_URL` (and the Linux ones if used) to the published assets (section 6),
-   reload PHP / clear the config cache if one is used, and open `/download` to check the buttons.
-6. Website: `brainitive.app` (the brainitive-website repo): add the Desktop release (announcement /
-   download section, screenshots), and in the app repo the homepage / changelog / docs-site entry
-   for the Desktop release as in the app's own release flow.
-
-
-1. Pick the version `X.Y.Z` (Desktop has its own numbers; CHANGELOG "Unreleased" → `## X.Y.Z`).
-2. Set it in **all three**: `package.json` (and `package-lock.json`: `npm install --package-lock-only`),
-   `src-tauri/Cargo.toml` (then `cargo check` to refresh `Cargo.lock`), `src-tauri/tauri.conf.json`.
-3. Commit "chore(release): vX.Y.Z", `git tag vX.Y.Z`, push both.
-4. The **Build** workflow runs on the tag: tests, three installers, a **draft** release with
-   `SHA256SUMS` (and `latest.json` + updater bundles once the update key exists). Check each
-   installer on a clean machine (install, open, `brainitive://` link, microphone), then publish the
-   draft. Manual runs (Actions → Build → Run workflow) only upload workflow artifacts; they are
-   signed only when started on the default branch.
-
-**Stable vs. beta.** A plain tag `vX.Y.Z` makes a normal release: publishing it moves GitHub's
-"latest", so every stable user gets it (and beta users too, when it is newer than their beta). A tag
-with a pre-release part, **`vX.Y.Z-beta.N`** (semver: `1.2.0-beta.1 < 1.2.0-beta.2 < 1.2.0`), makes a
-**pre-release** draft; publishing it updates `updater-beta/beta.json` (the "Beta channel manifest" job),
-so only beta users get it. Stable users never see betas. A beta user who turns beta off keeps the beta
-until a stable version above it is out (no downgrade). Promote a beta by tagging the final `vX.Y.Z`.
-
-**Rollback = fix forward.** The updater only installs a **higher** version, and each signature is bound
-to its version, so republishing an older release (or pointing a manifest at an old bundle) never
-downgrades anyone. To undo a bad release:
-1. Stop the spread: edit the bad release on GitHub — for stable mark an older good release as
-   "latest" (or turn the bad one back into a draft / pre-release), for beta re-publish (or re-run the
-   job of) the previous good pre-release so `beta.json` points at it again. Users who haven't
-   updated stop being offered the bad version; those who have keep it.
-2. Ship the fix as a **new, higher** version: revert the change, bump `X.Y.(Z+1)`, tag, publish.
-   Everyone on the bad version moves to it on their next check (within 6 hours).
-3. Only if the bad version can't update at all (broken updater): users need a manual download;
-   say so in the release notes and on the download page.
+Stable versions become GitHub's latest release when published; prerelease versions update the
+beta manifest. The updater only installs higher signed versions, so recover from a bad release by
+shipping a new, higher version. Until its own updater key pair is configured, no updater manifest
+is produced.
 
 ## 6. Download buttons on the website
 

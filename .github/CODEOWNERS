@@ -1,0 +1,5 @@
+# Workflow changes can affect release credentials; require owner review.
+/.github/ @armendzekjiri @bbilali
+/scripts/macos-sign.sh @armendzekjiri @bbilali
+/src-tauri/tauri.conf.json @armendzekjiri @bbilali
+/src-tauri/entitlements.plist @armendzekjiri @bbilali

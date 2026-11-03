@@ -1,14 +1,14 @@
 name: Build
 
 # Installers for macOS (universal), Windows (x64, NSIS) and Linux (x64, AppImage + .deb), and the
-# Microsoft Store package (x64 MSIX, job "msstore", BRAI-442) for tags and manual runs.
-#   - pull request: tests only, no bundles
-#   - tag v*:       tests, bundles, a DRAFT GitHub release with the installers + SHA256SUMS
-#   - manual run:   tests + bundles as workflow artifacts (no release)
+# Microsoft Store package (x64 MSIX, job "msstore", BRAI-442) for protected main releases and manual runs.
+#   - a build: commit on main: tests, bundles and a DRAFT release for the configured version
+#   - manual run on main: tests + bundles as workflow artifacts (no release)
+#   - pull requests: the separate CI workflow runs the checks without signing credentials
 #   - a pre-release published by hand: its latest.json becomes the beta channel's manifest
-# Signing is optional: every signing step only runs when its secrets exist, so the workflow
-# produces unsigned installers until they are added. See docs/RELEASING.md.
-# Signing runs only for a v* tag push or a manual run on the default branch (SIGNING_ALLOWED);
+# Apple signing and notarization are required for a release build. Other signing remains optional.
+# See docs/RELEASING.md.
+# Signing runs only from the default branch behind the protected release environment;
 # pull requests and other refs never see a signing secret. Secrets are passed per step through
 # `env:` to the steps that use them, never written to $GITHUB_ENV (BRAI-377).
 # Platform signing happens AFTER the build (codex review 11): `tauri build` (npm, cargo and every
@@ -23,8 +23,7 @@ name: Build
 
 on:
   push:
-    tags: ["v*"]
-  pull_request:
+    branches: [main]
   workflow_dispatch:
   release:
     types: [published]
@@ -34,19 +33,46 @@ permissions:
 
 concurrency:
   group: build-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  cancel-in-progress: false
 
 env:
   # whisper.cpp (voice capture) is built from source: portable baseline, see src-tauri/.cargo/config.toml
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare:
+    name: Prepare release
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && contains(github.event.head_commit.message, 'build')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      release: ${{ steps.trigger.outputs.release }}
+    steps:
+      - name: Check release trigger
+        id: trigger
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [[ "$EVENT" == workflow_dispatch ]] || grep -qE '^build(\([^)]*\))?!?:' <<<"$MESSAGE"; then
+            echo 'release=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'release=false' >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: ${{ matrix.name }}
-    if: github.event_name != 'release'
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
     runs-on: ${{ matrix.os }}
+    environment: release
     env:
-      SIGNING_ALLOWED: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) }}
+      SIGNING_ALLOWED: 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -84,6 +110,8 @@ jobs:
             updater-glob: src-tauri/target/release/bundle/appimage/*.AppImage
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # webkit2gtk-4.1 + ayatana appindicator (tray), librsvg, patchelf (AppImage), libasound2-dev
       # (cpal / ALSA, voice capture), libdbus-1-dev (keyring). cmake and a C++ compiler are on all runners.
@@ -140,6 +168,20 @@ jobs:
             echo "updater=$HAS_UPDATER_KEY"
           } >> "$GITHUB_OUTPUT"
 
+      # Never publish a macOS release that silently skipped Apple notarization.
+      - name: Require Apple signing and notarization
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          HAS_CERTIFICATE: ${{ steps.signing.outputs.apple }}
+          HAS_NOTARY_ID: ${{ steps.signing.outputs.apple_notary_id }}
+          HAS_NOTARY_KEY: ${{ steps.signing.outputs.apple_notary_key }}
+        run: |
+          if [ "$HAS_CERTIFICATE" != 'true' ] || { [ "$HAS_NOTARY_ID" != 'true' ] && [ "$HAS_NOTARY_KEY" != 'true' ]; }; then
+            echo '::error::Apple signing and notarization credentials are required for a release build.'
+            exit 1
+          fi
+
       # Windows: Azure Trusted Signing through trusted-signing-cli (pinned). Installed here, in a
       # step WITHOUT secrets (cargo install compiles crates and runs build scripts), into the
       # runner's temp folder (not ~/.cargo/bin, which rust-cache restores).
@@ -151,7 +193,7 @@ jobs:
           cargo install trusted-signing-cli --version 0.11.0 --locked --root "$RUNNER_TEMP/signing-tools"
           echo "cli=$RUNNER_TEMP/signing-tools/bin/trusted-signing-cli" >> "$GITHUB_OUTPUT"
 
-      # Bundles are not built for pull requests. No secret of any kind reaches this step (codex
+      # No secret of any kind reaches this step (codex
       # review 11): the Apple / Azure signing below works on what it produced, and
       # tauri.conf.json keeps createUpdaterArtifacts off (the updater bundles are signed later).
       - name: tauri build
@@ -295,16 +337,30 @@ jobs:
   # (v1.0.0-beta.1) are skipped: an MSIX version is X.Y.Z.0, the Store has no betas of its own.
   msstore:
     name: Microsoft Store (MSIX)
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || github.event_name == 'workflow_dispatch'
+    needs: prepare
+    if: needs.prepare.outputs.release == 'true'
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20
           cache: npm
+
+      - name: Check Microsoft Store version
+        id: store-version
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [[ "$version" == *-* ]]; then
+            echo 'stable=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'stable=true' >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: dtolnay/rust-toolchain@7dcc700092a1a8b9c17ba0e140b4e34e93000946 # 1.90.0
         with:
@@ -333,6 +389,7 @@ jobs:
       # tauri build --no-bundle --features msstore --config tauri.msstore.conf.json, then the
       # package folder, makepri and makeappx pack (which fails on a manifest schema error)
       - name: Build the MSIX
+        if: steps.store-version.outputs.stable == 'true'
         id: msix
         shell: pwsh
         run: ./scripts/build-msix.ps1 -SignForTest
@@ -341,6 +398,7 @@ jobs:
       # copy and runs the Store's checks. Informational (it can't fail the job); run it by hand
       # before a submission anyway (docs/MICROSOFT-STORE.md).
       - name: Windows App Certification Kit
+        if: steps.msix.outcome == 'success'
         id: wack
         continue-on-error: true
         timeout-minutes: 30
@@ -378,6 +436,7 @@ jobs:
       # not "installers-*": an unsigned MSIX can't be installed by users, so it is never attached
       # to the GitHub release; it is downloaded from this run and uploaded to Partner Center
       - name: Upload the MSIX
+        if: steps.msix.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: msstore-package
@@ -387,6 +446,7 @@ jobs:
 
       # the self-signed copy for sideload tests; never attached to a release or uploaded to the Store
       - name: Upload the sideload test copy
+        if: steps.msix.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: msstore-sideload-test
@@ -401,20 +461,38 @@ jobs:
   release:
     name: Draft release
     if: >-
-      !cancelled() && github.ref_type == 'tag' && github.event_name == 'push' &&
-      needs.build.result == 'success'
-    needs: [build]
+      !cancelled() && github.event_name == 'push' &&
+      needs.prepare.outputs.release == 'true' && needs.build.result == 'success'
+    needs: [prepare, build]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: installers
           pattern: installers-*
           merge-multiple: true
+
+      - name: Resolve release tag
+        id: version
+        shell: bash
+        run: |
+          version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo '::error::Invalid release version'; exit 1; }
+          tag="v$version"
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag" --jq ".[] | select(.ref == \"refs/tags/$tag\") | .ref")
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || [[ -n "$existing" ]]; then
+            echo "::error::$tag already exists; bump the application version."
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # the artifacts keep their bundle folders (macos/, dmg/, nsis/, deb/, appimage/): flat files,
       # so the manifest below finds every bundle and its .sig, and the release has no folders
@@ -429,7 +507,7 @@ jobs:
       # go into the manifest, not into the release. No signed bundles: no manifest.
       - name: Updater manifest
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           set +e
           node scripts/updater-manifest.mjs installers "$TAG" "$GITHUB_REPOSITORY" \
@@ -450,18 +528,18 @@ jobs:
         working-directory: installers
         run: sha256sum * > SHA256SUMS
 
-      # A draft: the owner reviews it and publishes by hand (docs/RELEASING.md). Tags with a
+      # A draft: the owner reviews it and publishes by hand (docs/RELEASING.md). Versions with a
       # pre-release part (v1.0.0-beta.1) become pre-releases: GitHub's "latest" (the stable
       # channel) never points at them.
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           prerelease=()
           [[ "$TAG" == *-* ]] && prerelease=(--prerelease)
-          gh release create "$TAG" installers/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag "${prerelease[@]}" \
-            --title "Brainitive Desktop $TAG" --notes "See CHANGELOG.md. Unsigned builds show a Gatekeeper / SmartScreen warning. The .msix is the unsigned Microsoft Store upload for Partner Center, not an installer: get Brainitive for Windows from the Store or the -setup.exe."
+          gh release create "$TAG" installers/* --repo "$GITHUB_REPOSITORY" --draft --target "$GITHUB_SHA" "${prerelease[@]}" \
+            --title "Brainitive Desktop $TAG" --notes "See CHANGELOG.md. macOS is signed and notarized. The Windows installer may show a SmartScreen warning."
 
   # Beta channel (BRAI-373): when the owner publishes a pre-release, its latest.json becomes
   # beta.json of the rolling pre-release "updater-beta" (created on first use, always kept a
