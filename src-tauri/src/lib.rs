@@ -1,6 +1,7 @@
 //! Brainitive Desktop: a Tauri 2 shell around a Brainitive server (Cloud or self-hosted).
 //! See docs/ARCHITECTURE.md (modules, flows) and docs/SECURITY.md (threat model).
 
+pub mod alerts;
 pub mod api;
 pub mod badge;
 pub mod bridge;

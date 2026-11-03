@@ -163,6 +163,8 @@ pub struct Inner {
     pub capture_prefill: Option<String>,
     pub tray: Option<tauri::tray::TrayIcon<Wry>>,
     pub tray_data: crate::tray::TrayData,
+    /// Server notifications already seen / shown as OS notifications (reset with `tray_data`).
+    pub alerts: crate::alerts::Seen,
     /// The tray menu last built (rebuilt only when it changes).
     pub tray_model: Option<Vec<crate::tray::Entry>>,
     /// Why a global shortcut could not be registered at start (shown in Settings).
@@ -249,6 +251,7 @@ impl AppState {
                 capture_prefill: None,
                 tray: None,
                 tray_data: Default::default(),
+                alerts: Default::default(),
                 tray_model: None,
                 hotkey_error: None,
                 etags: HashMap::new(),

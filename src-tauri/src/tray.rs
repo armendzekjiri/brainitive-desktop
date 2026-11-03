@@ -892,6 +892,8 @@ async fn poll_once(app: &AppHandle, ticket: &PollTicket, plan: poll::Plan) -> Re
             };
             if current {
                 crate::bridge::set_badge(app, n as i64);
+                // new mentions, assignments, replies …: OS notifications (the web app doesn't)
+                crate::alerts::on_unread(app, ticket, n).await;
             }
         }
     }
@@ -953,7 +955,11 @@ pub fn start_poller(app: &AppHandle) {
             let Some(ticket) = ticket else {
                 // signed out / no server / a bundled screen: nothing to poll
                 if polled.take().is_some() {
-                    state(&app).lock().tray_data = TrayData::default();
+                    let s = state(&app);
+                    let mut inner = s.lock();
+                    inner.tray_data = TrayData::default();
+                    inner.alerts = Default::default();
+                    drop(inner);
                     refresh(&app);
                 }
                 backoff.succeeded();
@@ -971,6 +977,7 @@ pub fn start_poller(app: &AppHandle) {
                 let mut inner = s.lock();
                 inner.etags.clear();
                 inner.tray_data = TrayData::default();
+                inner.alerts = Default::default();
             }
             let stale = state(&app).lock().tray_data.my_day_stale;
             let result = poll_once(&app, &ticket, poll::plan(tick, stale)).await;

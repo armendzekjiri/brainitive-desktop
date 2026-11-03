@@ -173,6 +173,10 @@ The first stable release of Brainitive Desktop for macOS, Windows and Linux.
 
 - **Notifications and badge** (BRAI-361): the unread badge also on the Windows taskbar (overlay
   icon) and kept up to date while the window is closed; clicking a notification opens its page.
+- **Desktop notifications for mentions, assignments, replies …**: new unread notifications of the
+  server show as Windows / macOS / Linux notifications, also with the window closed to the tray
+  (checked every minute with the unread count; none for what was already there at sign-in, none
+  while the window is in front, one summary for more than three).
 
 ### Updates
 

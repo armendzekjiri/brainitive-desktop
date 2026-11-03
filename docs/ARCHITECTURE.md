@@ -78,6 +78,7 @@ desktop/
     │   │                       remove), audio.rs (cpal microphone, resampling), whisper.rs
     │   │                       (whisper-rs), permission.rs (macOS AVCaptureDevice)
     │   ├── tray.rs             tray menu model + icon, the poller, My Day / timer actions
+    │   ├── alerts.rs           OS notifications for new server notifications (from the poller)
     │   ├── new_task/           the New task window: mod.rs (state, commands), model.rs (destinations,
     │   │                       config, memory per server, payload, request id, errors, pure), tests.rs
     │   ├── panel/              the menu-bar panel: mod.rs (state, commands, tray clicks, window),
@@ -504,7 +505,12 @@ mouse-up; a click within 0.4 s after the panel hid on blur is the click that blu
   (ETag) grouped by project, **Inbox** `GET /notifications?limit=25` (ETag on the first page) +
   `unread-count`: each row's text is the server's `summary` and its link the server's `url`
   (`null` = no link); a row without those fields (older server) is worded like the web bell
-  (`view::describe`, mirrors `NotificationMessage.tsx`) with the payload's link. **Timer**
+  (`view::describe`, mirrors `NotificationMessage.tsx`) with the payload's link. **OS notifications** (`alerts.rs`): the web app
+  shows notifications only in its bell, so when the poller's `unread-count` rises the app reads
+  `GET /notifications?limit=10` and shows each unread row it hasn't seen as a native notification
+  (same wording; click → its `url` through `links::resolve_deep_link_target`). The first count after a
+  sign-in only marks the rows as seen; nothing while the main window is in front; more than three
+  at once → one summary (→ `/notifications`). Ids seen are kept per sign-in (≤ 500). **Timer**
   `GET /me/timer` (ETag; elapsed from `started_at`; `timer.description` under the issue); today's
   total = `today_logged_seconds` + the running time (ticking) — an older server without the field
   gets `GET /work-logs?from=D&to=D` (D = the user's date of `/me/today`) with the entries; start
