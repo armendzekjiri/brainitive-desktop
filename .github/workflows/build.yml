@@ -416,6 +416,15 @@ jobs:
           pattern: installers-*
           merge-multiple: true
 
+      # the artifacts keep their bundle folders (macos/, dmg/, nsis/, deb/, appimage/): flat files,
+      # so the manifest below finds every bundle and its .sig, and the release has no folders
+      - name: Flatten
+        working-directory: installers
+        run: |
+          find . -mindepth 2 -type f -exec mv -n {} . \;
+          find . -mindepth 1 -type d -empty -delete
+          ls -la
+
       # latest.json (Tauri's static manifest) from the signed updater bundles; their .sig files
       # go into the manifest, not into the release. No signed bundles: no manifest.
       - name: Updater manifest
@@ -436,14 +445,6 @@ jobs:
             exit $code
           fi
           rm -f installers/*.sig
-
-      # the artifacts keep their bundle folders (dmg/, nsis/, deb/, appimage/): flat files for the release
-      - name: Flatten
-        working-directory: installers
-        run: |
-          find . -mindepth 2 -type f -exec mv -n {} . \;
-          find . -mindepth 1 -type d -empty -delete
-          ls -la
 
       - name: Checksums
         working-directory: installers

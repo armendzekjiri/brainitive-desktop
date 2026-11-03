@@ -6,7 +6,7 @@ The desktop app for [Brainitive](https://brainitive.app) on macOS, Windows and L
 keychain, `brainitive://` deep links, native notifications, global shortcuts, a menu-bar / tray
 panel, an offline copy of your work and on-device voice capture.
 
-Status: **v1.0.0 in preparation** (see [CHANGELOG.md](CHANGELOG.md)). It needs a Brainitive server
+Status: **v1.0.0** (see [CHANGELOG.md](CHANGELOG.md)). It needs a Brainitive server
 with App API v1 (`/api/v1`, Brainitive v1.49.0 or later).
 
 <!-- Screenshots: add them to docs/images/ and link them here before the 1.0.0 release. -->

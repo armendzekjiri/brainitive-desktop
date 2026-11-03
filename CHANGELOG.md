@@ -5,7 +5,7 @@ server with the App API v1 (Brainitive v1.49.0 or later).
 
 ## [Unreleased]
 
-## [1.0.0] - unreleased
+## [1.0.0] - 2026-11-03
 
 The first stable release of Brainitive Desktop for macOS, Windows and Linux.
 
