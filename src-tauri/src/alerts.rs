@@ -142,7 +142,18 @@ pub async fn on_unread(app: &AppHandle, ticket: &PollTicket, unread: u64) {
         }
         inner.alerts.fresh(&body, look == Look::Prime)
     };
-    if alerts.is_empty() || in_front(app) {
+    // counts only: never the text (the log can be shared)
+    let front = in_front(app);
+    log::info!(
+        "notifications: unread {unread}, {look:?}, {} new{}",
+        alerts.len(),
+        if front && !alerts.is_empty() {
+            " (window in front: not shown)"
+        } else {
+            ""
+        }
+    );
+    if alerts.is_empty() || front {
         return;
     }
     for alert in toasts(alerts) {

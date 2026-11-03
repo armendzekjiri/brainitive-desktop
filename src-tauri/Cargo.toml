@@ -61,12 +61,13 @@ libc = "=0.2.191"
 [target.'cfg(windows)'.dependencies]
 # the main window's keyboard shortcuts inside its WebView2 children (keys.rs); wry's version
 webview2-com = "=0.39.1"
-windows = { version = "=0.62.2", features = ["ApplicationModel", "ApplicationModel_Activation", "Foundation"], optional = true }
+# also toasts with a brainitive://open link (toast.rs), in every Windows build
+windows = { version = "=0.62.2", features = ["ApplicationModel", "ApplicationModel_Activation", "Data_Xml_Dom", "Foundation", "UI_Notifications"] }
 tauri-winrt-notification = { version = "=0.8.1", optional = true }
 
 [features]
 # No updater (the Store updates the app), Store links, the MSIX startup task, package toasts.
-msstore = ["dep:windows", "dep:tauri-winrt-notification"]
+msstore = ["dep:tauri-winrt-notification"]
 
 [dev-dependencies]
 tokio = { version = "=1.54.1", features = ["rt-multi-thread", "macros"] }

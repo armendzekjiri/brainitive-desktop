@@ -510,7 +510,11 @@ mouse-up; a click within 0.4 s after the panel hid on blur is the click that blu
   `GET /notifications?limit=10` and shows each unread row it hasn't seen as a native notification
   (same wording; click → its `url` through `links::resolve_deep_link_target`). The first count after a
   sign-in only marks the rows as seen; nothing while the main window is in front; more than three
-  at once → one summary (→ `/notifications`). Ids seen are kept per sign-in (≤ 500). **Timer**
+  at once → one summary (→ `/notifications`). Ids seen are kept per sign-in (≤ 500). On Windows
+  (not in dev builds) a notification with a page is a toast built by `toast.rs` with
+  `activationType="protocol"` and `launch="brainitive://open?url=<path>"`: a click on the banner or
+  later in the notification centre (or after the app quit) opens the page like any deep link; the
+  plugin's toasts only report clicks while on screen. Server text is XML-escaped. **Timer**
   `GET /me/timer` (ETag; elapsed from `started_at`; `timer.description` under the issue); today's
   total = `today_logged_seconds` + the running time (ticking) — an older server without the field
   gets `GET /work-logs?from=D&to=D` (D = the user's date of `/me/today`) with the entries; start

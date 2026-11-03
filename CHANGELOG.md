@@ -176,7 +176,8 @@ The first stable release of Brainitive Desktop for macOS, Windows and Linux.
 - **Desktop notifications for mentions, assignments, replies …**: new unread notifications of the
   server show as Windows / macOS / Linux notifications, also with the window closed to the tray
   (checked every minute with the unread count; none for what was already there at sign-in, none
-  while the window is in front, one summary for more than three).
+  while the window is in front, one summary for more than three). On Windows a click opens the
+  page also from the notification centre, even after the app was quit.
 
 ### Updates
 

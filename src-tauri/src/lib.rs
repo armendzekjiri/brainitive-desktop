@@ -44,6 +44,7 @@ pub mod switcher;
 pub mod tabs;
 #[cfg(test)]
 mod testing;
+pub mod toast;
 pub mod tray;
 pub mod updater;
 pub mod version;

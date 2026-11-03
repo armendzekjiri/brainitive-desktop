@@ -142,6 +142,12 @@ pub fn show_file_notification(app: &AppHandle, title: &str, body: &str, file: st
 }
 
 fn notify(app: &AppHandle, title: &str, body: &str, target: Option<NotificationTarget>) {
+    // Windows: a page link opens from the banner and from the notification centre (toast.rs)
+    if let Some(NotificationTarget::Page(page)) = &target {
+        if crate::toast::show_page(app, title, body, page) {
+            return;
+        }
+    }
     let id = {
         let s = state(app);
         let mut inner = s.lock();
