@@ -17,9 +17,9 @@ fn permissions(cap: &Value) -> Vec<String> {
         .collect()
 }
 
-/// Every capability file (= every bundled window + the main window's screens).
-const ALL: [&str; 9] = [
-    "local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel", "task",
+/// Every capability file (= every bundled window + the main window's screens and top bar).
+const ALL: [&str; 10] = [
+    "local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel", "task", "topbar",
 ];
 
 fn config() -> Value {
@@ -37,7 +37,7 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         .collect();
     assert_eq!(
         enabled,
-        ["local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel", "task"]
+        ["local", "settings", "capture", "switcher", "offline", "voice", "leader", "panel", "task", "topbar"]
     );
 
     for (name, window, prefix) in [
@@ -70,10 +70,46 @@ fn every_bundled_window_has_its_own_local_only_capability() {
         }
     }
 
-    // the connect / sign-in screens: the main window only
+    // the connect / sign-in screens: the main window's `main` webview only — by webview label:
+    // a capability by window would reach every webview of the window, the top bar too
     let local = capability("local");
-    assert_eq!(local["windows"], serde_json::json!(["main"]));
+    assert_eq!(local["webviews"], serde_json::json!(["main"]));
+    assert!(local.get("windows").is_none());
     assert!(local.get("remote").is_none());
+}
+
+#[test]
+fn the_top_bar_gets_its_own_commands_only() {
+    let cap = capability("topbar");
+    assert_eq!(cap["identifier"], "topbar");
+    assert_eq!(cap["local"], true);
+    assert!(cap.get("remote").is_none(), "the top bar must not reach remote content");
+    assert!(cap.get("windows").is_none(), "by window it would reach the tabs too");
+    assert_eq!(cap["webviews"], serde_json::json!(["topbar"]));
+    for p in permissions(&cap) {
+        let event = matches!(p.as_str(), "core:event:allow-listen" | "core:event:allow-unlisten");
+        assert!(p.starts_with("allow-topbar-") || event, "topbar grants {p}");
+    }
+    // and nobody else gets them
+    for name in ALL.iter().filter(|n| **n != "topbar") {
+        for p in permissions(&capability(name)) {
+            assert!(!p.starts_with("allow-topbar-"), "{name} grants {p}");
+        }
+    }
+    // the bridge's runtime capability goes to the tabs by webview label, never by window
+    let shell = std::fs::read_to_string(format!("{}/src/shell.rs", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let bridge = shell
+        .split("pub fn allow_bridge_for(")
+        .nth(1)
+        .unwrap()
+        .split(
+            "
+}",
+        )
+        .next()
+        .unwrap();
+    assert!(bridge.contains(".webviews([MAIN.to_string(), format!(\"{APP_WINDOW_PREFIX}*\")])"));
+    assert!(!bridge.contains(".windows("));
 }
 
 #[test]
@@ -448,13 +484,14 @@ fn every_command_of_the_manifest_checks_its_caller_first() {
         }
     }
 
-    const CHECKS: [&str; 6] = [
+    const CHECKS: [&str; 7] = [
         "ensure_main_screen(&app, &webview)?;",
         "if ensure_main_screen(&app, &webview).is_err() {",
         "popup::ensure_caller(&app, &webview, Popup::",
         "caller(&app, &webview)?;",
         "ensure_current_server(&app, &webview)?;",
         "let origin = ensure_current_server(&app, &webview)?;",
+        "topbar(&app, &webview)?;",
     ];
     for name in &manifest {
         let (file, first) = commands
@@ -481,6 +518,19 @@ fn every_command_of_the_manifest_checks_its_caller_first() {
     for name in commands.keys() {
         assert!(manifest.contains(name), "{name} is a command but not in build.rs");
     }
+    // the top bar's check: the `topbar` webview on a bundled origin
+    let tabs_rs = std::fs::read_to_string(format!("{root}/src/tabs.rs")).unwrap();
+    let check = tabs_rs
+        .split("fn topbar(")
+        .nth(1)
+        .unwrap()
+        .split(
+            "
+}",
+        )
+        .next()
+        .unwrap();
+    assert!(check.contains("links::is_local_caller(webview.label(), &url, TOPBAR,"));
     // the main screens' check: the main window on a bundled origin
     let commands_rs = std::fs::read_to_string(format!("{root}/src/commands.rs")).unwrap();
     let check = commands_rs.split("fn ensure_main_screen(").nth(1).unwrap();

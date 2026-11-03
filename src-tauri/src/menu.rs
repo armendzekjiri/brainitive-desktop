@@ -1,9 +1,10 @@
-//! The app menu (BRAI-362): macOS menu bar / the window menu on Windows and Linux, with ⌘ on
-//! macOS and Ctrl elsewhere (`CmdOrCtrl`). Menu actions go to the last focused **app window**
-//! (the main window or an `app-<n>` window), never to the bundled popups.
+//! The app menu (BRAI-362): the macOS menu bar; on Windows and Linux the same menus open from the
+//! main window's top bar (File, Edit, View, Go, Server, Help buttons; the OS menu bar is hidden,
+//! its shortcuts still work), with ⌘ on macOS and Ctrl elsewhere (`CmdOrCtrl`). Menu actions go
+//! to the **active tab**, never to the bundled popups.
 
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
-use tauri::{AppHandle, Wry};
+use tauri::menu::{CheckMenuItem, ContextMenu, Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::{AppHandle, LogicalPosition, Window, Wry};
 
 use crate::shell;
 use crate::state::state;
@@ -14,7 +15,11 @@ pub enum MenuAction {
     Settings,
     NewIssue,
     NewDoc,
-    NewWindow,
+    NewTab,
+    CloseTab,
+    ReopenTab,
+    NextTab,
+    PreviousTab,
     /// "Brainitive Key…" (BRAI-440): the overlay, the key shown as its accelerator.
     BrainitiveKey,
     QuickCapture,
@@ -47,13 +52,29 @@ pub enum MenuAction {
 
 /// Servers ▸ one item per saved server: `server-pick:<id>` (`servers::server_id`).
 pub const SERVER_PICK: &str = "server-pick:";
+/// A tab's context menu: `tab-ctx:<action>:<label>`.
+pub const TAB_MENU: &str = "tab-ctx:";
+
+/// The menus the top bar shows as buttons on Windows / Linux: id and text.
+pub const TOPBAR_MENUS: [(&str, &str); 6] = [
+    ("file", "File"),
+    ("edit", "Edit"),
+    ("view", "View"),
+    ("go", "Go"),
+    ("server", "Server"),
+    ("help", "Help"),
+];
 
 impl MenuAction {
-    pub const ALL: [MenuAction; 28] = [
+    pub const ALL: [MenuAction; 32] = [
         Self::Settings,
         Self::NewIssue,
         Self::NewDoc,
-        Self::NewWindow,
+        Self::NewTab,
+        Self::CloseTab,
+        Self::ReopenTab,
+        Self::NextTab,
+        Self::PreviousTab,
         Self::BrainitiveKey,
         Self::QuickCapture,
         Self::QuickSwitcher,
@@ -85,7 +106,11 @@ impl MenuAction {
             Self::Settings => "settings",
             Self::NewIssue => "new-issue",
             Self::NewDoc => "new-doc",
-            Self::NewWindow => "new-window",
+            Self::NewTab => "new-tab",
+            Self::CloseTab => "close-tab",
+            Self::ReopenTab => "reopen-tab",
+            Self::NextTab => "next-tab",
+            Self::PreviousTab => "previous-tab",
             Self::BrainitiveKey => "brainitive-key",
             Self::QuickCapture => "quick-capture",
             Self::QuickSwitcher => "quick-switcher",
@@ -117,13 +142,18 @@ impl MenuAction {
         Self::ALL.into_iter().find(|a| a.id() == id)
     }
 
-    /// The keyboard shortcut (`CmdOrCtrl` = ⌘ on macOS, Ctrl on Windows / Linux).
+    /// The keyboard shortcut (`CmdOrCtrl` = ⌘ on macOS, Ctrl on Windows / Linux; switching tabs is
+    /// ⌃Tab everywhere, as in browsers).
     pub fn accelerator(self) -> Option<&'static str> {
         Some(match self {
             Self::Settings => "CmdOrCtrl+,",
             Self::NewIssue => "CmdOrCtrl+N",
             Self::NewDoc => "CmdOrCtrl+Alt+N",
-            Self::NewWindow => "CmdOrCtrl+Shift+N",
+            Self::NewTab => "CmdOrCtrl+T",
+            Self::CloseTab => "CmdOrCtrl+W",
+            Self::ReopenTab => "CmdOrCtrl+Shift+T",
+            Self::NextTab => "Ctrl+Tab",
+            Self::PreviousTab => "Ctrl+Shift+Tab",
             Self::Back => "CmdOrCtrl+[",
             Self::Forward => "CmdOrCtrl+]",
             Self::Reload => "CmdOrCtrl+R",
@@ -221,14 +251,15 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         &[
             &item(app, MenuAction::NewIssue, "New Issue")?,
             &item(app, MenuAction::NewDoc, "New Doc")?,
-            &item(app, MenuAction::NewWindow, "New Window")?,
+            &sep()?,
+            &item(app, MenuAction::NewTab, "New Tab")?,
+            &item(app, MenuAction::CloseTab, "Close Tab")?,
+            &item(app, MenuAction::ReopenTab, "Reopen Closed Tab")?,
             &sep()?,
             &leader,
             &capture,
             &switcher,
             &voice,
-            &sep()?,
-            &PredefinedMenuItem::close_window(app, None)?,
         ],
     )?;
     if !mac {
@@ -240,7 +271,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     }
     menu.append(&file)?;
 
-    menu.append(&Submenu::with_items(
+    let edit = Submenu::with_items(
         app,
         "Edit",
         true,
@@ -253,7 +284,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             &PredefinedMenuItem::paste(app, None)?,
             &PredefinedMenuItem::select_all(app, None)?,
         ],
-    )?)?;
+    )?;
+    menu.append(&edit)?;
 
     let view = Submenu::with_items(
         app,
@@ -263,6 +295,9 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             &item(app, MenuAction::Back, "Back")?,
             &item(app, MenuAction::Forward, "Forward")?,
             &item(app, MenuAction::Reload, "Reload")?,
+            &sep()?,
+            &item(app, MenuAction::NextTab, "Next Tab")?,
+            &item(app, MenuAction::PreviousTab, "Previous Tab")?,
             &sep()?,
             &item(app, MenuAction::ZoomReset, "Actual Size")?,
             &item(app, MenuAction::ZoomIn, "Zoom In")?,
@@ -275,7 +310,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     }
     menu.append(&view)?;
 
-    menu.append(&Submenu::with_items(
+    let go = Submenu::with_items(
         app,
         "Go",
         true,
@@ -289,10 +324,11 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             &sep()?,
             &item(app, MenuAction::AccountSettings, "Account Settings")?,
         ],
-    )?)?;
+    )?;
+    menu.append(&go)?;
 
     let current = MenuItem::with_id(app, "server-current", "Not connected", false, None::<&str>)?;
-    menu.append(&Submenu::with_items(
+    let server = Submenu::with_items(
         app,
         "Server",
         true,
@@ -302,7 +338,8 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             &item(app, MenuAction::ServerSwitch, "Switch Server…")?,
             &item(app, MenuAction::ServerSignOut, "Sign Out")?,
         ],
-    )?)?;
+    )?;
+    menu.append(&server)?;
 
     #[cfg(target_os = "macos")]
     menu.append(&Submenu::with_items(
@@ -344,6 +381,14 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         inner.switcher_menu_item = Some(switcher);
         inner.voice_menu_item = Some(voice);
         inner.update_menu_item = Some(updates);
+        inner.topbar_menus = vec![
+            ("file", file),
+            ("edit", edit),
+            ("view", view),
+            ("go", go),
+            ("server", server),
+            ("help", help),
+        ];
     }
     refresh_shortcut_labels(app);
     refresh_update_item(app);
@@ -473,10 +518,93 @@ pub fn refresh_shortcut_labels(app: &AppHandle) {
     }
 }
 
+/// A menu opened from the top bar at `at` (the bar's CSS pixels = the window's logical pixels):
+/// one of [`TOPBAR_MENUS`], `servers` (the saved servers) or `tab` (a tab's context menu).
+pub fn popup_topbar_menu(
+    app: &AppHandle,
+    window: &Window,
+    which: &str,
+    tab: Option<&str>,
+    at: LogicalPosition<f64>,
+) -> Result<(), String> {
+    let err = |e: tauri::Error| e.to_string();
+    match which {
+        "servers" => {
+            refresh_servers(app);
+            let menu = state(app).lock().servers_menu.clone().ok_or("no menu")?;
+            menu.popup_at(window.clone(), at).map_err(err)
+        }
+        "tab" => {
+            let tab = tab.ok_or("no tab")?;
+            let several = state(app).lock().tabs.list.len() > 1;
+            let id = |action: &str| format!("{TAB_MENU}{action}:{tab}");
+            let new =
+                MenuItem::with_id(app, id("new"), "New Tab", true, MenuAction::NewTab.accelerator()).map_err(err)?;
+            let duplicate =
+                MenuItem::with_id(app, id("duplicate"), "Duplicate Tab", true, None::<&str>).map_err(err)?;
+            let reload = MenuItem::with_id(app, id("reload"), "Reload", true, None::<&str>).map_err(err)?;
+            let sep = PredefinedMenuItem::separator(app).map_err(err)?;
+            let close = MenuItem::with_id(app, id("close"), "Close Tab", several, None::<&str>).map_err(err)?;
+            let others =
+                MenuItem::with_id(app, id("close-others"), "Close Other Tabs", several, None::<&str>).map_err(err)?;
+            let menu = Menu::with_items(app, &[&new, &duplicate, &reload, &sep, &close, &others]).map_err(err)?;
+            menu.popup_at(window.clone(), at).map_err(err)
+        }
+        // a narrow window: every app menu in one
+        "all" => {
+            let menus: Vec<Submenu<Wry>> = state(app).lock().topbar_menus.iter().map(|(_, m)| m.clone()).collect();
+            let items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> =
+                menus.iter().map(|m| m as &dyn tauri::menu::IsMenuItem<Wry>).collect();
+            let menu = Menu::with_items(app, &items).map_err(err)?;
+            menu.popup_at(window.clone(), at).map_err(err)
+        }
+        _ => {
+            let menu = state(app)
+                .lock()
+                .topbar_menus
+                .iter()
+                .find(|(id, _)| *id == which)
+                .map(|(_, m)| m.clone())
+                .ok_or("no such menu")?;
+            menu.popup_at(window.clone(), at).map_err(err)
+        }
+    }
+}
+
+/// `tab-ctx:<action>:<label>`: a tab's context menu (the label is checked against the tabs).
+fn on_tab_menu(app: &AppHandle, rest: &str) {
+    let Some((action, label)) = rest.split_once(':') else {
+        return;
+    };
+    if state(app).lock().tabs.index(label).is_none() {
+        return;
+    }
+    let (h, action, label) = (app.clone(), action.to_string(), label.to_string());
+    // not on the main thread: a tab's webview may be built
+    tauri::async_runtime::spawn(async move {
+        match action.as_str() {
+            "new" => crate::tabs::open_new(&h),
+            "duplicate" => crate::tabs::duplicate(&h, &label),
+            "reload" => {
+                if let Some(w) = tauri::Manager::get_webview(&h, &label).filter(|w| shell::is_app_window(w.label())) {
+                    let _ = w.reload();
+                }
+            }
+            "close" => crate::tabs::close(&h, &label),
+            "close-others" => crate::tabs::close_others(&h, &label),
+            _ => {}
+        }
+    });
+}
+
 /// Every menu event of the app menu (tray items are handled in `tray.rs`).
 pub fn on_menu_event(app: &AppHandle, id: &str) {
     if let Some(server) = id.strip_prefix(SERVER_PICK) {
         pick_server(app, server);
+        return;
+    }
+    if let Some(rest) = id.strip_prefix(TAB_MENU) {
+        on_tab_menu(app, rest);
         return;
     }
     let Some(action) = MenuAction::from_id(id) else {
@@ -488,24 +616,35 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
         MenuAction::QuickCapture => crate::capture::open_quick_capture(app, None),
         MenuAction::QuickSwitcher => crate::popup::show(app, crate::popup::Popup::Switcher),
         MenuAction::VoiceCapture => crate::voice::start_from_menu(app),
-        MenuAction::NewWindow => {
-            let current = shell::target_window(app).and_then(|w| w.url().ok());
-            let origin = state(app).lock().current_origin();
-            if let Some(origin) = origin {
-                let url = current
-                    .filter(|u| origin.contains(u))
-                    .unwrap_or_else(|| origin.join("/dashboard"));
-                // not on the main thread (a webview built there can deadlock on Windows)
-                let h = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = shell::open_app_window(&h, url) {
-                        log::info!("no new window: {e}");
-                    }
-                });
-            }
+        // not on the main thread (a webview built there can deadlock on Windows)
+        MenuAction::NewTab if shell::in_app(app) => {
+            let h = app.clone();
+            tauri::async_runtime::spawn(async move { crate::tabs::open_new(&h) });
         }
+        MenuAction::ReopenTab if shell::in_app(app) => {
+            let h = app.clone();
+            tauri::async_runtime::spawn(async move { crate::tabs::reopen_closed(&h) });
+        }
+        MenuAction::CloseTab | MenuAction::NextTab | MenuAction::PreviousTab if shell::in_app(app) => {
+            let h = app.clone();
+            tauri::async_runtime::spawn(async move {
+                match action {
+                    MenuAction::CloseTab => {
+                        let active = state(&h).lock().tabs.active.clone();
+                        crate::tabs::close(&h, &active);
+                    }
+                    MenuAction::NextTab => crate::tabs::cycle(&h, 1),
+                    _ => crate::tabs::cycle(&h, -1),
+                }
+            });
+        }
+        MenuAction::NewTab
+        | MenuAction::CloseTab
+        | MenuAction::ReopenTab
+        | MenuAction::NextTab
+        | MenuAction::PreviousTab => {}
         MenuAction::Back | MenuAction::Forward => {
-            if let Some(w) = shell::target_window(app).filter(|_| shell::in_app(app)) {
+            if let Some(w) = shell::active_tab(app).filter(|_| shell::in_app(app)) {
                 let _ = w.eval(if action == MenuAction::Back {
                     "history.back()"
                 } else {
@@ -514,7 +653,7 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
             }
         }
         MenuAction::Reload => {
-            if let Some(w) = shell::target_window(app) {
+            if let Some(w) = shell::active_tab(app) {
                 let _ = w.reload();
             }
         }
@@ -525,8 +664,8 @@ pub fn on_menu_event(app: &AppHandle, id: &str) {
             let Some((command, key)) = action.web_command() else {
                 return;
             };
-            if let Some(w) = shell::target_window(app).filter(|_| shell::in_app(app)) {
-                let _ = w.set_focus();
+            if let Some(w) = shell::active_tab(app).filter(|_| shell::in_app(app)) {
+                shell::focus_main(app);
                 let _ = w.eval(web_command_script(command, key));
             }
         }
@@ -591,7 +730,12 @@ mod tests {
         let mut seen = Vec::new();
         for a in MenuAction::ALL {
             if let Some(acc) = a.accelerator() {
-                assert!(acc.starts_with("CmdOrCtrl+"), "{acc}");
+                // switching tabs is ⌃Tab on every platform (⌘Tab is the macOS app switcher)
+                let tab_switch = matches!(a, MenuAction::NextTab | MenuAction::PreviousTab);
+                assert!(
+                    acc.starts_with("CmdOrCtrl+") || (tab_switch && acc.starts_with("Ctrl+")),
+                    "{acc}"
+                );
                 assert!(!seen.contains(&acc), "{acc} used twice");
                 seen.push(acc);
             }

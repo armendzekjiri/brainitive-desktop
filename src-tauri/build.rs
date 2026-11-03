@@ -22,6 +22,15 @@ fn main() {
         // the "Please update" screen (BRAI-373)
         "check_for_update",
         "restart_to_update",
+        // the main window's top bar (capabilities/topbar.json)
+        "topbar_view",
+        "topbar_select",
+        "topbar_close",
+        "topbar_new_tab",
+        "topbar_move",
+        "topbar_nav",
+        "topbar_menu",
+        "topbar_window",
         "brainitive_notify",
         "brainitive_set_badge",
         "brainitive_open_external",

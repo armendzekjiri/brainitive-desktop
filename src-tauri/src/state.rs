@@ -151,6 +151,10 @@ pub struct Inner {
     pub focused_app_window: Option<String>,
     /// Counter for `app-<n>` labels.
     pub app_window_seq: u32,
+    /// The tabs of the main window (`tabs.rs`).
+    pub tabs: crate::tabs::Tabs,
+    /// The app menus the top bar opens (Windows / Linux): id → submenu.
+    pub topbar_menus: Vec<(&'static str, Submenu<Wry>)>,
     /// Popup label → whether an app window had the focus before it opened.
     pub popup_return: HashMap<String, bool>,
     /// Registered global shortcuts: shortcut id → what it does.
@@ -238,6 +242,8 @@ impl AppState {
                 start_hidden: false,
                 focused_app_window: None,
                 app_window_seq: 0,
+                tabs: crate::tabs::Tabs::default(),
+                topbar_menus: Vec::new(),
                 popup_return: HashMap::new(),
                 hotkeys: HashMap::new(),
                 capture_prefill: None,

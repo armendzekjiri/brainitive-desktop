@@ -2,7 +2,8 @@
 
 Brainitive Desktop is a **Tauri 2** shell: a main window that shows either a few bundled
 screens (connect a server, sign in) or the user's Brainitive server — the full web app, loaded
-remotely — plus extra app windows with pages of that server, and small **bundled native windows**
+remotely — in **tabs** under a bundled top bar (Windows 11 Notepad style: tabs in the title bar
+row, the app menus below), and small **bundled native windows**
 (quick capture, quick switcher, New task, settings, the offline view, the voice-capture indicator) that talk to the server only through Rust. The native
 layer adds what a browser tab can't: system-browser sign-in with keychain storage, deep links,
 native menus, global shortcuts, a tray / menu-bar icon, native notifications and the badge, a
@@ -247,8 +248,10 @@ main screens starts with `commands::ensure_main_screen` (codex review 8). The us
 
 | Label | Shows | Data store | IPC |
 |---|---|---|---|
-| `main` | bundled screens, then the server | the server's own (`store_id`) | local screens: `capabilities/local.json`; server origin: the 4 bridge commands |
-| `app-<n>` | a page of the current server (File → New Window, a same-origin `window.open` / `target=_blank`, attachments) | the main window's (same cookies) | the 4 bridge commands (notify / badge are ignored from these: no duplicates) |
+| window `main` | one frameless OS window (macOS: overlay title bar) holding the webviews below (Tauri multi-webview, the `unstable` feature) | — | — |
+| webview `topbar` | `topbar.html`: tabs, +, window controls (row 1), File / Edit / View / Go / Server / Help as native popup menus, ← → ⟳, the server (row 2); 76 px | default | `capabilities/topbar.json` (by webview label) |
+| webview `main` | the first tab: bundled screens, then the server | the server's own (`store_id`) | local screens: `capabilities/local.json` (by webview label); server origin: the 4 bridge commands |
+| webview `app-<n>` | a further tab: a page of the current server (Ctrl+T / +, a same-origin `window.open` / `target=_blank`, attachments, restored tabs) | the main tab's (same cookies) | the 4 bridge commands (notify / badge are ignored from these: no duplicates) |
 | `capture` | `capture.html` | default | `capabilities/capture.json` |
 | `switcher` | `switcher.html` | default | `capabilities/switcher.json` |
 | `settings` | `settings.html` | default | `capabilities/settings.json` |
@@ -258,8 +261,17 @@ main screens starts with `commands::ensure_main_screen` (codex review 8). The us
 | `panel` | `panel.html` (the menu-bar panel) | default | `capabilities/panel.json` |
 | `task` | `task.html` (the New task window) | default | `capabilities/task.json` |
 
-App windows share one navigation / page-load guard, downloads handler, user agent and zoom level;
-switching server, signing out or forgetting closes the `app-<n>` windows. The bundled windows are
+Tabs share one navigation / page-load guard, downloads handler, user agent and zoom level;
+switching server, signing out or forgetting closes the `app-<n>` tabs. `tabs.rs` keeps the tab list
+(`state.tabs`): only the active tab's webview is shown, the others are hidden below the bar
+(`tabs::layout` on resize). Closing the `main` tab while others are open moves the neighbour's
+page into it (`tabs::plan_close`): `main` always exists (bundled screens, notifications, the
+badge). Each server's open tabs are saved as `path?query` in `settings.json` (`tabs`, keyed by
+store id; removed on sign-out / forget) and restored after its next sign-in, built when first
+selected; restored pages go through `links::resolve_deep_link_target` (never an auth page).
+`keys.rs` (Windows): a child WebView2 sends unhandled keys to its own host window, not to the one
+the app menu translates accelerators for, so each tab and the top bar watch WebView2's
+`AcceleratorKeyPressed` and run the menu's own shortcuts (Ctrl+T / W / Tab, Ctrl+R, Alt+1…9 …). The bundled windows are
 built on first use (from the async runtime: never inside a main-thread handler, which can deadlock
 on Windows), hidden instead of closed, centred, and the floating ones (capture, switcher, New task, the
 Brainitive key overlay) hide when they lose focus (the voice indicator floats too but stays: a recording goes on while the user
@@ -286,11 +298,12 @@ items, current checked, ⌃⌘1…⌃⌘9 on macOS / Alt+1…Alt+9 on Windows / 
 menu accelerators only, never global; Ctrl+Alt+digit would be AltGr+digit on Windows, which types
 `{ [ ] }` on many layouts, and the web editor uses Ctrl+Alt+1–6 / Ctrl+Shift+7–9; then Add
 Server…, Manage Servers…; rebuilt by `menu::refresh_servers`; Settings refuses a global shortcut on
-those keys) · New Issue ⌘N · New Doc ⌥⌘N · New Window ⇧⌘N
-· Brainitive Key… / Quick Capture / Quick Switcher / Voice Capture (their global shortcut shown; New task is in the tray and the panel, not the File menu, whose ⌘N is the web's New Issue) · Close Window ⌘W · Quit; Edit;
-View: Back ⌘[ · Forward ⌘] · Reload ⌘R · Actual Size ⌘0 · Zoom In ⌘= · Zoom Out ⌘-; Go: Search… ⌘K ·
+those keys) · New Issue ⌘N · New Doc ⌥⌘N · New Tab ⌘T · Close Tab ⌘W · Reopen Closed Tab ⇧⌘T
+· Brainitive Key… / Quick Capture / Quick Switcher / Voice Capture (their global shortcut shown; New task is in the tray and the panel, not the File menu, whose ⌘N is the web's New Issue) · Quit; Edit;
+View: Back ⌘[ · Forward ⌘] · Reload ⌘R · Next Tab ⌃Tab · Previous Tab ⌃⇧Tab · Actual Size ⌘0 · Zoom In ⌘= · Zoom Out ⌘-; Go: Search… ⌘K ·
 Dashboard ⇧⌘H · My Work ⇧⌘M · Captures · Notifications · Account Settings; Server; Window (macOS);
-Help. `CmdOrCtrl` = Ctrl on Windows / Linux. Actions go to the app window focused last.
+Help. `CmdOrCtrl` = Ctrl on Windows / Linux. Actions go to the active tab. On Windows / Linux the
+OS menu bar is hidden: the top bar's buttons open these menus (`menu::popup_topbar_menu`).
 New issue / doc / search are web commands: the page first gets a cancelable
 `brainitive-desktop:command` event (`detail.command` = `new-issue` | `new-doc` | `search`); when
 nothing claims it, the web app's own ⌘. (palette, commands) / ⌘K (search) handler runs.

@@ -1,28 +1,29 @@
-//! The app windows: the main window (the bundled screens or the current server) and extra
-//! `app-<n>` windows with pages of the current server (BRAI-362). All of them use the server's
-//! own webview data store, the same navigation guard, remote IPC capability, downloads and user
-//! agent (BRAI-350 / BRAI-351).
+//! The main window: one frameless window with the bundled top bar (`tabs::TOPBAR`) and the tabs —
+//! the `main` webview (the bundled screens or the current server) and `app-<n>` webviews with
+//! pages of the current server (`tabs.rs`). Every tab uses the server's own webview data store,
+//! the same navigation guard, remote IPC capability, downloads and user agent (BRAI-350 / BRAI-351).
 
 #[cfg(not(target_os = "macos"))]
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use tauri::ipc::CapabilityBuilder;
-use tauri::webview::{NewWindowResponse, PageLoadEvent};
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
+use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Webview, WebviewUrl, Window, Wry};
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
 use crate::links::{self, Navigation};
 use crate::server::{self, ServerOrigin};
 use crate::state::{state, Phase, Rebuild};
+use crate::tabs::{self, BAR_HEIGHT, TOPBAR};
 use crate::version::APP_VERSION;
 
 pub const MAIN: &str = "main";
-/// Extra windows with pages of the current server: `app-1`, `app-2`, …
+/// Further tabs with pages of the current server: `app-1`, `app-2`, …
 pub const APP_WINDOW_PREFIX: &str = "app-";
 
-/// The main window or an `app-<n>` window (the windows that may show the server).
+/// The `main` tab or an `app-<n>` tab (the webviews that may show the server).
 pub fn is_app_window(label: &str) -> bool {
     label == MAIN
         || label
@@ -87,8 +88,30 @@ pub fn local_url(app: &AppHandle) -> Url {
     Url::parse(&format!("{}/", links::bundled_origin(cfg!(windows)))).expect("static url")
 }
 
-pub fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
-    app.get_webview_window(MAIN)
+/// The main window (the OS window holding the top bar and the tabs).
+pub fn main_window(app: &AppHandle) -> Option<Window> {
+    app.get_window(MAIN)
+}
+
+/// The `main` tab's webview (the bundled screens while not signed in).
+pub fn main_content(app: &AppHandle) -> Option<Webview> {
+    app.get_webview(MAIN)
+}
+
+/// The tab the user sees: where menu actions, deep links and the tray's pages go.
+pub fn active_tab(app: &AppHandle) -> Option<Webview> {
+    let active = state(app).lock().tabs.active.clone();
+    app.get_webview(&active)
+        .filter(|w| is_app_window(w.label()))
+        .or_else(|| main_content(app))
+}
+
+/// Every tab's webview (`main` + `app-<n>`), never the top bar.
+pub fn content_webviews(app: &AppHandle) -> Vec<Webview> {
+    app.webviews()
+        .into_values()
+        .filter(|w| is_app_window(w.label()))
+        .collect()
 }
 
 /// Shows the main window in front. A user action (tray, dock, menu, deep link, a second
@@ -99,6 +122,9 @@ pub fn focus_main(app: &AppHandle) {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        if let Some(tab) = active_tab(app) {
+            let _ = tab.set_focus();
+        }
     }
 }
 
@@ -110,8 +136,8 @@ fn reveal_main(app: &AppHandle) {
     }
 }
 
-/// "Brainitive — Work" / "Brainitive — Brainitive Cloud" (the server's name, `servers.rs`), also
-/// in the Server menu.
+/// "Brainitive — Work" / "Brainitive — Brainitive Cloud" (the server's name, `servers.rs`): the
+/// window title (taskbar, window switcher), the Server menu line and the top bar.
 pub fn refresh_title(app: &AppHandle) {
     let (title, label) = {
         let s = state(app);
@@ -129,16 +155,17 @@ pub fn refresh_title(app: &AppHandle) {
             None => ("Brainitive".to_string(), "Not connected".to_string()),
         }
     };
-    for w in app_windows(app) {
+    if let Some(w) = main_window(app) {
         let _ = w.set_title(&title);
     }
     let item = state(app).lock().server_menu_item.clone();
     if let Some(item) = item {
         let _ = item.set_text(label);
     }
+    tabs::changed(app);
 }
 
-/// Gives the current server's origin IPC access to the three bridge commands — nothing else.
+/// Gives the current server's origin IPC access to the four bridge commands — nothing else.
 /// Tauri cannot remove a capability at runtime, so an earlier server keeps its entry; the
 /// bridge commands therefore also check that the caller *is* the current server (bridge.rs).
 pub fn allow_bridge_for(app: &AppHandle, origin: &ServerOrigin) -> tauri::Result<()> {
@@ -150,11 +177,11 @@ pub fn allow_bridge_for(app: &AppHandle, origin: &ServerOrigin) -> tauri::Result
             return Ok(());
         }
     }
-    // never for bundled content (`local(false)`); the main window and the `app-<n>` windows
+    // never for bundled content (`local(false)`); the tabs only — by webview label, not by
+    // window: the main window also holds the top bar
     let mut capability = CapabilityBuilder::new(id)
         .remote(origin.capability_pattern())
         .local(false)
-        .windows([MAIN.to_string(), format!("{APP_WINDOW_PREFIX}*")])
         .webviews([MAIN.to_string(), format!("{APP_WINDOW_PREFIX}*")]);
     for permission in BRIDGE_PERMISSIONS {
         capability = capability.permission(permission);
@@ -162,8 +189,8 @@ pub fn allow_bridge_for(app: &AppHandle, origin: &ServerOrigin) -> tauri::Result
     app.add_capability(capability)
 }
 
-/// Shows a bundled screen (the main window keeps whatever data store it has). Extra app
-/// windows close: they belong to a session that just ended or is being switched.
+/// Shows a bundled screen in the `main` tab (the window keeps whatever data store it has). The
+/// other tabs close: they belong to a session that just ended or is being switched.
 pub fn show_local(app: &AppHandle, phase: Phase, notice: Option<crate::state::Notice>) {
     close_app_windows(app);
     {
@@ -182,15 +209,16 @@ pub fn show_local(app: &AppHandle, phase: Phase, notice: Option<crate::state::No
         }
     }
     crate::tray::reset(app);
+    tabs::changed(app);
     let local = local_url(app);
-    match main_window(app) {
+    match main_content(app) {
         Some(w) => {
             let on_local = w
                 .url()
                 .map(|u| links::origin_key(&u) == links::origin_key(&local))
                 .unwrap_or(false);
             if on_local {
-                let _ = tauri::Emitter::emit_to(&w, MAIN, "desktop://changed", ());
+                let _ = app.emit_to(tauri::EventTarget::webview(MAIN), "desktop://changed", ());
             } else {
                 grant_local(app, MAIN, &local);
                 let _ = w.navigate(local);
@@ -200,7 +228,8 @@ pub fn show_local(app: &AppHandle, phase: Phase, notice: Option<crate::state::No
     }
 }
 
-/// Opens `url` of `origin` in the main window, rebuilding it when it uses another server's store.
+/// Opens `url` of `origin` in the `main` tab, rebuilding the window when it uses another
+/// server's store; a freshly built window gets the server's saved tabs back.
 pub fn enter_app(app: &AppHandle, origin: &ServerOrigin, url: Url) {
     if let Err(e) = allow_bridge_for(app, origin) {
         log::error!("could not add the remote capability: {e}");
@@ -222,9 +251,13 @@ pub fn enter_app(app: &AppHandle, origin: &ServerOrigin, url: Url) {
         inner.update = None;
         inner.reconnect_attempts = 0;
     }
-    open_main(app, origin.store_id(), WebviewUrl::External(url));
+    open_main(app, origin.store_id(), WebviewUrl::External(url.clone()));
+    if let Some(tab) = state(app).lock().tabs.get_mut(MAIN) {
+        tab.url = Some(url);
+    }
     refresh_title(app);
     reveal_main(app);
+    tabs::restore(app);
     // signed in: the tray polls now (and syncs the offline data); the quick captures that
     // waited are sent
     crate::offline::on_enter_app(app);
@@ -233,18 +266,21 @@ pub fn enter_app(app: &AppHandle, origin: &ServerOrigin, url: Url) {
     tauri::async_runtime::spawn(async move { crate::capture::flush(&handle).await });
 }
 
-/// Navigates the main window, or (re)builds it when the data store differs.
+/// Navigates the `main` tab, or (re)builds the window when the data store differs.
 pub fn open_main(app: &AppHandle, store: [u8; 16], url: WebviewUrl) {
     let existing = main_window(app);
     let current_store = state(app).lock().window_store;
     match existing {
-        Some(w) if current_store == Some(store) => {
+        Some(_) if current_store == Some(store) => {
             let target = match &url {
                 WebviewUrl::External(u) => u.clone(),
                 _ => local_url(app),
             };
             grant_local(app, MAIN, &target);
-            let _ = w.navigate(target);
+            if let Some(main) = main_content(app) {
+                let _ = main.navigate(target);
+            }
+            let _ = tabs::select(app, MAIN);
         }
         Some(w) => {
             close_app_windows(app);
@@ -254,7 +290,7 @@ pub fn open_main(app: &AppHandle, store: [u8; 16], url: WebviewUrl) {
                 inner.rebuild = Some(Rebuild { store, url });
                 inner.rebuilding = true;
             }
-            // continued in `on_main_destroyed` once the old webview is gone
+            // continued in `on_main_destroyed` once the old webviews are gone
             let _ = w.destroy();
         }
         None => {
@@ -284,32 +320,108 @@ pub fn on_main_destroyed(app: &AppHandle) {
     }
 }
 
-fn build_main(app: &AppHandle, store: [u8; 16], url: WebviewUrl) -> tauri::Result<WebviewWindow> {
+/// The main window: frameless on Windows / Linux (the top bar draws the controls), the title
+/// bar's traffic lights over the top bar on macOS; the top bar, then the `main` tab.
+fn build_main(app: &AppHandle, store: [u8; 16], url: WebviewUrl) -> tauri::Result<Window> {
     // launched at login with "start hidden": the window exists but stays in the tray
     let visible = !state(app).lock().start_hidden;
-    let window = build_app_window(app, MAIN, store, url, visible)?;
-    state(app).lock().window_store = Some(store);
+    let builder = tauri::window::WindowBuilder::new(app, MAIN)
+        .title(window_title(app))
+        .inner_size(1280.0, 840.0)
+        .min_inner_size(720.0, 500.0)
+        .visible(visible);
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.decorations(false).shadow(true);
+    let window = builder.build()?;
+    let _ = window.set_background_color(Some(bar_color(dark_theme(&window))));
+    // Windows / Linux: the app menu opens from the top bar's buttons (its shortcuts still work)
+    #[cfg(not(target_os = "macos"))]
+    let _ = window.hide_menu();
+
+    {
+        let s = state(app);
+        let mut inner = s.lock();
+        inner.tabs = tabs::Tabs::default();
+        inner.window_store = Some(store);
+    }
+    let size = window.inner_size()?.to_logical::<f64>(window.scale_factor()?);
+    let dark = dark_theme(&window);
+    let bar = window.add_child(
+        topbar_builder(app).background_color(bar_color(dark)),
+        LogicalPosition::new(0.0, 0.0),
+        LogicalSize::new(size.width, BAR_HEIGHT),
+    )?;
+    crate::keys::attach(app, &bar);
+    let main = window.add_child(
+        tab_builder(app, MAIN, store, url)?.background_color(page_color(dark)),
+        LogicalPosition::new(0.0, BAR_HEIGHT),
+        LogicalSize::new(size.width, (size.height - BAR_HEIGHT).max(0.0)),
+    )?;
+    crate::keys::attach(app, &main);
+    apply_zoom(app);
     Ok(window)
 }
 
-/// An app window (main or `app-<n>`) with the server's data store and every guard.
-fn build_app_window(
-    app: &AppHandle,
-    label: &str,
-    store: [u8; 16],
-    url: WebviewUrl,
-    visible: bool,
-) -> tauri::Result<WebviewWindow> {
+fn dark_theme(window: &Window) -> bool {
+    window.theme().map(|t| t == tauri::Theme::Dark).unwrap_or(false)
+}
+
+/// What a tab paints before its page does: the web app's background, so a new tab never
+/// flashes white in dark mode.
+fn page_color(dark: bool) -> tauri::window::Color {
+    if dark {
+        tauri::window::Color(0x18, 0x21, 0x2a, 0xff)
+    } else {
+        tauri::window::Color(0xff, 0xff, 0xff, 0xff)
+    }
+}
+
+/// The top bar's backdrop (`topbar.css` `--backdrop`).
+fn bar_color(dark: bool) -> tauri::window::Color {
+    if dark {
+        tauri::window::Color(0x1c, 0x1c, 0x1c, 0xff)
+    } else {
+        tauri::window::Color(0xee, 0xee, 0xee, 0xff)
+    }
+}
+
+/// The top bar: a bundled page with its own capability (`capabilities/topbar.json`) and the
+/// bundled windows' navigation guard.
+fn topbar_builder(app: &AppHandle) -> WebviewBuilder<Wry> {
+    let nav = app.clone();
+    let popup = app.clone();
+    WebviewBuilder::new(TOPBAR, WebviewUrl::App("topbar.html".into()))
+        .disable_drag_drop_handler()
+        .on_navigation(
+            move |url| match links::decide_local_navigation(url, &local_origins(&nav)) {
+                Navigation::Allow => true,
+                Navigation::External(url) => {
+                    open_external(&nav, &url);
+                    false
+                }
+                _ => false,
+            },
+        )
+        .on_new_window(move |url, _| {
+            if links::external_url(url.as_str()).is_some() {
+                open_external(&popup, &url);
+            }
+            NewWindowResponse::Deny
+        })
+}
+
+/// A tab (`main` or `app-<n>`) with the server's data store and every guard.
+fn tab_builder(app: &AppHandle, label: &str, store: [u8; 16], url: WebviewUrl) -> tauri::Result<WebviewBuilder<Wry>> {
     let nav = app.clone();
     let nav_label = label.to_string();
     let load = app.clone();
     let popup = app.clone();
     let download = app.clone();
-    let (width, height) = if label == MAIN {
-        (1280.0, 840.0)
-    } else {
-        (1100.0, 780.0)
-    };
+    let titles = app.clone();
 
     // a new webview: its first load is the app's own
     {
@@ -318,36 +430,60 @@ fn build_app_window(
         inner.committed.remove(label);
         inner.native_navigation.remove(label);
     }
-    let builder = WebviewWindowBuilder::new(app, label, url)
-        .title(window_title(app))
-        .inner_size(width, height)
-        .min_inner_size(720.0, 500.0)
-        .visible(visible)
+    let builder = WebviewBuilder::new(label, url)
         .user_agent(&user_agent())
         // HTML5 drag & drop (boards, Gantt, file drops from Finder / Explorer) must reach the
         // page, not Tauri (BRAI-363); a file dropped elsewhere can't navigate (`file:` blocked)
         .disable_drag_drop_handler()
         .enable_clipboard_access()
         .on_navigation(move |url| on_navigation(&nav, &nav_label, url))
-        .on_page_load(move |window, payload| on_page_load(&load, &window, payload.url(), payload.event()))
+        .on_page_load(move |webview, payload| on_page_load(&load, &webview, payload.url(), payload.event()))
         .on_new_window(move |url, _features| {
             on_new_window(&popup, url);
             NewWindowResponse::Deny
         })
+        .on_document_title_changed(move |webview, title| tabs::on_title(&titles, webview.label(), title))
         .on_download(move |_webview, event| crate::downloads::on_download(&download, event));
 
-    // macOS 26: the server's pages start below the title bar instead of scrolling under it
     #[cfg(target_os = "macos")]
-    let builder = builder.title_bar_style(TITLE_BAR).data_store_identifier(store);
+    let builder = builder.data_store_identifier(store);
     #[cfg(not(target_os = "macos"))]
     let builder = builder.data_directory(webview_data_dir(app, &store)?);
+    Ok(builder)
+}
 
-    let window = builder.build()?;
+/// Builds the webview of tab `label` (in the tab list already) with `url`, hidden, below the bar.
+pub fn build_tab(app: &AppHandle, label: &str, url: Url) -> Result<(), String> {
+    let window = main_window(app).ok_or("no main window")?;
+    let store = state(app).lock().window_store.ok_or("no data store")?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let size = window.inner_size().map_err(|e| e.to_string())?.to_logical::<f64>(scale);
+    let builder = tab_builder(app, label, store, WebviewUrl::External(url))
+        .map_err(|e| e.to_string())?
+        .background_color(page_color(dark_theme(&window)));
+    let webview = window
+        .add_child(
+            builder,
+            LogicalPosition::new(0.0, BAR_HEIGHT),
+            LogicalSize::new(size.width, (size.height - BAR_HEIGHT).max(0.0)),
+        )
+        .map_err(|e| e.to_string())?;
+    crate::keys::attach(app, &webview);
+    let _ = webview.hide();
     let zoom = state(app).lock().settings.preferences.zoom;
     if (zoom - 1.0).abs() > f64::EPSILON {
-        let _ = window.set_zoom(zoom);
+        let _ = webview.set_zoom(zoom);
     }
-    Ok(window)
+    Ok(())
+}
+
+fn apply_zoom(app: &AppHandle) {
+    let zoom = state(app).lock().settings.preferences.zoom;
+    if (zoom - 1.0).abs() > f64::EPSILON {
+        for w in content_webviews(app) {
+            let _ = w.set_zoom(zoom);
+        }
+    }
 }
 
 fn window_title(app: &AppHandle) -> String {
@@ -359,68 +495,52 @@ fn window_title(app: &AppHandle) -> String {
     }
 }
 
-/// Whether the app windows show the server (not a bundled screen).
+/// Whether the tabs show the server (not a bundled screen).
 pub fn in_app(app: &AppHandle) -> bool {
     state(app).lock().phase == Phase::InApp
 }
 
-/// Every app window (main + `app-<n>`).
-pub fn app_windows(app: &AppHandle) -> Vec<WebviewWindow> {
-    app.webview_windows()
-        .into_iter()
-        .filter(|(label, _)| is_app_window(label))
-        .map(|(_, w)| w)
-        .collect()
-}
-
-/// Whether one of the app windows has the keyboard focus (the app is in front).
+/// Whether the main window has the keyboard focus (the app is in front).
 pub fn app_window_focused(app: &AppHandle) -> bool {
-    app_windows(app).iter().any(|w| w.is_focused().unwrap_or(false))
+    main_window(app).is_some_and(|w| w.is_focused().unwrap_or(false))
 }
 
-/// Where menu actions go: the app window focused last, else the main window.
-pub fn target_window(app: &AppHandle) -> Option<WebviewWindow> {
-    let last = state(app).lock().focused_app_window.clone();
-    last.and_then(|label| app.get_webview_window(&label))
-        .or_else(|| main_window(app))
-}
-
-/// "New Window" / a same-origin `window.open`: a page of the current server in an extra window
-/// with the main window's data store (same cookies) and the same rules.
-pub fn open_app_window(app: &AppHandle, url: Url) -> Result<WebviewWindow, String> {
-    let (store, label) = {
-        let s = state(app);
-        let mut inner = s.lock();
-        let origin = inner.current_origin().ok_or("not connected")?;
-        if inner.phase != Phase::InApp {
-            return Err("not signed in".into());
-        }
-        if !origin.contains(&url) {
-            return Err("not a page of this server".into());
-        }
-        // the main window must already use this server's store (it holds the session cookie)
-        if inner.window_store != Some(origin.store_id()) {
-            return Err("the main window is not on this server".into());
-        }
-        inner.app_window_seq = (inner.app_window_seq % 999_999) + 1;
-        let label = format!("{APP_WINDOW_PREFIX}{}", inner.app_window_seq);
-        (origin.store_id(), label)
+/// Gives the keyboard back to the page when the main window is on screen (a popup closed).
+pub fn refocus_active_tab(app: &AppHandle) -> bool {
+    let Some(w) = main_window(app).filter(|w| w.is_visible().unwrap_or(false)) else {
+        return false;
     };
-    let window = build_app_window(app, &label, store, WebviewUrl::External(url), true).map_err(|e| e.to_string())?;
-    let _ = window.set_focus();
-    Ok(window)
+    let _ = w.set_focus();
+    if let Some(tab) = active_tab(app) {
+        let _ = tab.set_focus();
+    }
+    true
 }
 
-/// Closes the extra app windows (server switched, signed out, forgotten).
+/// Closes every tab but `main` (server switched, signed out, forgotten). Not saved: the server's
+/// saved tabs come back with its next sign-in.
 pub fn close_app_windows(app: &AppHandle) {
-    for w in app_windows(app) {
+    for w in content_webviews(app) {
         if w.label() != MAIN {
-            let _ = w.destroy();
+            let _ = w.close();
         }
     }
+    {
+        let s = state(app);
+        let mut inner = s.lock();
+        // another session: its closed tabs don't come back either
+        inner.tabs = tabs::Tabs::default();
+        inner.committed.retain(|label, _| label == MAIN);
+        inner.native_navigation.retain(|label, _| label == MAIN);
+        inner.focused_app_window = None;
+    }
+    if let Some(main) = main_content(app) {
+        let _ = main.show();
+    }
+    tabs::changed(app);
 }
 
-/// Opens a page of the current server in the focused app window (menus, tray).
+/// Opens a page of the current server in the active tab (menus, tray).
 pub fn open_page(app: &AppHandle, path: &str) {
     let Some(origin) = state(app).lock().current_origin() else {
         focus_main(app);
@@ -433,15 +553,13 @@ pub fn open_page(app: &AppHandle, path: &str) {
     navigate_to(app, &origin, url);
 }
 
-/// Shows `url` (a page of `origin`): in the focused app window when signed in, else after the
-/// stored sign-in is restored.
+/// Shows `url` (a page of `origin`): in the active tab when signed in, else after the stored
+/// sign-in is restored.
 pub fn navigate_to(app: &AppHandle, origin: &ServerOrigin, url: Url) {
     if in_app(app) {
-        if let Some(w) = target_window(app) {
-            let _ = w.unminimize();
-            let _ = w.show();
-            let _ = w.set_focus();
-            let _ = w.navigate(url);
+        if let Some(tab) = active_tab(app) {
+            focus_main(app);
+            let _ = tab.navigate(url);
             return;
         }
     }
@@ -460,7 +578,7 @@ pub fn navigate_to(app: &AppHandle, origin: &ServerOrigin, url: Url) {
     });
 }
 
-/// View → Actual Size / Zoom In / Zoom Out: one level for every app window, remembered.
+/// View → Actual Size / Zoom In / Zoom Out: one level for every tab, remembered.
 pub fn zoom(app: &AppHandle, direction: i8) {
     let zoom = {
         let s = state(app);
@@ -470,7 +588,7 @@ pub fn zoom(app: &AppHandle, direction: i8) {
         inner.save_settings();
         next
     };
-    for w in app_windows(app) {
+    for w in content_webviews(app) {
         let _ = w.set_zoom(zoom);
     }
 }
@@ -563,7 +681,7 @@ fn on_navigation(app: &AppHandle, label: &str, url: &Url) -> bool {
     }
 }
 
-fn on_page_load(app: &AppHandle, window: &WebviewWindow, url: &Url, event: PageLoadEvent) {
+fn on_page_load(app: &AppHandle, window: &Webview, url: &Url, event: PageLoadEvent) {
     let instance = {
         let s = state(app);
         let mut inner = s.lock();
@@ -607,6 +725,7 @@ fn on_page_load(app: &AppHandle, window: &WebviewWindow, url: &Url, event: PageL
             if window.label() == MAIN {
                 state(app).lock().last_good = Some(url.clone());
             }
+            tabs::on_tab_page(app, window.label(), url);
         }
         links::PageLoad::Keep => {}
     }
@@ -616,13 +735,13 @@ fn on_new_window(app: &AppHandle, url: Url) {
     let instance = state(app).lock().current_origin();
     match instance {
         // "open in new tab" of a page of the server (an attachment, a link with target=_blank):
-        // an extra app window; the main window when that isn't possible
+        // a new tab; the active tab when that isn't possible (not on this handler's thread)
         Some(origin) if origin.contains(&url) => {
             let handle = app.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = open_app_window(&handle, url.clone()) {
-                    log::info!("new window refused ({e}), navigating instead");
-                    if let Some(w) = target_window(&handle) {
+                if let Err(e) = tabs::open(&handle, url.clone(), true) {
+                    log::info!("new tab refused ({e}), navigating instead");
+                    if let Some(w) = active_tab(&handle) {
                         let _ = w.navigate(url);
                     }
                 }
@@ -661,7 +780,7 @@ fn defer_navigate(app: &AppHandle, label: &str, url: Url) {
     let handle = app.clone();
     let label = label.to_string();
     tauri::async_runtime::spawn(async move {
-        if let Some(w) = handle.get_webview_window(&label) {
+        if let Some(w) = handle.get_webview(&label) {
             let _ = w.navigate(url);
         }
     });

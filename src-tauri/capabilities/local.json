@@ -1,9 +1,9 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "local",
-  "description": "The bundled screens (connect, sign-in) only: no `remote` entry, so a server's pages never get these. The server's origin gets the three bridge commands at runtime (shell::allow_bridge_for).",
+  "description": "The bundled screens (connect, sign-in) in the main window's `main` webview only (by webview label: the window also holds the top bar): no `remote` entry, so a server's pages never get these. The server's origin gets the three bridge commands at runtime (shell::allow_bridge_for).",
   "local": true,
-  "windows": ["main"],
+  "webviews": ["main"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",

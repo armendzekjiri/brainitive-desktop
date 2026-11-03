@@ -1,0 +1,103 @@
+/* Motion shared by every bundled page (connect screens, popups, the panel, the top bar).
+   Short and calm, Fluent-like: things fade and settle into place instead of popping in.
+   - `html.m-show`   the window was just shown: its content rises in (motion.ts → windowShown)
+   - `.m-in`         a view / section that was just swapped in (motion.ts → swapIn)
+   - `.m-stagger`    a list whose rows cascade in (motion.ts → stagger, `--i` per row)
+   Everything is off with the system's "reduce motion" setting. */
+
+:root {
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+    --t-fast: 120ms;
+    --t-med: 200ms;
+    --t-slow: 280ms;
+}
+
+/* hover / press feedback on every control */
+button,
+a,
+input,
+textarea,
+select,
+[role='tab'],
+[role='option'],
+[role='menuitem'] {
+    transition:
+        background-color var(--t-fast) ease,
+        border-color var(--t-fast) ease,
+        color var(--t-fast) ease,
+        box-shadow var(--t-med) ease,
+        opacity var(--t-fast) ease,
+        transform var(--t-fast) var(--ease-out);
+}
+
+button:not(:disabled):active {
+    transform: scale(0.97);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+    transition-duration: var(--t-fast);
+}
+
+@keyframes m-rise {
+    from {
+        opacity: 0;
+        transform: translateY(6px) scale(0.99);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@keyframes m-fade {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes m-slide {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+html.m-show body > * {
+    animation: m-rise var(--t-slow) var(--ease-out) both;
+}
+
+.m-in {
+    animation: m-slide var(--t-med) var(--ease-out) both;
+}
+
+.m-fade {
+    animation: m-fade var(--t-med) ease both;
+}
+
+.m-stagger > * {
+    animation: m-slide var(--t-med) var(--ease-out) both;
+    animation-delay: calc(min(var(--i, 0), 10) * 18ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 1ms !important;
+        animation-delay: 0ms !important;
+        transition-duration: 1ms !important;
+    }
+    button:not(:disabled):active {
+        transform: none;
+    }
+}

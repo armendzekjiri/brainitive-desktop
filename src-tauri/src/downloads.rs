@@ -385,7 +385,7 @@ fn ask_where(app: &AppHandle, pending: Pending) {
     if let Ok(dir) = app.path().download_dir() {
         dialog = dialog.set_directory(dir);
     }
-    if let Some(w) = crate::shell::target_window(app) {
+    if let Some(w) = crate::shell::main_window(app) {
         dialog = dialog.set_parent(&w);
     }
     let handle = app.clone();

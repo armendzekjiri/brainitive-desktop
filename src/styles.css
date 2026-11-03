@@ -264,3 +264,101 @@ input {
 [hidden] {
     display: none !important;
 }
+
+/* --- the start-up splash ("Connecting…"): the logo on the page colour and a thin progress line,
+   so going from here to the web app feels like one load instead of a card swap. Page colours
+   match the web app's (shell.rs page_color). */
+
+body[data-view='connecting'] {
+    background: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+    body[data-view='connecting'] {
+        background: #18212a;
+    }
+}
+
+body[data-view='connecting'] .card {
+    background: transparent;
+    border-color: transparent;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+body[data-view='connecting'] .brand {
+    flex-direction: column;
+    gap: 14px;
+    margin-bottom: 26px;
+}
+
+body[data-view='connecting'] .brand img {
+    width: 56px;
+    height: 56px;
+    animation: breathe 2.4s ease-in-out infinite;
+}
+
+body[data-view='connecting'] .brand span {
+    font-size: 15px;
+    letter-spacing: 0.02em;
+}
+
+body[data-view='connecting'] #view-connecting h1 {
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--muted);
+    margin: 14px 0 0;
+}
+
+body[data-view='connecting'] .spinner {
+    width: 160px;
+    height: 3px;
+    border: 0;
+    border-radius: 3px;
+    margin: 0 auto;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent) no-repeat,
+        var(--border);
+    background-size: 40% 100%, 100% 100%;
+    animation: progress 1.3s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@keyframes progress {
+    from {
+        background-position: -60% 0, 0 0;
+    }
+    to {
+        background-position: 160% 0, 0 0;
+    }
+}
+
+@keyframes breathe {
+    0%,
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.04);
+        opacity: 0.85;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    body[data-view='connecting'] .brand img,
+    body[data-view='connecting'] .spinner {
+        animation: none;
+    }
+}
+
+/* the cards of the other screens: softer, with depth */
+.card {
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 28px rgba(15, 23, 42, 0.07);
+}
+
+@media (prefers-color-scheme: dark) {
+    .card {
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 32px rgba(0, 0, 0, 0.35);
+    }
+}

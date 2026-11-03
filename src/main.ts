@@ -4,6 +4,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { animateWindow, swapIn } from './motion';
 
 type Phase = 'choose' | 'sign_in' | 'waiting' | 'connecting' | 'unreachable' | 'update_required' | 'in_app';
 
@@ -110,8 +111,14 @@ function errorMessage(e: unknown): string {
 }
 
 function show(view: View): void {
-    for (const v of views) $(`view-${v}`).hidden = v !== view;
+    // the new screen slides in; the others go at once (no two screens on top of each other)
+    for (const v of views) if (v !== view) $(`view-${v}`).hidden = true;
+    swapIn($(`view-${view}`));
+    // the start-up "Connecting…" is a splash, not a card (styles.css)
+    document.body.dataset.view = view;
 }
+
+animateWindow();
 
 function setText(selector: string, text: string): void {
     document.querySelectorAll<HTMLElement>(selector).forEach((el) => (el.textContent = text));

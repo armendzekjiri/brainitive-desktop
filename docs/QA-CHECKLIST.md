@@ -105,7 +105,7 @@ Two servers signed in (e.g. a self-hosted "Work" and Brainitive Cloud), a third 
 | 2A.13 Servers ▸ **Add Server…** while in a server; then **Back to <name>**. | Connect screen; back returns into the server without a sign-in. | [ ] | [ ] | [ ] |
 | 2A.14 Offline on server 1: tick a My Day item in the offline view, go online, switch to server 2 right away. | The tick is on server 1 (sent before the switch, or the next time server 1 is current) — never on server 2. | [ ] | [ ] | [ ] |
 | 2A.15 Quick capture offline on server 1, switch to server 2, go online. | The capture is not sent to server 2; it is sent after switching back to server 1. | [ ] | [ ] | [ ] |
-| 2A.16 Extra app windows (File → New Window) open, then switch. | They close (each window belongs to the current server). | [ ] | [ ] | [ ] |
+| 2A.16 Several tabs (File → New Tab) open, then switch. | The extra tabs close (each tab belongs to the current server); the other server's saved tabs come back when you switch back. | [ ] | [ ] | [ ] |
 | 2A.17 Settings → Shortcuts: record ⌃⌘3 for quick capture (macOS). | Refused: "These keys switch servers …". | [ ] | n/a | n/a |
 | 2A.18 Switch quickly twice (⌃⌘2 then ⌃⌘1 before the first finished). | Ends on server 1; no flash of server 2's app. | [ ] | [ ] | [ ] |
 
@@ -138,7 +138,7 @@ Use **File** on Windows and Linux where macOS shows the app menu (Settings, Quit
 | 4.1 Open Settings (⌘, / Ctrl+,). | Settings window opens; a second press focuses the same window. | [ ] | [ ] | [ ] |
 | 4.2 Press ⌘N (Ctrl+N) on a signed-in page. | The web's new-issue dialog opens. If the web has no hook for it, the web's command palette (⌘.) opens. No blank or error page. | [ ] | [ ] | [ ] |
 | 4.3 Press ⌥⌘N (Ctrl+Alt+N). | New doc, same rule as 4.2. | [ ] | [ ] | [ ] |
-| 4.4 Press ⇧⌘N (Ctrl+Shift+N). | A new app window with the same page, already signed in (no second sign-in). | [ ] | [ ] | [ ] |
+| 4.4 Press ⌘T (Ctrl+T), then ⌘W (Ctrl+W), then ⇧⌘T (Ctrl+Shift+T). | A new tab on the dashboard, already signed in; it closes; it comes back. ⌃Tab / ⌃⇧Tab cycle the tabs. | [ ] | [ ] | [ ] |
 | 4.5 Press ⌘W (Ctrl+W) in the main window. | The window closes; with "keep running in the tray" on the app keeps running. | [ ] | [ ] | [ ] |
 | 4.6 Navigate two pages, then press ⌘[ and ⌘] (Ctrl). | Back and Forward work; a menu item greys out when there is nothing to go to. | [ ] | [ ] | [ ] |
 | 4.7 Press ⌘R (Ctrl+R). | The current page reloads. | [ ] | [ ] | [ ] |
@@ -192,7 +192,7 @@ Settings → Shortcuts holds the key, the letters and the optional direct shortc
 | 4B.1 Settings: scroll down. | "GENERAL" and everything else stays below the title bar; the title bar is the page's colour (white / dark), no text behind "Settings". | [ ] | n/a | n/a |
 | 4B.2 Offline view: scroll the lists. | Nothing scrolls under the title bar; the strip matches the status bar (light and dark). | [ ] | n/a | n/a |
 | 4B.3 Switch light ↔ dark with Settings / Offline open. | The title bar strip follows the page. | [ ] | n/a | n/a |
-| 4B.4 Main window and New Window: scroll a long web page. | The page starts below the title bar; nothing shows behind the window title. Fullscreen still works. | [ ] | n/a | n/a |
+| 4B.4 Main window, first and second tab: scroll a long web page. | The page starts below the title bar; nothing shows behind the window title. Fullscreen still works. | [ ] | n/a | n/a |
 | 4B.5 Settings / Offline / main window on Windows and Linux. | Normal system title bars, unchanged. | n/a | [ ] | [ ] |
 
 ## 4C. New task
@@ -231,9 +231,9 @@ boards and one with a single board.
 
 | Step | Expected | macOS | Windows | Linux |
 |---|---|---|---|---|
-| 5.1 Open a page with a list, then ⇧⌘N (Ctrl+Shift+N). | A second window shows the same page; the two windows are independent. | [ ] | [ ] | [ ] |
-| 5.2 In the extra window, sign-in state. | Signed in already; no sign-in prompt. | [ ] | [ ] | [ ] |
-| 5.3 In a page, click a link that opens a new tab on the same server (for example an attachment). | Opens in an app window, not in the browser. | [ ] | [ ] | [ ] |
+| 5.1 Open a page with a list, right-click its tab → Duplicate. | A second tab shows the same page; the two tabs are independent. Restart the app: both tabs come back. | [ ] | [ ] | [ ] |
+| 5.2 In the second tab, sign-in state. | Signed in already; no sign-in prompt. | [ ] | [ ] | [ ] |
+| 5.3 In a page, click a link that opens a new tab on the same server (for example an attachment). | Opens in a new tab, not in the browser. | [ ] | [ ] | [ ] |
 | 5.4 In a page, click a link to another website that opens a new tab. | Opens in the default browser. The app windows do not change. | [ ] | [ ] | [ ] |
 | 5.5 Change zoom in one window (⌘=). | Every app window zooms. | [ ] | [ ] | [ ] |
 | 5.6 Move and resize the main window and an extra window, quit, start again. | Both come back at their last positions and sizes. | [ ] | [ ] | [ ] |

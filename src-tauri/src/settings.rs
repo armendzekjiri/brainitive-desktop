@@ -65,6 +65,10 @@ pub struct Settings {
     /// Unix seconds of the last update check that got an answer (BRAI-373, shown in Settings).
     #[serde(default)]
     pub last_update_check: Option<u64>,
+    /// The open tabs of each server (store id hex → pages as `path?query`), restored at the next
+    /// sign-in to that server; removed on sign-out and forget.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tabs: std::collections::BTreeMap<String, crate::tabs::SavedTabs>,
 }
 
 /// What the Settings window changes. Every field has a default, so older files still load.
@@ -351,6 +355,7 @@ impl Settings {
     pub fn forget(&mut self, origin: &ServerOrigin) {
         self.recent.retain(|r| &r.origin != origin);
         self.preferences.new_task.remove(origin.as_str());
+        self.tabs.remove(&crate::server::hex(&origin.store_id()));
         if self.current.as_ref() == Some(origin) {
             self.current = None;
         }
@@ -371,6 +376,7 @@ impl Settings {
     /// A sign-out of `origin` begins: marked until its local cleanup is done
     /// ([`Self::sign_out_done`]), so a crash or a refused deletion is retried at the next start.
     pub fn sign_out_started(&mut self, origin: &ServerOrigin) {
+        self.tabs.remove(&crate::server::hex(&origin.store_id()));
         if !self.pending_sign_outs.contains(origin) {
             self.pending_sign_outs.push(origin.clone());
         }

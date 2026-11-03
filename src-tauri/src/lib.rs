@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod downloads;
 pub mod flows;
 pub mod hotkeys;
+pub mod keys;
 pub mod leader;
 pub mod links;
 pub mod logging;
@@ -39,6 +40,7 @@ pub mod shortcuts;
 pub mod startup;
 pub mod state;
 pub mod switcher;
+pub mod tabs;
 #[cfg(test)]
 mod testing;
 pub mod tray;
@@ -85,6 +87,11 @@ pub fn run() {
             tauri_plugin_window_state::Builder::default()
                 // the bundled popups open centred; only app windows keep their size / position
                 .with_denylist(&popup::labels())
+                // never the frame: the main window draws its own title bar (`tabs.rs`), and a
+                // state saved by an older version would bring the system title bar back
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::DECORATIONS,
+                )
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
@@ -183,6 +190,14 @@ pub fn run() {
             new_task::task_open_app,
             new_task::task_resize,
             new_task::task_close,
+            tabs::topbar_view,
+            tabs::topbar_select,
+            tabs::topbar_close,
+            tabs::topbar_new_tab,
+            tabs::topbar_move,
+            tabs::topbar_nav,
+            tabs::topbar_menu,
+            tabs::topbar_window,
         ])
         .setup(|app| {
             // first: everything after this is logged, and a panic leaves a trace
@@ -291,11 +306,18 @@ pub fn run() {
             event: WindowEvent::Focused(focused),
             ..
         } => {
-            if focused && shell::is_app_window(&label) {
-                state(app).lock().focused_app_window = Some(label);
-            } else if !focused {
+            if !focused {
                 popup::on_focus_lost(app, &label);
             }
+        }
+        // the top bar and the tabs follow the window's size; the bar shows maximize / restore
+        RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. },
+            ..
+        } if label == shell::MAIN => {
+            tabs::layout(app);
+            tabs::changed(app);
         }
         RunEvent::WindowEvent {
             label,

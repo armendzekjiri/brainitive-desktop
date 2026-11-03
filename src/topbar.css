@@ -1,0 +1,517 @@
+/* The main window's top bar, Windows 11 Notepad style:
+   row 1 (40px, the title bar): tabs, +, window controls — on the window's backdrop colour;
+   row 2 (36px, the menu bar): menus, back / forward / reload, the server — on the same surface
+   as the active tab, which flows into it. Light and dark follow the system (dark is never a
+   white strip). */
+
+:root {
+    /* backdrop (title bar row) */
+    --backdrop: #eeeeee;
+    /* the active tab, the menu row and the page edge */
+    --layer: #f9f9f9;
+    --divider: #e1e1e1;
+    --hover: rgba(0, 0, 0, 0.05);
+    --press: rgba(0, 0, 0, 0.08);
+    --text: #1b1b1b;
+    --muted: #5d5d5d;
+    --faint: #8b8b8b;
+    --accent: #005fb8;
+    --online: #0f7b0f;
+    --offline: #c27c0e;
+    --close-hover: #c42b1c;
+    color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --backdrop: #1c1c1c;
+        --layer: #2b2b2b;
+        --divider: #3a3a3a;
+        --hover: rgba(255, 255, 255, 0.06);
+        --press: rgba(255, 255, 255, 0.09);
+        --text: #ffffff;
+        --muted: #c5c5c5;
+        --faint: #8a8a8a;
+        --accent: #60cdff;
+        --online: #6ccb5f;
+        --offline: #fce100;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--backdrop);
+    color: var(--text);
+    font: 12px/1 'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+}
+
+button {
+    font: inherit;
+    color: inherit;
+    border: 0;
+    background: none;
+    padding: 0;
+    margin: 0;
+    cursor: default;
+}
+
+button:focus-visible,
+.tab:focus-visible {
+    outline: 2px solid var(--text);
+    outline-offset: -2px;
+}
+
+svg {
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    flex: none;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+/* --- row 1: the title bar ----------------------------------------------------------------- */
+
+.titlebar {
+    display: flex;
+    align-items: stretch;
+    height: 40px;
+    padding-left: 8px;
+}
+
+.mac .titlebar {
+    padding-left: 80px; /* the traffic lights */
+}
+
+.logo {
+    align-self: center;
+    width: 16px;
+    height: 16px;
+    margin: 0 8px 0 6px;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+.mac .logo {
+    display: none;
+}
+
+.title {
+    align-self: center;
+    font-size: 12px;
+    color: var(--text);
+    white-space: nowrap;
+}
+
+.spacer {
+    flex: 1;
+    min-width: 40px;
+}
+
+/* --- tabs (as in Notepad) ----------------------------------------------------------------- */
+
+.tabs {
+    display: flex;
+    align-items: flex-end;
+    min-width: 0;
+    flex: 0 1 auto;
+    padding: 0 8px;
+    overflow-x: clip;
+    overflow-y: visible;
+}
+
+.tab {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    width: 240px;
+    min-width: 64px;
+    flex: 0 1 240px;
+    padding: 0 4px 0 12px;
+    border-radius: 8px 8px 0 0;
+    color: var(--text);
+}
+
+/* inactive tabs: a hover pill inside the tab's box, as in Notepad */
+.tab:not([aria-selected='true']):hover::after {
+    content: '';
+    position: absolute;
+    inset: 2px 2px 4px 2px;
+    border-radius: 6px;
+    background: var(--hover);
+    pointer-events: none;
+}
+
+.tab[aria-selected='true'] {
+    background: var(--layer);
+    z-index: 1;
+}
+
+/* the active tab's feet curve into the menu row */
+.tab[aria-selected='true']::before,
+.tab[aria-selected='true']::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    width: 8px;
+    height: 8px;
+    pointer-events: none;
+}
+
+.tab[aria-selected='true']::before {
+    left: -8px;
+    background: radial-gradient(circle at 0 0, transparent 7.5px, var(--layer) 8px);
+}
+
+.tab[aria-selected='true']::after {
+    right: -8px;
+    background: radial-gradient(circle at 100% 0, transparent 7.5px, var(--layer) 8px);
+}
+
+/* the thin divider between inactive tabs */
+.tab .divider {
+    position: absolute;
+    left: -1px;
+    top: 9px;
+    width: 1px;
+    height: 16px;
+    background: var(--divider);
+}
+
+.tab:first-child .divider,
+.tab[aria-selected='true'] .divider,
+.tab[aria-selected='true'] + .tab .divider,
+.tab:hover .divider,
+.tab:hover + .tab .divider {
+    display: none;
+}
+
+.tab .kind {
+    position: relative;
+    width: 16px;
+    height: 16px;
+    color: var(--muted);
+}
+
+.tab[aria-selected='true'] .kind {
+    color: var(--accent);
+}
+
+.tab .label {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 16px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 16px), transparent);
+    line-height: 1.4;
+}
+
+.tab .x {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 24px;
+    border-radius: 4px;
+    color: var(--text);
+    flex: none;
+}
+
+.tab .x svg {
+    width: 10px;
+    height: 10px;
+    stroke-width: 1.2;
+}
+
+.tab .x:hover {
+    background: var(--hover);
+}
+
+.tab .x:active {
+    background: var(--press);
+}
+
+.tabs.single .x {
+    visibility: hidden;
+}
+
+.tab.dragging {
+    z-index: 2;
+    opacity: 0.9;
+}
+
+.new-tab {
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-top: 4px;
+    border-radius: 6px;
+    color: var(--text);
+    flex: none;
+}
+
+.new-tab svg {
+    width: 14px;
+    height: 14px;
+}
+
+.new-tab:hover {
+    background: var(--hover);
+}
+
+.new-tab:active {
+    background: var(--press);
+}
+
+/* --- window controls (Windows / Linux) --------------------------------------------------- */
+
+.controls {
+    display: flex;
+    flex: none;
+}
+
+.ctl {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 40px;
+    color: var(--text);
+}
+
+.ctl svg {
+    width: 10px;
+    height: 10px;
+    stroke-width: 1;
+    stroke-linecap: butt;
+}
+
+.ctl:hover {
+    background: var(--hover);
+}
+
+.ctl:active {
+    background: var(--press);
+}
+
+.ctl.close:hover {
+    background: var(--close-hover);
+    color: #fff;
+}
+
+.ctl.close:active {
+    background: #b0281a;
+    color: #fff;
+}
+
+.linux .ctl {
+    width: 40px;
+}
+
+/* --- row 2: the menu bar ------------------------------------------------------------------ */
+
+.menubar {
+    display: flex;
+    align-items: center;
+    height: 36px;
+    padding: 0 8px 0 6px;
+    gap: 2px;
+    background: var(--layer);
+    border-bottom: 1px solid var(--divider);
+}
+
+.menus {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.menu-btn {
+    display: inline-flex;
+    align-items: center;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 5px;
+    color: var(--text);
+    font-size: 12px;
+}
+
+.menu-btn:hover,
+.menu-btn[aria-expanded='true'] {
+    background: var(--hover);
+}
+
+.menu-btn:active {
+    background: var(--press);
+}
+
+.menu-all {
+    display: none;
+    padding: 0 8px;
+}
+
+.compact .menus {
+    display: none;
+}
+
+.compact .menu-all {
+    display: inline-flex;
+}
+
+.mac .menus,
+.mac .menu-all {
+    display: none;
+}
+
+.nav {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 6px;
+    background: var(--divider);
+}
+
+.mac .sep {
+    display: none;
+}
+
+.icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 28px;
+    border-radius: 5px;
+    color: var(--muted);
+}
+
+.icon-btn:hover {
+    background: var(--hover);
+    color: var(--text);
+}
+
+.icon-btn:active {
+    background: var(--press);
+}
+
+.grow {
+    flex: 1;
+}
+
+.server {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 28px;
+    max-width: 240px;
+    padding: 0 8px 0 10px;
+    border-radius: 5px;
+    color: var(--text);
+}
+
+.server:hover {
+    background: var(--hover);
+}
+
+.server:active {
+    background: var(--press);
+}
+
+.server-name {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.server .caret {
+    width: 12px;
+    height: 12px;
+    color: var(--muted);
+}
+
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--online);
+    flex: none;
+}
+
+.dot.offline {
+    background: var(--offline);
+}
+
+/* the window controls and the tabs don't shrink when pressed (motion.css) */
+.ctl:active,
+.new-tab:active,
+.tab .x:active {
+    transform: none;
+}
+
+/* --- motion -------------------------------------------------------------------------------- */
+
+.tab {
+    transition: background-color 160ms ease, color 120ms ease;
+}
+
+.tab .kind {
+    transition: color 160ms ease;
+}
+
+.tab-enter {
+    animation: tab-open 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes tab-open {
+    from {
+        max-width: 0;
+        min-width: 0;
+        opacity: 0;
+    }
+    60% {
+        opacity: 1;
+    }
+    to {
+        max-width: 240px;
+        opacity: 1;
+    }
+}
+
+.server .dot {
+    transition: background-color 300ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .tab-enter {
+        animation: none;
+    }
+}

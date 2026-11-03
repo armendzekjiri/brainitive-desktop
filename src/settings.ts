@@ -4,6 +4,10 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { $, errorMessage, onShown } from './native';
+import { animateWindow } from './motion';
+
+// the window's content rises in each time it is shown (motion.css)
+animateWindow();
 
 interface Prefs {
     app_version: string;

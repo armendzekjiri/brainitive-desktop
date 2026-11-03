@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "topbar",
+  "description": "The main window's top bar (topbar.html, webview `topbar`) only: app menus, tabs, server, window controls. It gets tab labels, titles and icon kinds — never a token or a URL — and asks Rust for every change. Events: only `topbar://changed`, sent to this webview.",
+  "local": true,
+  "webviews": [
+    "topbar"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-topbar-view",
+    "allow-topbar-select",
+    "allow-topbar-close",
+    "allow-topbar-new-tab",
+    "allow-topbar-move",
+    "allow-topbar-nav",
+    "allow-topbar-menu",
+    "allow-topbar-window"
+  ]
+}

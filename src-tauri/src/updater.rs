@@ -576,10 +576,13 @@ fn ui_changed(app: &AppHandle) {
     crate::menu::refresh_update_item(app);
     crate::tray::refresh(app);
     let local_screen = state(app).lock().phase != crate::state::Phase::InApp;
-    if local_screen {
-        if let Some(w) = crate::shell::main_window(app) {
-            let _ = tauri::Emitter::emit_to(&w, crate::shell::MAIN, "desktop://changed", ());
-        }
+    if local_screen && crate::shell::main_content(app).is_some() {
+        let _ = tauri::Emitter::emit_to(
+            app,
+            tauri::EventTarget::webview(crate::shell::MAIN),
+            "desktop://changed",
+            (),
+        );
     }
 }
 

@@ -30,6 +30,7 @@ export default defineConfig({
                 leader: 'leader.html',
                 panel: 'panel.html',
                 task: 'task.html',
+                topbar: 'topbar.html',
             },
         },
     },

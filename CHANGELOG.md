@@ -31,14 +31,22 @@ The first stable release of Brainitive Desktop for macOS, Windows and Linux.
 
 ### Windows & menus
 
+- **Tabs and a modern title bar**: the main window has tabs in its title bar and the menus in a
+  row below (Windows 11 Notepad style; light and dark follow the system, no white menu bar).
+  **New Tab** (⌘T / +), **Close Tab** (⌘W, middle-click), **Reopen Closed Tab** (⇧⌘T),
+  **Next / Previous Tab** (⌃Tab / ⌃⇧Tab), drag to reorder, right-click for Duplicate / Reload /
+  Close others. Each server's open tabs come back after a restart. Links that open a new tab
+  (e.g. attachments) open in a tab with the same sign-in and the same security rules.
 - **Menus and shortcuts** (BRAI-362): full app menu with ⌘ on macOS / Ctrl on Windows and Linux:
-  Settings (⌘,), New Issue (⌘N), New Doc (⌥⌘N), New Window (⇧⌘N), Back / Forward (⌘[ / ⌘]), Reload,
+  Settings (⌘,), New Issue (⌘N), New Doc (⌥⌘N), Back / Forward (⌘[ / ⌘]), Reload,
   zoom (⌘0 / ⌘= / ⌘-, remembered), Search (⌘K), Dashboard, My Work, Captures, Notifications,
-  Account Settings. **Open in a new window**: pages of the server in extra windows with the same
-  sign-in and the same security rules (also for links that open a new tab, e.g. attachments).
+  Account Settings. On Windows and Linux the menus open from the title bar's File / Edit / View /
+  Go / Server / Help buttons (☰ when the window is narrow); every shortcut works in every tab.
+- **Motion**: windows and popups ease in, screens slide, lists cascade, the start-up screen is a
+  calm splash; all of it off with the system's "reduce motion".
 - **Files** (BRAI-363): downloads ask where to save them (native Save dialog, can be turned off);
-  drag & drop of files from Finder / Explorer into the app keeps working; attachments open in an
-  app window.
+  drag & drop of files from Finder / Explorer into the app keeps working; attachments open in a
+  tab.
 - **Launch at login** (BRAI-364): optional, off by default; can start in the menu bar / tray.
 - **Settings window**: global shortcuts (record, default, off), tray, launch at login, downloads,
   zoom, account link.

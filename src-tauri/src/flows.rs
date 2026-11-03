@@ -563,9 +563,7 @@ pub async fn handle_deep_link(app: &AppHandle, url: Url) {
                 return;
             };
             if phase == Phase::InApp {
-                if let Some(w) = shell::main_window(app) {
-                    let _ = w.navigate(page);
-                }
+                shell::navigate_to(app, &origin, page);
             } else if state(app).session.has_stored_sign_in(&origin).await {
                 let to = path_of(&page);
                 restore(app, origin, Some(to)).await;
@@ -620,7 +618,7 @@ pub async fn sign_out(app: &AppHandle) {
     clear_account_traces(app);
     let mut cleanup = end_sign_in(app, &origin).await;
     crate::bridge::set_badge(app, 0);
-    if let Some(w) = shell::main_window(app) {
+    if let Some(w) = shell::main_content(app) {
         // the window uses this server's own data store, so this clears only its data
         if state(app).lock().window_store == Some(origin.store_id()) {
             if let Err(e) = w.clear_all_browsing_data() {

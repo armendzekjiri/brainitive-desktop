@@ -7,6 +7,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { $, errorMessage, onShown } from './native';
+import { animateWindow, replay } from './motion';
+
+// the window's content rises in each time it is shown (motion.css)
+animateWindow();
 
 type Tab = 'today' | 'my_day' | 'assigned' | 'notifications' | 'timer';
 const TABS: Tab[] = ['today', 'my_day', 'assigned', 'notifications', 'timer'];
@@ -716,7 +720,12 @@ function ageText(seconds: number): string {
     return `${Math.round(seconds / 3600)} h ago`;
 }
 
+/** The tab whose content was shown last: switching tabs slides the new content in. */
+let renderedTab: Tab | null = null;
+
 function render(): void {
+    const switched = renderedTab !== tab;
+    renderedTab = tab;
     const focused = (document.activeElement as HTMLElement | null)?.dataset?.focus;
     const scroll = content.scrollTop;
     inner.replaceChildren();
@@ -739,6 +748,7 @@ function render(): void {
         renderTimer(a.timer, blocked);
     }
     content.scrollTop = scroll;
+    if (switched && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) replay(inner, 'm-in');
     if (focused) {
         const again = inner.querySelector<HTMLElement>(`[data-focus="${CSS.escape(focused)}"]`);
         again?.focus({ preventScroll: true });

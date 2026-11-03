@@ -35,7 +35,8 @@ model download, no audio retention), BRAI-373 (auto-updates: signed bundles, cha
   (exact scheme + host + port);
 - call exactly four commands — `brainitive_notify`, `brainitive_set_badge`,
   `brainitive_open_external`, `brainitive_sign_out` — through a runtime capability for that origin
-  (`shell::allow_bridge_for`, `remote.urls = ["<origin>/*"]`, windows `main` + `app-*`,
+  (`shell::allow_bridge_for`, `remote.urls = ["<origin>/*"]`, **webviews** `main` + `app-*` — the
+  tabs, by webview label, never by window: the main window also holds the bundled top bar —,
   `local: false`). Each command checks again that the caller is an **app window** (`main` or
   `app-<n>`) on the current origin, because Tauri can add but not remove a capability at runtime
   (after "Switch server" the old origin's capability still exists, the check rejects it).
@@ -53,10 +54,33 @@ or navigate the main frame to another site.
 **Other origins** (iframes like YouTube / Figma embeds, a site the user clicked) get no IPC at all:
 no capability matches them.
 
-**Extra app windows** (`app-<n>`, BRAI-362) are the main window's twins: same server data store,
-same navigation and page-load guard, same downloads handler, same bridge capability. They only
-open on a page of the current server while signed in and with the main window on that server's
-store, and close when the server is switched, the user signs out or the server is forgotten.
+**Tabs** (`app-<n>` webviews in the main window, `tabs.rs`) are the `main` tab's twins: same
+server data store, same navigation and page-load guard, same downloads handler, same bridge
+capability. They only open on a page of the current server while signed in and with the main
+window on that server's store (≤ 30), and close when the server is switched, the user signs out or
+the server is forgotten. Saved tabs are paths of that server only, restored through
+`links::resolve_deep_link_target` (never an auth page such as `/app/session/<code>`).
+
+## The top bar
+
+Threat: the bar's commands (switch / close / open tabs, open menus, move or close the window)
+reachable from the server's pages, or the bar showing server text as HTML.
+
+- **Webview** `topbar` in the main window, `topbar.html` (bundled, same CSP and navigation guard as
+  the other bundled windows). Its own `capabilities/topbar.json`: `local: true`, no `remote`,
+  `webviews: ["topbar"]` (by webview label — a capability by window would reach the tabs too), only
+  `allow-topbar-*` + listening to `topbar://changed` (sent to that webview only). `local.json` is
+  scoped the same way (`webviews: ["main"]`), so the top bar can't call the connect screens'
+  commands and the screens can't call the bar's. Every command starts with `topbar(&app, &webview)?`
+  (the `topbar` webview on a bundled origin; `tests/capabilities.rs` checks the file, the first
+  line and the check).
+- **No token, no URL**: the bar gets tab labels, titles (the page's `<title>`, server text, set with
+  `textContent`), icon kinds from fixed names and the server's name. Commands take a tab label
+  (checked against the tab list), a fixed menu / window / navigation action, or a clamped position;
+  a new tab always opens the current server's `/dashboard`.
+- **Keyboard shortcuts** (`keys.rs`, Windows): only the app menu's own accelerators are taken from
+  WebView2's `AcceleratorKeyPressed` (physical keys; script can't raise it) and run the same menu
+  actions; every other key reaches the page unchanged.
 
 **The bundled screens** (`index.html`, served from `tauri://localhost` on macOS / Linux and
 `http://tauri.localhost` on Windows — only this platform's one origin counts as bundled,
@@ -519,7 +543,7 @@ poll), or the old server's account stays readable after the switch.
   next step because loading / unloading the offline data bumps its epoch (before, it could take
   the newly loaded server's outbox to the old origin). Captures queued for a server are only sent
   while it is current.
-- `app-<n>` windows close on a switch: they share the main window's store and the guard / bridge
+- `app-<n>` tabs close on a switch: they share the main tab's store and the guard / bridge
   check of the current origin.
 - **Sign out** in Settings for a server that is not current revokes that device on the server,
   deletes its keychain entry, queue and offline files, and schedules its webview store for

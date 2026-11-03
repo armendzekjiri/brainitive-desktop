@@ -5,6 +5,10 @@
 
 import { invoke } from '@tauri-apps/api/core';
 import { $, errorMessage, onShown } from './native';
+import { animateWindow, stagger } from './motion';
+
+// the window's content rises in each time it is shown (motion.css)
+animateWindow();
 
 interface Hit {
     id: string;
@@ -63,7 +67,12 @@ function empty(message: string): void {
     list.replaceChildren(li);
 }
 
+/** The rows that were last animated in: a new result set cascades in, a selection change doesn't. */
+let shownRows: Row[] | null = null;
+
 function render(): void {
+    const fresh = shownRows !== rows;
+    shownRows = rows;
     list.replaceChildren();
     rows.forEach((row, i) => {
         const li = document.createElement('li');
@@ -97,6 +106,7 @@ function render(): void {
         list.append(li);
     });
     list.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+    if (fresh && rows.length) stagger(list);
 }
 
 async function search(): Promise<void> {

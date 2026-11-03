@@ -237,9 +237,7 @@ pub fn dismiss(app: &AppHandle, popup: Popup) {
     }
     let app_was_active = state(app).lock().popup_return.remove(popup.label()).unwrap_or(true);
     if app_was_active {
-        if let Some(w) = shell::target_window(app).filter(|w| w.is_visible().unwrap_or(false)) {
-            let _ = w.set_focus();
-        }
+        shell::refocus_active_tab(app);
     } else {
         #[cfg(target_os = "macos")]
         {

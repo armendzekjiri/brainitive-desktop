@@ -35,7 +35,8 @@
         "voice",
         "leader",
         "panel",
-        "task"
+        "task",
+        "topbar"
       ]
     }
   },
