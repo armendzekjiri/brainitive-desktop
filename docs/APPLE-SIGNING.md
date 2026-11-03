@@ -105,8 +105,7 @@ GitHub yourself.
 
 ## 4. GitHub secrets
 
-The repo is `armendzekjiri/brainitive-desktop`. Its secrets live under Settings → Secrets and variables
-→ Actions → **New repository secret**. On a personal repo only the owner can open Settings.
+The repo is `armendzekjiri/brainitive-desktop`. Its secrets live under Settings → Environments → `release` → **Environment secrets**. On a personal repo only the owner can open Settings.
 So you either send the values to the owner, who runs the commands below, or you get admin
 access.
 
@@ -126,19 +125,19 @@ With the GitHub CLI (the owner, or anyone with admin access), each one reads fro
 shell history:
 
 ```bash
-gh secret set APPLE_CERTIFICATE -R armendzekjiri/brainitive-desktop < <(base64 -i cert.p12)
-gh secret set APPLE_CERTIFICATE_PASSWORD -R armendzekjiri/brainitive-desktop   # paste, then Ctrl+D
-gh secret set APPLE_SIGNING_IDENTITY -R armendzekjiri/brainitive-desktop
-gh secret set APPLE_API_KEY -R armendzekjiri/brainitive-desktop
-gh secret set APPLE_API_ISSUER -R armendzekjiri/brainitive-desktop
-gh secret set APPLE_API_KEY_P8 -R armendzekjiri/brainitive-desktop < AuthKey_XXXX.p8
+gh secret set --env release APPLE_CERTIFICATE -R armendzekjiri/brainitive-desktop < <(base64 -i cert.p12)
+gh secret set --env release APPLE_CERTIFICATE_PASSWORD -R armendzekjiri/brainitive-desktop   # paste, then Ctrl+D
+gh secret set --env release APPLE_SIGNING_IDENTITY -R armendzekjiri/brainitive-desktop
+gh secret set --env release APPLE_API_KEY -R armendzekjiri/brainitive-desktop
+gh secret set --env release APPLE_API_ISSUER -R armendzekjiri/brainitive-desktop
+gh secret set --env release APPLE_API_KEY_P8 -R armendzekjiri/brainitive-desktop < AuthKey_XXXX.p8
 ```
 
-Then test it: GitHub → Actions → **Build** → **Run workflow** on `main`. Signing runs only for a `v*`
-tag or a manual run on `main`. In the macOS job, `tauri build` builds unsigned; the next step,
+Then test it: GitHub → Actions → **Build** → **Run workflow** on `main`. Signing runs only for a `build:` commit or a manual run on `main`, after a reviewer approves
+the protected `release` environment. In the macOS job, `tauri build` builds unsigned; the next step,
 **macOS signing + notarization**, should log "signing with the Developer ID identity",
 "notarizing (this waits for Apple)" and finally "signed, notarized and stapled". The run's
-`installers-macos` artifact (and a tag's draft release) then holds the signed `.dmg`.
+`installers-macos` artifact (and a release build's draft release) then holds the signed `.dmg`.
 
 ## 5. Or: a signed build on your own Mac
 

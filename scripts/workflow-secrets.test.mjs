@@ -125,3 +125,44 @@ test("the Store job has no secret, nothing goes to GITHUB_ENV, actions are pinne
     }
   }
 });
+
+test("release credentials are protected and only the default branch may sign", () => {
+  const text = workflow("build.yml");
+  const job = build.get("build");
+  assert.match(job.text, /^    environment: release$/m);
+  const prepare = build.get("prepare");
+  assert.match(prepare.text, /github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\)/);
+  assert.match(job.text, /needs: prepare/);
+  assert.match(job.text, /needs\.prepare\.outputs\.release == 'true'/);
+  assert.doesNotMatch(text, /^\s+tags:\s*\[/m, "tags must not run the signing workflow");
+  assert.doesNotMatch(text, /^  pull_request:/m, "pull requests use the separate CI workflow");
+  const gate = job.steps.find((s) => s.name === "Require Apple signing and notarization");
+  assert.ok(gate, "release builds must require Apple signing and notarization");
+  assert.match(gate.text, /HAS_CERTIFICATE/);
+  assert.match(gate.text, /HAS_NOTARY_ID/);
+  assert.match(gate.text, /HAS_NOTARY_KEY/);
+  assert.match(gate.text, /exit 1/);
+  assert.ok(job.steps.indexOf(gate) < job.steps.findIndex((s) => s.name === "tauri build"));
+});
+
+test("workflow checkouts do not persist credentials and security files have owners", () => {
+  const text = workflow("build.yml");
+  const checkouts = [...text.matchAll(/^      - uses: actions\/checkout@[^\n]+\n(?:        [^\n]*\n)*/gm)];
+  assert.ok(checkouts.length >= 3, "all release checkouts should be inspected");
+  for (const m of checkouts) assert.match(m[0], /persist-credentials: false/);
+  const owners = readFileSync(join(repo, ".github", "CODEOWNERS"), "utf8");
+  assert.match(owners, /^\/\.github\/ .*@armendzekjiri/m);
+  assert.match(owners, /^\/scripts\/macos-sign\.sh .*@armendzekjiri/m);
+});
+
+test("draft releases target the reviewed main commit and do not use tag events", () => {
+  const release = build.get("release");
+  assert.match(release.text, /needs: \[prepare, build\]/);
+  assert.match(release.text, /github\.event_name == 'push'/);
+  const resolveTag = release.steps.find((s) => s.name === "Resolve release tag");
+  const createDraft = release.steps.find((s) => s.name === "Create draft release");
+  assert.ok(resolveTag && createDraft);
+  assert.match(resolveTag.text, /tauri\.conf\.json/);
+  assert.match(createDraft.text, /--target "\$GITHUB_SHA"/);
+  assert.doesNotMatch(createDraft.text, /--verify-tag/);
+});
