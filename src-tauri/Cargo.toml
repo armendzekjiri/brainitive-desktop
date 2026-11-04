@@ -1,6 +1,6 @@
 [package]
 name = "brainitive-desktop"
-version = "1.0.0"
+version = "1.0.2"
 description = "Brainitive Desktop: the native shell for a Brainitive instance (Cloud or self-hosted)"
 authors = ["Armend Zekjiri (Brainitive)"]
 license-file = "../LICENSE"
